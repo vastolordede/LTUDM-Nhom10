@@ -1,6 +1,8 @@
 package vn.edu.p2p.tracker.network;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import vn.edu.p2p.common.dto.FilePiecesPageRequest;
+import vn.edu.p2p.common.dto.FilePiecesPageResponse;
 import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
 import vn.edu.p2p.common.dto.HeartbeatRequest;
@@ -123,6 +125,7 @@ public final class TrackerRequestDispatcher {
                 case HEARTBEAT -> handleHeartbeat(request);
                 case FILE_SOURCES_REQUEST -> handleFileSources(request);
                 case SHARE_FILE_REQUEST -> handleShareFile(request);
+                case FILE_PIECES_PAGE_REQUEST -> handleFilePiecesPage(request);
                 case SEARCH_REQUEST -> handleSearch(request);
                 case UNSHARE_FILE_REQUEST -> handleUnshareFile(request);
                 case RECORD_TRANSFER_REQUEST -> handleRecordTransfer(request);
@@ -257,6 +260,16 @@ public final class TrackerRequestDispatcher {
                 request.requestId(),
                 ProtocolCodec.toPayload(response)
         );
+    }
+
+    private MessageEnvelope handleFilePiecesPage(MessageEnvelope request) throws Exception {
+        if (fileCatalogService == null) {
+            return TrackerErrorResponses.forRequest(request, "FEATURE_UNAVAILABLE", "File catalog unavailable");
+        }
+        FilePiecesPageRequest page = ProtocolCodec.fromPayload(request.payload(), FilePiecesPageRequest.class);
+        FilePiecesPageResponse saved = fileCatalogService.appendPiecePage(page);
+        return MessageEnvelope.success(MessageType.FILE_PIECES_PAGE_RESPONSE,
+                request.requestId(), ProtocolCodec.toPayload(saved));
     }
 
     /** T16-T17: search the catalog by (partial) file name. */

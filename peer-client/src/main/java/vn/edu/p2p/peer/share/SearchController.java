@@ -14,6 +14,7 @@ import vn.edu.p2p.common.dto.SearchResultItem;
 import vn.edu.p2p.peer.network.TrackerConnection;
 
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -29,6 +30,9 @@ public final class SearchController {
 
     @FXML
     private Button searchButton;
+
+    @FXML
+    private Button downloadSelectedButton;
 
     @FXML
     private ListView<SearchResultItem> resultsListView;
@@ -48,6 +52,7 @@ public final class SearchController {
     private SearchClientService searchClientService;
     private FileSourceClientService fileSourceClientService;
     private String sessionId;
+    private Consumer<SearchResultItem> onDownloadSelected;
 
     @FXML
     private void initialize() {
@@ -64,14 +69,34 @@ public final class SearchController {
             }
         });
 
+        downloadSelectedButton.setDisable(true);
         resultsListView.getSelectionModel().selectedItemProperty()
-                .addListener((observable, oldValue, selected) -> onResultSelected(selected));
+                .addListener((observable, oldValue, selected) -> {
+                    downloadSelectedButton.setDisable(selected == null);
+                    onResultSelected(selected);
+                });
     }
 
     public void configure(TrackerConnection connection, String sessionId) {
+        configure(connection, sessionId, null);
+    }
+
+    public void configure(TrackerConnection connection, String sessionId, Consumer<SearchResultItem> action) {
         this.searchClientService = new SearchClientService(connection);
         this.fileSourceClientService = new FileSourceClientService(connection);
         this.sessionId = sessionId;
+        this.onDownloadSelected = action;
+    }
+
+    @FXML
+    private void onDownloadSelected() {
+        SearchResultItem item = resultsListView.getSelectionModel().getSelectedItem();
+        if (item == null) return;
+        if (onDownloadSelected == null) {
+            statusLabel.setText("Download screen is not connected.");
+            return;
+        }
+        onDownloadSelected.accept(item);
     }
 
     /** T16-T17: search by name. */
@@ -105,6 +130,7 @@ public final class SearchController {
 
     private void onSearchDone(SearchResponse response) {
         resultsListView.getItems().setAll(response.results());
+        resultsListView.getSelectionModel().clearSelection();
         statusLabel.setText(response.results().isEmpty()
                 ? "Không tìm thấy file nào."
                 : "Tìm thấy " + response.results().size() + " file.");

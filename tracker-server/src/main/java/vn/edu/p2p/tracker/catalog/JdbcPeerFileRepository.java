@@ -49,6 +49,17 @@ public final class JdbcPeerFileRepository implements PeerFileRepository {
     }
 
     @Override
+    public boolean isSharing(UUID peerId, long fileId) throws SQLException {
+        String sql = "SELECT 1 FROM peer_files WHERE peer_id = ? AND file_id = ? AND is_sharing = TRUE";
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, peerId);
+            statement.setLong(2, fileId);
+            try (var result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
+    @Override
     public void setSharing(UUID peerId, long fileId, boolean sharing) throws SQLException {
         String sql = """
                 UPDATE peer_files
