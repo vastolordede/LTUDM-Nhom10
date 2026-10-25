@@ -4,7 +4,9 @@ import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
@@ -19,6 +21,7 @@ import vn.edu.p2p.peer.share.FileSourceClientService;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -180,7 +183,31 @@ public final class DownloadController {
                 ? ("downloaded-file-" + fileId + ".bin")
                 : fileNameField.getText().trim();
 
-        Path targetFilePath = selectedOutputDir.resolve(targetFileName);
+        // Keep an untrusted UI name inside the chosen folder. No absolute paths or '..'.
+        if (targetFileName.equals(".") || targetFileName.equals("..")
+                || targetFileName.contains("/") || targetFileName.contains("\\")
+                || targetFileName.contains(":") || targetFileName.indexOf('\0') >= 0) {
+            statusLabel.setText("Ten file khong hop le: chi nhap ten file, khong nhap duong dan.");
+            return;
+        }
+        Path targetFilePath = selectedOutputDir.resolve(targetFileName).normalize();
+        if (!targetFilePath.getParent().equals(selectedOutputDir.toAbsolutePath().normalize())
+                && !targetFilePath.getParent().toAbsolutePath().normalize()
+                        .equals(selectedOutputDir.toAbsolutePath().normalize())) {
+            statusLabel.setText("File phai nam trong thu muc da chon.");
+            return;
+        }
+        if (Files.isDirectory(targetFilePath)) {
+            statusLabel.setText("Duong dan dich la thu muc, khong phai file.");
+            return;
+        }
+        if (Files.exists(targetFilePath)) {
+            Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
+                    "File da ton tai. Tiep tuc se kiem tra piece de Resume, nhung piece sai hash co the bi ghi de. Tiep tuc?",
+                    ButtonType.YES, ButtonType.NO);
+            alert.setHeaderText("Xac nhan file da ton tai");
+            if (alert.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) return;
+        }
         PieceScheduler.Strategy strategy = strategyComboBox.getValue() != null
                 ? strategyComboBox.getValue()
                 : PieceScheduler.Strategy.ROUND_ROBIN;
@@ -278,7 +305,8 @@ public final class DownloadController {
                     sources,
                     targetFilePath,
                     uiListener,
-                    activeCancelSignal
+                    activeCancelSignal,
+                    initialTransferId
             );
 
             // S36-S37: Lưu kết quả phiên tải (COMPLETED / FAILED / CANCELLED) và danh sách nguồn lên Tracker DB

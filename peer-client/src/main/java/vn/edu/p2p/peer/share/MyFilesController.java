@@ -8,6 +8,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.transfer.LocalFileRegistry;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,6 +43,7 @@ public final class MyFilesController {
 
     private ShareFileClientService shareFileClientService;
     private String sessionId;
+    private LocalFileRegistry fileRegistry;
 
     @FXML
     private void initialize() {
@@ -74,6 +76,12 @@ public final class MyFilesController {
         myFilesListView.setItems(sharedFiles);
     }
 
+    public void configure(TrackerConnection connection, String sessionId,
+                          ObservableList<SharedFileEntry> sharedFiles, LocalFileRegistry registry) {
+        configure(connection, sessionId, sharedFiles);
+        this.fileRegistry = registry;
+    }
+
     /** T22: stop sharing the selected file. */
     @FXML
     private void onStopSharing() {
@@ -97,6 +105,7 @@ public final class MyFilesController {
     }
 
     private void onStopSuccess(SharedFileEntry entry) {
+        if (fileRegistry != null) fileRegistry.unregisterFile(entry.fileId());
         myFilesListView.getItems().remove(entry);
         statusLabel.setText("Đã ngừng chia sẻ \"" + entry.fileName() + "\".");
     }

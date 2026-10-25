@@ -108,14 +108,42 @@ public final class JdbcFileRepository implements FileRepository {
     }
 
     @Override
+    public void upsertPiecePage(long fileId, List<PieceInfo> pieces) throws SQLException {
+        String sql = """
+                INSERT INTO file_pieces (file_id, piece_index, piece_length, piece_hash)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (file_id, piece_index) DO NOTHING
+                """;
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            connection.setAutoCommit(false);
+            try {
+                for (PieceInfo piece : pieces) {
+                    statement.setLong(1, fileId);
+                    statement.setInt(2, piece.pieceIndex());
+                    statement.setInt(3, piece.pieceLength());
+                    statement.setString(4, piece.pieceHash());
+                    statement.addBatch();
+                }
+                statement.executeBatch();
+                connection.commit();
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            }
+        }
+    }
+
+    @Override
     public List<SearchResultItem> searchByName(String likePattern) throws SQLException {
         // source_count only counts peers currently ACTIVELY sharing (is_sharing = TRUE),
         // matching what the Search screen should show as "available now".
         String sql = """
                 SELECT f.file_id, f.file_name, f.file_size, f.file_hash,
-                       COUNT(pf.peer_id) FILTER (WHERE pf.is_sharing = TRUE) AS source_count
+                       COUNT(pf.peer_id) FILTER (WHERE pf.is_sharing = TRUE AND op.peer_id IS NOT NULL) AS source_count
                 FROM files f
                 LEFT JOIN peer_files pf ON pf.file_id = f.file_id
+                LEFT JOIN v_online_peers op ON op.peer_id = pf.peer_id
                 WHERE f.file_name ILIKE ?
                 GROUP BY f.file_id, f.file_name, f.file_size, f.file_hash
                 ORDER BY f.file_name

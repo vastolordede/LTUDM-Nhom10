@@ -51,6 +51,7 @@ final class TrackerErrorResponses {
             case HEARTBEAT -> MessageType.HEARTBEAT_ACK;
             case FILE_SOURCES_REQUEST -> MessageType.FILE_SOURCES_RESPONSE;
             case SHARE_FILE_REQUEST -> MessageType.SHARE_FILE_RESPONSE;
+            case FILE_PIECES_PAGE_REQUEST -> MessageType.FILE_PIECES_PAGE_RESPONSE;
             case SEARCH_REQUEST -> MessageType.SEARCH_RESPONSE;
             case UNSHARE_FILE_REQUEST -> MessageType.UNSHARE_FILE_RESPONSE;
             case GET_BITFIELD_REQUEST -> MessageType.BITFIELD_RESPONSE;

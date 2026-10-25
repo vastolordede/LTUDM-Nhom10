@@ -33,6 +33,8 @@ import vn.edu.p2p.tracker.repository.jdbc.JdbcUserRepository;
 import vn.edu.p2p.tracker.source.FileSourceService;
 import vn.edu.p2p.tracker.statistics.TrackerStatisticsMonitor;
 import vn.edu.p2p.tracker.statistics.TrackerStatisticsService;
+import vn.edu.p2p.tracker.transfer.JdbcTransferHistoryRepository;
+import vn.edu.p2p.tracker.transfer.TransferHistoryService;
 
 import java.time.Duration;
 import java.util.logging.Logger;
@@ -87,12 +89,17 @@ public final class TrackerApplication {
                 shareEvents
         );
 
+        TransferHistoryService transferHistoryService = new TransferHistoryService(
+                sessionPeerResolver, new JdbcTransferHistoryRepository(connectionFactory), peerFiles
+        );
+
         TrackerRequestDispatcher dispatcher =
                 new TrackerRequestDispatcher(
                         authService,
                         peerSessionService,
                         fileSourceService,
-                        fileCatalogService
+                        fileCatalogService,
+                        transferHistoryService
                 );
 
         TrackerServerSocketProvider socketProvider =

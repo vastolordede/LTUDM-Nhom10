@@ -13,4 +13,6 @@ public interface PeerFileRepository {
 
     /** T22: stop/resume sharing without touching availability_status or the catalog row. */
     void setSharing(UUID peerId, long fileId, boolean sharing) throws SQLException;
+
+    default boolean isSharing(UUID peerId, long fileId) throws SQLException { return false; }
 }

@@ -21,12 +21,12 @@ public final class FileMetadataBuilder {
     private final int pieceSize;
 
     public FileMetadataBuilder() {
-        this(FileChunker.DEFAULT_PIECE_SIZE);
+        this(0);
     }
 
     public FileMetadataBuilder(int pieceSize) {
-        if (pieceSize <= 0) {
-            throw new IllegalArgumentException("pieceSize must be > 0");
+        if (pieceSize < 0) {
+            throw new IllegalArgumentException("pieceSize must be >= 0 (0 = automatic)");
         }
         this.pieceSize = pieceSize;
     }
@@ -43,7 +43,8 @@ public final class FileMetadataBuilder {
         String fileHash = FileHashUtil.sha256(file);
 
         // T06-T08: split into pieces (size, count, and a correctly sized last piece).
-        List<PieceInfo> pieces = FileChunker.chunk(file, pieceSize);
+        int actualPieceSize = pieceSize == 0 ? FileChunker.choosePieceSize(fileSize) : pieceSize;
+        List<PieceInfo> pieces = FileChunker.chunk(file, actualPieceSize);
         int pieceCount = pieces.size();
 
         // T09: assemble the FileMetadata object.
@@ -51,7 +52,7 @@ public final class FileMetadataBuilder {
                 fileName,
                 fileSize,
                 fileHash,
-                pieceSize,
+                actualPieceSize,
                 pieceCount,
                 pieces
         );

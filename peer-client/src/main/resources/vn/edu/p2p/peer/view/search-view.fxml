@@ -28,6 +28,8 @@
     <Label text="Kết quả:" styleClass="subtitle"/>
     <ListView fx:id="resultsListView" prefHeight="200"/>
 
+    <Button fx:id="downloadSelectedButton" text="Tai file da chon" onAction="#onDownloadSelected" disable="true"/>
+
     <Label text="Nguồn của file đang chọn:" styleClass="subtitle"/>
     <Label fx:id="sourcesLabel" wrapText="true" maxWidth="420"/>
 

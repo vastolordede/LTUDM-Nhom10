@@ -19,6 +19,14 @@ public final class FileChunker {
      *  tracker-server can agree on a value until we make it configurable. */
     public static final int DEFAULT_PIECE_SIZE = 256 * 1024;
 
+    /** Adaptive piece sizes, reducing metadata and RAM for large files. */
+    public static int choosePieceSize(long fileSize) {
+        if (fileSize <= 512L * 1024 * 1024) return 256 * 1024;
+        if (fileSize <= 4L * 1024 * 1024 * 1024) return 1024 * 1024;
+        if (fileSize <= 32L * 1024 * 1024 * 1024) return 4 * 1024 * 1024;
+        return 16 * 1024 * 1024;
+    }
+
     private FileChunker() {
     }
 
@@ -33,7 +41,9 @@ public final class FileChunker {
         if (fileSize == 0) {
             return 0;
         }
-        return (int) Math.ceil((double) fileSize / (double) pieceSize);
+        long count = (fileSize / pieceSize) + (fileSize % pieceSize == 0 ? 0 : 1);
+        if (count > Integer.MAX_VALUE) throw new IllegalArgumentException("File has too many pieces");
+        return (int) count;
     }
 
     /**

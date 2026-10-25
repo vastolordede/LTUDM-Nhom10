@@ -45,6 +45,9 @@ public final class LoginController {
     private Button logoutButton;
 
     @FXML
+    private Button openDashboardButton;
+
+    @FXML
     private Label statusLabel;
 
     @FXML
@@ -66,6 +69,7 @@ public final class LoginController {
     private void initialize() {
         listeningPortField.setText("7001");
         logoutButton.setDisable(true);
+        openDashboardButton.setDisable(true);
         connectionStatusLabel.setText("Tracker: chưa đăng nhập");
 
         try {
@@ -187,6 +191,7 @@ public final class LoginController {
         listeningPortField.setDisable(true);
         loginButton.setDisable(true);
         logoutButton.setDisable(false);
+        openDashboardButton.setDisable(false);
         statusLabel.setText(
                 "Đăng nhập thành công. Peer=" + shortId(session.peerId())
                         + " | Session=" + shortId(session.sessionId())
@@ -197,16 +202,26 @@ public final class LoginController {
             heartbeatCoordinator.start(session);
         }
 
+        openDashboardForSession(session);
+    }
+
+    @FXML
+    private void onOpenDashboard() {
+        if (authClientService != null && authClientService.currentSession() != null) {
+            openDashboardForSession(authClientService.currentSession());
+        }
+    }
+
+    private void openDashboardForSession(ClientSession session) {
         try {
-            int listeningPort = Integer.parseInt(listeningPortField.getText().trim());
-            closeTransferDashboard();
-            transferDashboard = new TransferDashboardWindow(
-                    listeningPort,
-                    PeerP2pSocketConfig.plainTcp()
-            );
+            if (transferDashboard == null) {
+                int port = Integer.parseInt(listeningPortField.getText().trim());
+                transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.plainTcp());
+            }
             transferDashboard.show(trackerConnection, session.sessionId());
         } catch (Exception e) {
-            statusLabel.setText("Đăng nhập thành công nhưng lỗi mở cửa sổ Transfer: " + e.getMessage());
+            closeTransferDashboard();
+            statusLabel.setText("Peer Center cannot start (check upload port): " + e.getMessage());
         }
     }
 
@@ -221,6 +236,7 @@ public final class LoginController {
         listeningPortField.setDisable(false);
         loginButton.setDisable(false);
         logoutButton.setDisable(true);
+        openDashboardButton.setDisable(true);
         statusLabel.setText(message);
         connectionStatusLabel.setText("Tracker: LOGGED OUT");
     }

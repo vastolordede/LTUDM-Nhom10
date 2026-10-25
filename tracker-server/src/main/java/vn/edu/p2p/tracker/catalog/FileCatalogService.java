@@ -1,6 +1,9 @@
 package vn.edu.p2p.tracker.catalog;
 
 import vn.edu.p2p.common.dto.FileMetadata;
+import vn.edu.p2p.common.dto.FilePiecesPageRequest;
+import vn.edu.p2p.common.dto.FilePiecesPageResponse;
+import vn.edu.p2p.common.dto.PieceInfo;
 import vn.edu.p2p.common.dto.SearchRequest;
 import vn.edu.p2p.common.dto.SearchResponse;
 import vn.edu.p2p.common.dto.SearchResultItem;
@@ -75,6 +78,28 @@ public final class FileCatalogService {
         shareEventRepository.insert(peerId, fileId, "SHARE_START");
 
         return new ShareFileResponse(fileId, isNewFile, availabilityStatus);
+    }
+
+    /** Large-file metadata pages, only from a peer actively sharing this file. */
+    public FilePiecesPageResponse appendPiecePage(FilePiecesPageRequest request)
+            throws FileCatalogException, SQLException {
+        if (request == null || request.fileId() <= 0 || request.sessionId() == null
+                || request.pieces().isEmpty()
+                || request.pieces().size() > 512) {
+            throw new FileCatalogException("Invalid metadata page (max 512 pieces)");
+        }
+        UUID peer = sessionPeerResolver.resolvePeerId(parseSessionId(request.sessionId()));
+        if (!peerFileRepository.isSharing(peer, request.fileId())) {
+            throw new FileCatalogException("Peer does not own an active share for this file");
+        }
+        for (PieceInfo piece : request.pieces()) {
+            if (piece.pieceIndex() < 0 || piece.pieceLength() <= 0 || piece.pieceHash() == null
+                    || !piece.pieceHash().matches("^[0-9A-Fa-f]{64}$")) {
+                throw new FileCatalogException("Invalid piece metadata in page");
+            }
+        }
+        fileRepository.upsertPiecePage(request.fileId(), request.pieces());
+        return new FilePiecesPageResponse(request.fileId(), request.pieces().size());
     }
 
     /** T16-T17: search by (partial) file name. */

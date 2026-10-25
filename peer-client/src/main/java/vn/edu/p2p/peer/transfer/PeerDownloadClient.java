@@ -2,6 +2,8 @@ package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.dto.BitfieldResponse;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
+import vn.edu.p2p.common.dto.MetadataPageRequest;
+import vn.edu.p2p.common.dto.MetadataPageResponse;
 import vn.edu.p2p.common.dto.PieceRequest;
 import vn.edu.p2p.common.dto.PieceResponseHeader;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
@@ -60,6 +62,26 @@ public final class PeerDownloadClient {
             }
 
             return ProtocolCodec.fromPayload(response.payload(), BitfieldResponse.class);
+        }
+    }
+
+    public MetadataPageResponse fetchMetadataPage(String host, int port, long fileId,
+                                                 int startIndex, int pageSize) throws IOException {
+        MessageEnvelope request = MessageEnvelope.request(
+                MessageType.METADATA_PAGE_REQUEST, UUID.randomUUID().toString(),
+                ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize))
+        );
+        try (Socket socket = socketFactory.openClientSocket(host, port)) {
+            ProtocolCodec.write(socket.getOutputStream(), request);
+            MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+            if (response.status() == ResponseStatus.ERROR || response.type() != MessageType.METADATA_PAGE_RESPONSE) {
+                throw new IOException("Peer metadata request failed: " + response.errorCode() + ": " + response.message());
+            }
+            MetadataPageResponse page = ProtocolCodec.fromPayload(response.payload(), MetadataPageResponse.class);
+            if (page == null || page.fileId() != fileId || page.startIndex() != startIndex) {
+                throw new IOException("Invalid metadata page response");
+            }
+            return page;
         }
     }
 

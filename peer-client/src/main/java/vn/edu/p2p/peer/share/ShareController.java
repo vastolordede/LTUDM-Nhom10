@@ -12,6 +12,7 @@ import javafx.stage.FileChooser;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.transfer.LocalFileRegistry;
 
 import java.io.File;
 import java.nio.file.Path;
@@ -60,6 +61,7 @@ public final class ShareController {
 
     private ShareFileClientService shareFileClientService;
     private String sessionId;
+    private LocalFileRegistry fileRegistry;
 
     private Path selectedFile;
 
@@ -81,8 +83,13 @@ public final class ShareController {
      * session, right after login succeeds.
      */
     public void configure(TrackerConnection connection, String sessionId) {
+        configure(connection, sessionId, null);
+    }
+
+    public void configure(TrackerConnection connection, String sessionId, LocalFileRegistry registry) {
         this.shareFileClientService = new ShareFileClientService(connection);
         this.sessionId = sessionId;
+        this.fileRegistry = registry;
     }
 
     /** Same backing list as sharedFilesListView - pass this into MyFilesController.configure(...). */
@@ -121,19 +128,23 @@ public final class ShareController {
 
         shareButton.setDisable(true);
         statusLabel.setText("Đang đọc, băm file và gửi lên Tracker...");
+        Path sharedPath = selectedFile;
 
         ioExecutor.submit(() -> {
             try {
-                FileMetadata metadata = metadataBuilder.build(selectedFile);
+                FileMetadata metadata = metadataBuilder.build(sharedPath);
                 ShareFileResponse response = shareFileClientService.publish(sessionId, metadata);
-                Platform.runLater(() -> onShareSuccess(metadata, response));
+                Platform.runLater(() -> onShareSuccess(metadata, response, sharedPath));
             } catch (Exception e) {
                 Platform.runLater(() -> onError("Lỗi khi chia sẻ file: " + e.getMessage()));
             }
         });
     }
 
-    private void onShareSuccess(FileMetadata metadata, ShareFileResponse response) {
+    private void onShareSuccess(FileMetadata metadata, ShareFileResponse response, Path sharedPath) {
+        if (fileRegistry != null) {
+            fileRegistry.registerCompleteFile(response.fileId(), sharedPath, metadata);
+        }
         String note = response.isNewFile()
                 ? "File mới trong catalog"
                 : "File đã tồn tại trên Tracker (trùng SHA-256), dùng lại file_id="
@@ -144,6 +155,7 @@ public final class ShareController {
                         + metadata.pieceCount() + " piece. " + note
         );
 
+        sharedFiles.removeIf(entry -> entry.fileId() == response.fileId());
         sharedFiles.add(new SharedFileEntry(response.fileId(), metadata.fileName()));
         shareButton.setDisable(false);
     }

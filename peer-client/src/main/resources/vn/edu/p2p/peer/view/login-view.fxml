@@ -50,6 +50,8 @@
                 prefWidth="155"/>
     </HBox>
 
+    <Button fx:id="openDashboardButton" text="Mo Peer Center" disable="true" onAction="#onOpenDashboard"/>
+
     <Label fx:id="statusLabel"
            wrapText="true"
            maxWidth="320"

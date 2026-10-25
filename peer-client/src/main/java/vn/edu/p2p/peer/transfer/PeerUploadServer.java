@@ -3,6 +3,8 @@ package vn.edu.p2p.peer.transfer;
 import vn.edu.p2p.common.dto.BitfieldResponse;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
+import vn.edu.p2p.common.dto.MetadataPageRequest;
+import vn.edu.p2p.common.dto.MetadataPageResponse;
 import vn.edu.p2p.common.dto.PieceInfo;
 import vn.edu.p2p.common.dto.PieceRequest;
 import vn.edu.p2p.common.dto.PieceResponseHeader;
@@ -121,6 +123,7 @@ public final class PeerUploadServer implements AutoCloseable {
 
                 switch (request.type()) {
                     case GET_BITFIELD_REQUEST -> handleGetBitfield(client, request);
+                    case METADATA_PAGE_REQUEST -> handleMetadataPage(client, request);
                     case REQUEST_PIECE -> handleRequestPiece(client, request);
                     default -> {
                         MessageEnvelope err = MessageEnvelope.error(
@@ -160,7 +163,11 @@ public final class PeerUploadServer implements AutoCloseable {
         BitfieldResponse responsePayload = new BitfieldResponse(
                 reg.fileId(),
                 reg.bitfieldBytes(),
-                reg.metadata()
+                reg.metadata().pieceCount() > 2000
+                        ? new FileMetadata(reg.metadata().fileName(), reg.metadata().fileSize(),
+                                reg.metadata().fileHash(), reg.metadata().pieceSize(),
+                                reg.metadata().pieceCount(), java.util.List.of())
+                        : reg.metadata()
         );
 
         MessageEnvelope response = MessageEnvelope.success(
@@ -169,6 +176,30 @@ public final class PeerUploadServer implements AutoCloseable {
                 ProtocolCodec.toPayload(responsePayload)
         );
         ProtocolCodec.write(client.getOutputStream(), response);
+    }
+
+    private void handleMetadataPage(Socket client, MessageEnvelope request) throws IOException {
+        MetadataPageRequest payload = ProtocolCodec.fromPayload(request.payload(), MetadataPageRequest.class);
+        if (payload == null || payload.startIndex() < 0 || payload.pageSize() < 1
+                || payload.pageSize() > 400) {
+            ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
+                    MessageType.METADATA_PAGE_RESPONSE, request.requestId(),
+                    "INVALID_METADATA_PAGE", "Invalid metadata page bounds"));
+            return;
+        }
+        Optional<LocalFileRegistry.RegisteredFile> file = fileRegistry.find(payload.fileId());
+        if (file.isEmpty() || payload.startIndex() >= file.get().metadata().pieceCount()) {
+            ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
+                    MessageType.METADATA_PAGE_RESPONSE, request.requestId(),
+                    "FILE_NOT_FOUND", "Metadata page not available"));
+            return;
+        }
+        var pieces = file.get().metadata().pieces();
+        int from = payload.startIndex();
+        int to = Math.min(from + payload.pageSize(), pieces.size());
+        var response = new MetadataPageResponse(payload.fileId(), from, pieces.subList(from, to));
+        ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.success(
+                MessageType.METADATA_PAGE_RESPONSE, request.requestId(), ProtocolCodec.toPayload(response)));
     }
 
     /**

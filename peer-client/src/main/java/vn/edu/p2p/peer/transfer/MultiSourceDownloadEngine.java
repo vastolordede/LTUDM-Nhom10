@@ -77,7 +77,19 @@ public final class MultiSourceDownloadEngine {
             DownloadProgressListener progressListener,
             AtomicBoolean cancelSignal
     ) {
-        UUID transferId = UUID.randomUUID();
+        return downloadFile(fileId, candidateSources, targetFilePath, progressListener, cancelSignal, UUID.randomUUID());
+    }
+
+    /** Use the same ID for Tracker DOWNLOADING and the terminal transfer result. */
+    public DownloadSessionResult downloadFile(
+            long fileId,
+            List<FileSourceInfo> candidateSources,
+            Path targetFilePath,
+            DownloadProgressListener progressListener,
+            AtomicBoolean cancelSignal,
+            UUID transferId
+    ) {
+        Objects.requireNonNull(transferId, "transferId");
         Instant startedAt = Instant.now();
         long startNano = System.nanoTime();
         AtomicLong totalBytesReceived = new AtomicLong(0);
@@ -127,6 +139,43 @@ public final class MultiSourceDownloadEngine {
             );
         }
 
+        // Large-file sources send only a compact header in BITFIELD_RESPONSE.
+        // Fetch the SHA-256 list in bounded pages from a reachable source.
+        if (discoveredMetadata.pieceCount() > 0 && discoveredMetadata.pieces().isEmpty()) {
+            try {
+                FileMetadata header = discoveredMetadata;
+                FileMetadata complete = null;
+                for (FileSourceInfo source : reachableSources) {
+                    try {
+                        List<PieceInfo> allPieces = new ArrayList<>(header.pieceCount());
+                        for (int offset = 0; offset < header.pieceCount(); offset += 400) {
+                            var page = downloadClient.fetchMetadataPage(source.ipAddress(),
+                                    source.listeningPort(), fileId, offset, 400);
+                            if (page.pieces().isEmpty()) throw new IOException("Empty metadata page");
+                            for (PieceInfo piece : page.pieces()) {
+                                if (piece.pieceIndex() != allPieces.size() || piece.pieceLength() <= 0
+                                        || piece.pieceHash() == null || !piece.pieceHash().matches("^[0-9A-Fa-f]{64}$")) {
+                                    throw new IOException("Invalid metadata piece sequence/hash");
+                                }
+                                allPieces.add(piece);
+                            }
+                        }
+                        if (allPieces.size() != header.pieceCount()) throw new IOException("Metadata is incomplete");
+                        complete = new FileMetadata(header.fileName(), header.fileSize(), header.fileHash(),
+                                header.pieceSize(), header.pieceCount(), allPieces);
+                        break;
+                    } catch (IOException ex) {
+                        if (progressListener != null) progressListener.onSourceStatusChanged(
+                                source.peerId(), "METADATA_ERROR", ex.getMessage());
+                    }
+                }
+                if (complete == null) throw new IOException("No source supplied complete metadata");
+                discoveredMetadata = complete;
+            } catch (IOException e) {
+                return failedResult(transferId, fileId, targetFilePath, startedAt, 0L,
+                        e.getMessage(), buildSourceStats(sourceStatsMap));
+            }
+        }
         final FileMetadata metadata = discoveredMetadata;
 
         try {
