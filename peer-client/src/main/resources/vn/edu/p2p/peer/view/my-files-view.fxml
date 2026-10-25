@@ -1,5 +1,21 @@
-package vn.edu.p2p.peer.share;
+<?xml version="1.0" encoding="UTF-8"?>
 
-/** One row in "files this peer is currently sharing" (used by Share + My Files screens). */
-public record SharedFileEntry(long fileId, String fileName) {
-}
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox spacing="12.0" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+      fx:controller="vn.edu.p2p.peer.share.MyFilesController">
+    <padding>
+        <Insets top="16.0" right="16.0" bottom="16.0" left="16.0"/>
+    </padding>
+
+    <Label text="File Đang Chia Sẻ (My Files)" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+
+    <ListView fx:id="myFilesListView" VBox.vgrow="ALWAYS" prefHeight="220.0"/>
+
+    <Button fx:id="stopSharingButton" text="Ngừng chia sẻ file đã chọn" onAction="#onStopSharing"/>
+    <Label fx:id="statusLabel" text="" wrapText="true"/>
+</VBox>

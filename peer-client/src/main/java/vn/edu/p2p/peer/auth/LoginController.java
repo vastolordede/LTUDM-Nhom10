@@ -13,6 +13,8 @@ import vn.edu.p2p.peer.session.ClientSession;
 import vn.edu.p2p.peer.session.HeartbeatCoordinator;
 import vn.edu.p2p.peer.session.HeartbeatListener;
 import vn.edu.p2p.peer.session.PeerConnectionState;
+import vn.edu.p2p.peer.transfer.PeerP2pSocketConfig;
+import vn.edu.p2p.peer.transfer.TransferDashboardWindow;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -57,6 +59,8 @@ public final class LoginController {
     private AuthClientService authClientService;
     private HeartbeatCoordinator heartbeatCoordinator;
     private String initializationError;
+    private TrackerConnection trackerConnection;
+    private TransferDashboardWindow transferDashboard;
 
     @FXML
     private void initialize() {
@@ -67,15 +71,15 @@ public final class LoginController {
         try {
             PeerSettings settings = PeerSettings.load();
             PeerIdentity identity = PeerIdentityStore.defaultStore().loadOrCreate();
-            TrackerConnection connection = new TrackerConnection(
+            trackerConnection = new TrackerConnection(
                     settings.trackerConnectionConfig()
             );
-            authClientService = new AuthClientService(connection, identity);
+            authClientService = new AuthClientService(trackerConnection, identity);
+
             heartbeatCoordinator = new HeartbeatCoordinator(
                     authClientService::heartbeat,
                     new UiHeartbeatListener()
             );
-
             statusLabel.setText(
                     "Tracker: " + settings.trackerHost() + ":" + settings.trackerPort()
             );
@@ -103,7 +107,7 @@ public final class LoginController {
             return;
         }
 
-        int listeningPort = Integer.parseInt(listeningPortField.getText());
+        int listeningPort = Integer.parseInt(listeningPortField.getText().trim());
         String username = usernameField.getText().trim();
         String password = passwordField.getText();
 
@@ -192,12 +196,25 @@ public final class LoginController {
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.start(session);
         }
+
+        try {
+            int listeningPort = Integer.parseInt(listeningPortField.getText().trim());
+            closeTransferDashboard();
+            transferDashboard = new TransferDashboardWindow(
+                    listeningPort,
+                    PeerP2pSocketConfig.plainTcp()
+            );
+            transferDashboard.show(trackerConnection, session.sessionId());
+        } catch (Exception e) {
+            statusLabel.setText("Đăng nhập thành công nhưng lỗi mở cửa sổ Transfer: " + e.getMessage());
+        }
     }
 
     private void resetLoggedOutUi(String message) {
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.stop();
         }
+        closeTransferDashboard();
 
         usernameField.setDisable(false);
         passwordField.setDisable(false);
@@ -211,6 +228,13 @@ public final class LoginController {
     private void onSessionExpired(String message) {
         authClientService.invalidateLocalSession();
         resetLoggedOutUi(message);
+    }
+
+    private void closeTransferDashboard() {
+        if (transferDashboard != null) {
+            transferDashboard.close();
+            transferDashboard = null;
+        }
     }
 
     private void setBusy(boolean busy) {
@@ -227,6 +251,7 @@ public final class LoginController {
     }
 
     public void shutdown() {
+        closeTransferDashboard();
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.close();
         }
