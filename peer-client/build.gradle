@@ -24,3 +24,9 @@ dependencies {
 application {
     mainClass = 'vn.edu.p2p.peer.PeerApplication'
 }
+
+tasks.register('emulator', JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'vn.edu.p2p.peer.tools.TrafficEmulator'
+    setArgs((project.findProperty('emuArgs') ?: '').toString().split(' ') as List)
+}
