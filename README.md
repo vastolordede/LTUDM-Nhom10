@@ -84,13 +84,30 @@ Chi tiết workflow và testcase: `docs/POST_PATCH_TESTPLAN.md`.
 
 - Mật khẩu lưu dạng BCrypt hash.
 - Kênh Peer ↔ Tracker: TLS, bật bằng `TRACKER_TLS_ENABLED`.
-- Kênh Peer ↔ Peer: TLS, bật bằng `P2P_TLS_ENABLED` (keystore/truststore cấu hình qua `P2P_KEYSTORE`, `P2P_TRUSTSTORE`).
-- Không commit `.env`, `certs/*.p12`, `certs/*.cer`.
+- Kênh Peer ↔ Peer: TLS, bật bằng `P2P_TLS_ENABLED` (cấu hình qua `P2P_KEYSTORE`, `P2P_TRUSTSTORE`).
+- Không commit `.env`, `certs/*.p12`, `certs/*.cer`, `testdata/`.
 
-## Giả lập nhiều Peer (kiểm thử tải)
+## Chức năng bổ sung
+
+- Share lại tự động sau khi mở lại Peer (danh sách lưu tại `~/.fileshare-p2p/`).
+- Tracker chỉ công bố file khi metadata đủ piece (`publish_status = READY`).
+- Một file có nhiều tên (alias), Search được theo mọi tên.
+- Tải lại danh sách nguồn từ Tracker khi nguồn rớt giữa chừng (tối đa 3 lần).
+- Chọn nguồn theo xếp hạng (độ trễ, tải, piece lỗi), xem bảng `v_peer_ranking`.
+
+## Giả lập nhiều Peer
 
 ```bat
 .\gradlew.bat :peer-client:emulator -PemuArgs="10 alice demo123 8000 120"
 ```
 
-Tham số: số peer, username, password, cổng bắt đầu, thời gian chạy (giây). Mỗi virtual peer có ID riêng, tự share file, heartbeat và thỉnh thoảng logout/login lại.
+Tham số: số peer, username, password, cổng bắt đầu, thời gian chạy (giây).
+
+## Cập nhật database
+
+Chạy theo thứ tự trên DB đã có `schema.sql`:
+
+```bat
+psql -U postgres -d fileshare_p2p -f database/migration_v2.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v3.sql
+```
