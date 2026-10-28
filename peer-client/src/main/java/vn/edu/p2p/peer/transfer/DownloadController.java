@@ -184,13 +184,17 @@ public final class DownloadController {
                 : fileNameField.getText().trim();
 
         // Keep an untrusted UI name inside the chosen folder. No absolute paths or '..'.
-        if (targetFileName.equals(".") || targetFileName.equals("..")
-                || targetFileName.contains("/") || targetFileName.contains("\\")
-                || targetFileName.contains(":") || targetFileName.indexOf('\0') >= 0) {
-            statusLabel.setText("Ten file khong hop le: chi nhap ten file, khong nhap duong dan.");
-            return;
-        }
+        String nameError = SafeFileName.validate(targetFileName);
+        if (nameError != null) { statusLabel.setText(nameError); return; }
         Path targetFilePath = selectedOutputDir.resolve(targetFileName).normalize();
+        if (!targetFilePath.startsWith(selectedOutputDir.toAbsolutePath().normalize())) {
+            statusLabel.setText("Duong dan dich nam ngoai thu muc da chon."); return;
+        }
+        try {
+            DownloadPreflight.check(targetFilePath, fileSize);
+        } catch (DownloadPreflight.PreflightException ex) {
+            statusLabel.setText(ex.getMessage()); return;
+        }
         if (!targetFilePath.getParent().equals(selectedOutputDir.toAbsolutePath().normalize())
                 && !targetFilePath.getParent().toAbsolutePath().normalize()
                         .equals(selectedOutputDir.toAbsolutePath().normalize())) {
