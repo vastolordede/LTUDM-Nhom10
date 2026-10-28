@@ -1,4 +1,5 @@
 package vn.edu.p2p.peer.transfer;
+import vn.edu.p2p.common.config.LocalEnv;
 
 import java.nio.file.Path;
 
@@ -46,4 +47,31 @@ public record PeerP2pSocketConfig(
                 DEFAULT_READ_TIMEOUT_MS
         );
     }
+
+        /** Đọc cấu hình P2P TLS từ OS env > .env. Mặc định tắt (plain TCP). */
+        public static PeerP2pSocketConfig fromEnvironment() {
+        LocalEnv dotenv = LocalEnv.load();
+        String enabled = read("P2P_TLS_ENABLED", dotenv);
+        if (!"true".equalsIgnoreCase(enabled)) {
+                return plainTcp();
+        }
+        String ks = read("P2P_KEYSTORE", dotenv);
+        String ts = read("P2P_TRUSTSTORE", dotenv);
+        return tls(
+                dotenv.resolvePath(ks == null ? "certs/peer-p2p.p12" : ks),
+                nullToEmpty(read("P2P_KEYSTORE_PASSWORD", dotenv)),
+                dotenv.resolvePath(ts == null ? "certs/peer-p2p-truststore.p12" : ts),
+                nullToEmpty(read("P2P_TRUSTSTORE_PASSWORD", dotenv))
+        );
+        }
+
+        private static String read(String key, LocalEnv dotenv) {
+        String v = System.getenv(key);
+        if (v == null || v.isBlank()) v = dotenv.get(key);
+        return (v == null || v.isBlank()) ? null : v.trim();
+        }
+
+        private static String nullToEmpty(String s) {
+        return s == null ? "" : s;
+        }
 }

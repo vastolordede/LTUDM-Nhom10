@@ -216,7 +216,7 @@ public final class LoginController {
         try {
             if (transferDashboard == null) {
                 int port = Integer.parseInt(listeningPortField.getText().trim());
-                transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.plainTcp());
+                transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
             }
             transferDashboard.show(trackerConnection, session.sessionId());
         } catch (Exception e) {
