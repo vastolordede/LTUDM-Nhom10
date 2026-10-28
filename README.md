@@ -79,3 +79,18 @@ Login → Peer Center, dùng các tab Share / My Files / Search / Download / His
 - Chưa xác nhận đầy đủ LAN/JavaFX/PostgreSQL trên mọi môi trường; kiểm tra trên máy Windows trước khi merge.
 
 Chi tiết workflow và testcase: `docs/POST_PATCH_TESTPLAN.md`.
+
+## Bảo mật
+
+- Mật khẩu lưu dạng BCrypt hash.
+- Kênh Peer ↔ Tracker: TLS, bật bằng `TRACKER_TLS_ENABLED`.
+- Kênh Peer ↔ Peer: TLS, bật bằng `P2P_TLS_ENABLED` (keystore/truststore cấu hình qua `P2P_KEYSTORE`, `P2P_TRUSTSTORE`).
+- Không commit `.env`, `certs/*.p12`, `certs/*.cer`.
+
+## Giả lập nhiều Peer (kiểm thử tải)
+
+```bat
+.\gradlew.bat :peer-client:emulator -PemuArgs="10 alice demo123 8000 120"
+```
+
+Tham số: số peer, username, password, cổng bắt đầu, thời gian chạy (giây). Mỗi virtual peer có ID riêng, tự share file, heartbeat và thỉnh thoảng logout/login lại.

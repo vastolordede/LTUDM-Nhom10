@@ -15,4 +15,6 @@ public interface PeerFileRepository {
     void setSharing(UUID peerId, long fileId, boolean sharing) throws SQLException;
 
     default boolean isSharing(UUID peerId, long fileId) throws SQLException { return false; }
+
+    default void demoteIfPartial(UUID peerId, long fileId) throws SQLException {}
 }

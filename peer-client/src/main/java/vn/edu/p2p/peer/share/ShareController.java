@@ -18,6 +18,7 @@ import java.io.File;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.io.IOException;
 
 /**
  * Controller for the Share File screen (T01-T15).
@@ -90,6 +91,38 @@ public final class ShareController {
         this.shareFileClientService = new ShareFileClientService(connection);
         this.sessionId = sessionId;
         this.fileRegistry = registry;
+        restoreSharedFiles();
+    }
+
+    /** D70: publish lại các file đã Share ở lần chạy trước (còn tồn tại, đúng kích thước). */
+    private void restoreSharedFiles() {
+        SharedFilesStore store = SharedFilesStore.current();
+        if (store == null || fileRegistry == null) {
+            return;
+        }
+        ShareFileClientService service = shareFileClientService;
+        String session = sessionId;
+        ioExecutor.submit(() -> {
+            for (SharedFilesStore.Entry saved : store.loadValid()) {
+                try {
+                    Path path = Path.of(saved.path());
+                    FileMetadata metadata = metadataBuilder.build(path);
+                    ShareFileResponse r = service.publish(session, metadata);
+                    fileRegistry.registerCompleteFile(r.fileId(), path, metadata);
+                    if (!metadata.fileHash().equalsIgnoreCase(saved.fileHash())) {
+                        store.removeByHash(saved.fileHash());
+                        store.add(new SharedFilesStore.Entry(saved.path(), metadata.fileName(),
+                                metadata.fileSize(), metadata.fileHash()));
+                    }
+                    Platform.runLater(() -> {
+                        sharedFiles.removeIf(x -> x.fileId() == r.fileId());
+                        sharedFiles.add(new SharedFileEntry(r.fileId(), metadata.fileName()));
+                    });
+                } catch (Exception ignored) {
+                    // bỏ qua file lỗi, các file còn lại vẫn khôi phục
+                }
+            }
+        });
     }
 
     /** Same backing list as sharedFilesListView - pass this into MyFilesController.configure(...). */
@@ -145,6 +178,16 @@ public final class ShareController {
         if (fileRegistry != null) {
             fileRegistry.registerCompleteFile(response.fileId(), sharedPath, metadata);
         }
+
+        SharedFilesStore store = SharedFilesStore.current();
+        if (store != null) {
+            try {
+                store.add(new SharedFilesStore.Entry(sharedPath.toAbsolutePath().toString(),
+                        metadata.fileName(), metadata.fileSize(), metadata.fileHash()));
+            } catch (IOException ignored) {
+            }
+        }
+
         String note = response.isNewFile()
                 ? "File mới trong catalog"
                 : "File đã tồn tại trên Tracker (trùng SHA-256), dùng lại file_id="

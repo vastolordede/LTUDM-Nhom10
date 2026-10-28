@@ -66,6 +66,8 @@ public final class TransferHistoryService {
                 peerFileRepository.upsertOwnership(destinationPeerId, request.fileId(), "COMPLETE");
             } else if ("DOWNLOADING".equals(status)) {
                 peerFileRepository.upsertOwnership(destinationPeerId, request.fileId(), "PARTIAL");
+            } else if ("FAILED".equals(status) || "CANCELLED".equals(status)) {
+                peerFileRepository.demoteIfPartial(destinationPeerId, request.fileId());
             }
         }
 

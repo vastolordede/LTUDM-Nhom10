@@ -59,15 +59,15 @@ public final class FileCatalogService {
         boolean isNewFile;
 
         if (existingFileId.isPresent()) {
-            // T13: identical content already known to the Tracker - reuse
-            // the existing file_id instead of inserting a duplicate row.
             fileId = existingFileId.get();
-            isNewFile = false;
+            // D69: file còn PUBLISHING thì cho client gửi lại các trang còn thiếu
+            isNewFile = "PUBLISHING".equals(fileRepository.findPublishStatus(fileId).orElse("READY"));
         } else {
-            // T11-T12: publish new metadata into the File Catalog.
             fileId = fileRepository.insert(metadata);
             isNewFile = true;
         }
+        // D71: lưu thêm tên file này làm alias
+        fileRepository.addAlias(fileId, metadata.fileName(), peerId);
 
         // T14-T15: the sharing peer already holds the whole file locally,
         // so it is recorded as a COMPLETE, actively-sharing source.

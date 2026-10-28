@@ -13,6 +13,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * JDBC-backed FileRepository, following the same connection/PreparedStatement
@@ -52,8 +53,8 @@ public final class JdbcFileRepository implements FileRepository {
     @Override
     public long insert(FileMetadata metadata) throws SQLException {
         String insertFileSql = """
-                INSERT INTO files (file_name, file_size, file_hash, piece_size, piece_count)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO files (file_name, file_size, file_hash, piece_size, piece_count, publish_status)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """;
 
         String insertPieceSql = """
@@ -75,6 +76,7 @@ public final class JdbcFileRepository implements FileRepository {
                     statement.setString(3, metadata.fileHash());
                     statement.setInt(4, metadata.pieceSize());
                     statement.setInt(5, metadata.pieceCount());
+                    statement.setString(6, metadata.pieces().size() >= metadata.pieceCount() ? "READY" : "PUBLISHING");
                     statement.executeUpdate();
 
                     try (ResultSet keys = statement.getGeneratedKeys()) {
@@ -94,6 +96,16 @@ public final class JdbcFileRepository implements FileRepository {
                         statement.addBatch();
                     }
                     statement.executeBatch();
+                }
+
+                try (PreparedStatement ready = connection.prepareStatement("""
+                        UPDATE files SET publish_status = 'READY'
+                        WHERE file_id = ? AND publish_status = 'PUBLISHING'
+                        AND (SELECT COUNT(*) FROM file_pieces WHERE file_id = ?) >= piece_count
+                        """)) {
+                    ready.setLong(1, fileId);
+                    ready.setLong(2, fileId);
+                    ready.executeUpdate();
                 }
 
                 connection.commit();
@@ -136,25 +148,25 @@ public final class JdbcFileRepository implements FileRepository {
 
     @Override
     public List<SearchResultItem> searchByName(String likePattern) throws SQLException {
-        // source_count only counts peers currently ACTIVELY sharing (is_sharing = TRUE),
-        // matching what the Search screen should show as "available now".
         String sql = """
-                SELECT f.file_id, f.file_name, f.file_size, f.file_hash,
-                       COUNT(pf.peer_id) FILTER (WHERE pf.is_sharing = TRUE AND op.peer_id IS NOT NULL) AS source_count
+                SELECT f.file_id, m.file_name, f.file_size, f.file_hash,
+                    (SELECT COUNT(*) FROM peer_files pf
+                        JOIN v_online_peers op ON op.peer_id = pf.peer_id
+                        WHERE pf.file_id = f.file_id AND pf.is_sharing = TRUE) AS source_count
                 FROM files f
-                LEFT JOIN peer_files pf ON pf.file_id = f.file_id
-                LEFT JOIN v_online_peers op ON op.peer_id = pf.peer_id
-                WHERE f.file_name ILIKE ?
-                GROUP BY f.file_id, f.file_name, f.file_size, f.file_hash
-                ORDER BY f.file_name
+                JOIN LATERAL (
+                    SELECT a.file_name FROM file_aliases a
+                    WHERE a.file_id = f.file_id AND a.file_name ILIKE ?
+                    ORDER BY a.created_at LIMIT 1
+                ) m ON TRUE
+                WHERE f.publish_status = 'READY'
+                ORDER BY m.file_name
                 LIMIT ?
                 """;
-
         try (Connection connection = connectionFactory.open();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
+            PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, likePattern);
             statement.setInt(2, SEARCH_RESULT_LIMIT);
-
             try (ResultSet rs = statement.executeQuery()) {
                 List<SearchResultItem> results = new ArrayList<>();
                 while (rs.next()) {
@@ -163,11 +175,37 @@ public final class JdbcFileRepository implements FileRepository {
                             rs.getString("file_name"),
                             rs.getLong("file_size"),
                             rs.getString("file_hash"),
-                            rs.getInt("source_count")
-                    ));
+                            rs.getInt("source_count")));
                 }
                 return results;
             }
+        }
+    }
+
+    @Override
+    public Optional<String> findPublishStatus(long fileId) throws SQLException {
+        try (Connection connection = connectionFactory.open();
+            PreparedStatement statement = connection.prepareStatement(
+                    "SELECT publish_status FROM files WHERE file_id = ?")) {
+            statement.setLong(1, fileId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+            }
+        }
+    }
+
+    @Override
+    public void addAlias(long fileId, String fileName, UUID peerId) throws SQLException {
+        try (Connection connection = connectionFactory.open();
+            PreparedStatement statement = connection.prepareStatement("""
+                    INSERT INTO file_aliases (file_id, file_name, first_peer_id)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                    """)) {
+            statement.setLong(1, fileId);
+            statement.setString(2, fileName);
+            statement.setObject(3, peerId);
+            statement.executeUpdate();
         }
     }
 }

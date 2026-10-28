@@ -14,6 +14,15 @@ public final class SharedFilesStore {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private final Path storeFile;
 
+    private static volatile String currentUser;
+
+    public static void setCurrentUser(String key) { currentUser = key; }
+
+    public static SharedFilesStore current() {
+        String key = currentUser;
+        return key == null ? null : forUser(key);
+    }
+
     public SharedFilesStore(Path storeFile) {
         this.storeFile = storeFile;
     }
