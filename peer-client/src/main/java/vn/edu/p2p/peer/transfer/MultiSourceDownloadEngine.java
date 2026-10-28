@@ -131,12 +131,11 @@ public final class MultiSourceDownloadEngine {
             }
         }
 
-        try {
-            DownloadPreflight.check(targetFilePath, discoveredMetadata.fileSize());
-        } catch (DownloadPreflight.PreflightException e) {
+        if (discoveredMetadata == null || reachableSources.isEmpty()) {
             return failedResult(
                     transferId, fileId, targetFilePath, startedAt, 0L,
-                    e.getMessage(), List.of()
+                    "Could not fetch bitfield/metadata from any peer source",
+                    buildSourceStats(sourceStatsMap)
             );
         }
 
