@@ -191,7 +191,7 @@ public final class DownloadController {
             statusLabel.setText("Duong dan dich nam ngoai thu muc da chon."); return;
         }
         try {
-            DownloadPreflight.check(targetFilePath, fileSize);
+            DownloadPreflight.check(targetFilePath, 0);
         } catch (DownloadPreflight.PreflightException ex) {
             statusLabel.setText(ex.getMessage()); return;
         }
