@@ -7,6 +7,7 @@ import vn.edu.p2p.common.dto.SearchResultItem;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface FileRepository {
 
@@ -23,4 +24,12 @@ public interface FileRepository {
 
     /** T16-T17: search the catalog by (partial) file name, with each row's current source count. */
     List<SearchResultItem> searchByName(String likePattern) throws SQLException;
+
+
+    default Optional<String> findPublishStatus(long fileId) throws SQLException {
+        return Optional.empty();
+    }
+
+    default void addAlias(long fileId, String fileName, UUID peerId) throws SQLException {
+    }
 }

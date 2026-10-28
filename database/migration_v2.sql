@@ -36,3 +36,10 @@ SELECT
     2) AS score
 FROM transfer_sources ts
 GROUP BY ts.source_peer_id;
+
+-- Dọn file PUBLISHING quá 1 giờ chưa đủ piece (chạy định kỳ hoặc thủ công)
+DELETE FROM files f
+WHERE f.publish_status = 'PUBLISHING'
+  AND f.created_at < CURRENT_TIMESTAMP - INTERVAL '1 hour'
+  AND NOT EXISTS (SELECT 1 FROM transfer_sessions t WHERE t.file_id = f.file_id)
+  AND NOT EXISTS (SELECT 1 FROM share_events s WHERE s.file_id = f.file_id);

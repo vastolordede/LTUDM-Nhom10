@@ -2,128 +2,95 @@
 Phạm Quách Thành Đặng - 3124410070
 Nguyễn Thái Thảo - 3124410329
 Nguyễn Hoàng Sang - 3124410301
-đồ án **P2P File Sharing** .
 
-- Khởi tạo Gradle multi-module.
-- Chốt cấu trúc `common`, `tracker-server`, `peer-client`.
-- PostgreSQL schema ban đầu cho `users`, `peer_sessions`.
-- Chốt protocol v1 cho:
-  - `LOGIN_REQUEST / LOGIN_RESPONSE`
-  - `LOGOUT_REQUEST / LOGOUT_RESPONSE`
-  - `HEARTBEAT / HEARTBEAT_ACK`
-- Chốt framing: **4-byte length + JSON UTF-8**.
-- DTO/model dùng chung.
-- Skeleton Tracker configuration/repository.
-- JavaFX Login UI skeleton.
-- Login flow / Logout flow / Heartbeat flow.
-- Unit test cho protocol codec.
+Đồ án **P2P File Sharing**: mô hình lai gồm **Tracker** (quản lý danh mục file, peer online) và các **Peer** truyền file trực tiếp với nhau qua TCP Socket. Tracker chỉ lưu metadata, không lưu nội dung file.
 
 ## Stack
 
-- Java 21
-- Gradle
+- Java 21, Gradle 8.10.2 (wrapper)
 - JavaFX 21
-- PostgreSQL + JDBC
-- Jackson
-- BCrypt (đã khai báo dependency để dùng từ Week 2)
-- JUnit 5
+- PostgreSQL + JDBC thuần
+- Jackson, BCrypt, JUnit 5
 
 ## Cấu trúc
 
 ```text
 FileShare-P2P/
-├── common/
-├── tracker-server/
-├── peer-client/
-├── database/
+├── common/          # DTO, protocol, TLS helper
+├── tracker-server/  # Tracker TCP server
+├── peer-client/     # JavaFX GUI, upload server, downloader
+├── database/        # schema.sql, migration_v2.sql
 └── docs/
 ```
 
+## Chức năng hiện có
+
+- Login/Logout (BCrypt), Heartbeat, Online/Offline, reconnect không tạo session trùng.
+- Share file: SHA-256 toàn file, piece size thích ứng (256 KiB / 1 / 4 / 16 MiB), metadata phân trang cho file lớn.
+- Search theo tên, hiển thị số nguồn online.
+- Download đa nguồn nhiều luồng, kiểm tra SHA-256 từng piece và toàn file, Resume, retry sang nguồn khác, blacklist peer gửi piece lỗi, Rarest-First.
+- Vừa tải vừa upload (chỉ upload piece đã hoàn thành).
+- Transfer History, thống kê Tracker, hiển thị tốc độ.
+- Kiểm tra trước khi tải: tên file hợp lệ trên Windows, thư mục ghi được, đủ dung lượng trống.
+
 ## Chuẩn bị PostgreSQL
 
-Tạo database:
-
-```sql
-CREATE DATABASE fileshare_p2p;
+```bat
+psql -U postgres -c "CREATE DATABASE fileshare_p2p"
+psql -U postgres -d fileshare_p2p -f database/schema.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v2.sql
 ```
 
-Sau đó chạy:
+Chạy `schema.sql` và `migration_v2.sql` **một lần trên DB mới**.
 
-```text
-database/schema.sql
-```
+## Cấu hình
 
-Copy:
+Copy `.env.example` thành `.env`, nhập mật khẩu DB (`DB_PASSWORD` bắt buộc). Không commit `.env`.
+Thứ tự ưu tiên: biến môi trường OS > `.env` > `application.properties` > giá trị mặc định.
 
-```text
-tracker-server/src/main/resources/application.example.properties
-```
+## Chạy trên Windows / JDK 21
 
-thành:
-
-```text
-tracker-server/src/main/resources/application.properties
-```
-
-rồi sửa username/password PostgreSQL trên máy cá nhân.
-
-`application.properties` đã nằm trong `.gitignore`, không commit mật khẩu thật lên Git.
-
-## Chạy trong IntelliJ IDEA
-
-1. Mở thư mục gốc `FileShare-P2P`.
-2. Chọn **Trust Project** nếu IntelliJ hỏi.
-3. Chờ Gradle Sync tải dependencies.
-4. Chọn JDK 21 cho Gradle JVM.
-5. Chạy:
-   - `vn.edu.p2p.peer.PeerApplication` để xem Login UI.
-   - `vn.edu.p2p.tracker.TrackerApplication` để kiểm tra Tracker Week 1 config.
-
-Hoặc dùng Gradle:
-
-```bash
-gradle :peer-client:run
-gradle :tracker-server:run
-gradle test
-```
-
-## Quy ước chung cần giữ
-
-- `Tracker` chỉ truyền control/metadata; **không truyền nội dung file**.
-- Peer ↔ Tracker và Peer ↔ Peer đều dùng TCP; TLS sẽ được tích hợp trước khi truyền credential/data thật.
-- IP của Peer về sau nên lấy từ socket phía Tracker; client chỉ công bố `listeningPort`.
-- Password **không lưu plaintext**. Week 2 dùng BCrypt.
-- SHA-256 dành cho file integrity, không dùng thay password hashing.
-- Tất cả message điều khiển dùng `MessageEnvelope` và `ProtocolCodec` trong module `common`.
-
-
-## Update cho repo LTUDM-Nhom10 (D52-D68)
-
-Repo GitHub duoc doi ten thanh `LTUDM-Nhom10`. Ten folder local va ten Gradle project
-`FileShare-P2P` co the giu nguyen, khong anh huong giao thuc P2P.
-
-### Chay thu tren Windows 10 / JDK 21
-
-- Tao PostgreSQL database `fileshare_p2p`; chay `database/schema.sql` **mot lan tren DB moi**.
-- Copy `.env.example` thanh `.env`; nhap mat khau DB o file `.env` local (khong commit).
-- Tao tai khoan thu qua terminal (nhap dung username/password test):
+Tạo tài khoản thử:
 
 ```bat
 .\gradlew.bat :tracker-server:createUser --args="alice demo123"
 ```
 
-- Terminal A chay Tracker: `.\gradlew.bat :tracker-server:run`
-- Terminal B chay GUI: `.\gradlew.bat :peer-client:run`
-- Login -> Peer Center, dung tab Share / My Files / Search / Download / History.
-- De thu da nguon, can 3 Peer co peer ID rieng va cung ket noi duoc toi Tracker + port upload.
+- Terminal A (Tracker): `.\gradlew.bat :tracker-server:run`
+- Terminal B (GUI): `.\gradlew.bat :peer-client:run`
+- Chạy test: `.\gradlew.bat clean test`
 
-### Ky thuat
+Login → Peer Center, dùng các tab Share / My Files / Search / Download / History.
+Để thử đa nguồn cần 3 Peer, mỗi Peer có peer ID riêng và cổng lắng nghe riêng (mặc định 7001), cùng kết nối được tới Tracker.
 
-- Tracker luu metadata va ket noi nguon; khong luu noi dung binary cua file.
-- SHA-256 duoc kiem tra toan file va tung piece; co ho tro resume.
-- Khi file lon, metadata duoc gui theo batch, khong doi `ProtocolCodec.MAX_JSON_BYTES`.
-- Piece size tu dong thay doi (256 KiB, 1 MiB, 4 MiB, 16 MiB) theo do lon file.
-- Chia se thu muc va tai nguyen thu muc (D64-D65) **chua duoc implement**.
-- Chua test duoc full LAN/JavaFX/PostgreSQL tren moi truong tao patch; xac nhan tren may Windows truoc khi merge PR.
+## Quy ước chung
 
-Chi tiet workflow va testcase: `docs/POST_PATCH_TESTPLAN.md`.
+- Tracker chỉ truyền control/metadata, không truyền nội dung file.
+- Tin nhắn điều khiển dùng `MessageEnvelope` + `ProtocolCodec` (4-byte length + JSON UTF-8, tối đa 1 MiB); dữ liệu piece truyền riêng dạng binary.
+- IP của Peer lấy từ socket phía Tracker; client chỉ công bố `listeningPort`.
+- Password không lưu plaintext (BCrypt). SHA-256 dùng cho toàn vẹn file.
+- Kênh Peer ↔ Tracker hỗ trợ TLS (bật bằng cấu hình, mặc định tắt). Trạng thái TLS kênh Peer ↔ Peer xem `docs/POST_PATCH_TESTPLAN.md`.
+
+## Giới hạn đã biết
+
+- Chưa hỗ trợ chia sẻ/tải thư mục (D64-D65).
+- Không có NAT traversal: truyền file giữa các Peer demo trong cùng mạng LAN; chỉ Tracker cần triển khai trên Internet.
+- Chưa kiểm thử thực tế file lớn hơn 2 GB.
+- Chưa xác nhận đầy đủ LAN/JavaFX/PostgreSQL trên mọi môi trường; kiểm tra trên máy Windows trước khi merge.
+
+Chi tiết workflow và testcase: `docs/POST_PATCH_TESTPLAN.md`.
+
+## Bảo mật
+
+- Mật khẩu lưu dạng BCrypt hash.
+- Kênh Peer ↔ Tracker: TLS, bật bằng `TRACKER_TLS_ENABLED`.
+- Kênh Peer ↔ Peer: TLS, bật bằng `P2P_TLS_ENABLED` (keystore/truststore cấu hình qua `P2P_KEYSTORE`, `P2P_TRUSTSTORE`).
+- Không commit `.env`, `certs/*.p12`, `certs/*.cer`.
+
+## Giả lập nhiều Peer (kiểm thử tải)
+
+```bat
+.\gradlew.bat :peer-client:emulator -PemuArgs="10 alice demo123 8000 120"
+```
+
+Tham số: số peer, username, password, cổng bắt đầu, thời gian chạy (giây). Mỗi virtual peer có ID riêng, tự share file, heartbeat và thỉnh thoảng logout/login lại.

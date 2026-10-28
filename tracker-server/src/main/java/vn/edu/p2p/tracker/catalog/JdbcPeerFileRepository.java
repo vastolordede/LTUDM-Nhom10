@@ -27,7 +27,9 @@ public final class JdbcPeerFileRepository implements PeerFileRepository {
                 VALUES
                     (?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
                 ON CONFLICT (peer_id, file_id) DO UPDATE
-                SET availability_status = EXCLUDED.availability_status,
+                SET availability_status = CASE
+                        WHEN peer_files.availability_status = 'COMPLETE' AND EXCLUDED.availability_status = 'PARTIAL'
+                        THEN 'COMPLETE' ELSE EXCLUDED.availability_status END,
                     is_sharing = TRUE,
                     updated_at = CURRENT_TIMESTAMP,
                     completed_at = COALESCE(peer_files.completed_at, EXCLUDED.completed_at)
@@ -73,6 +75,20 @@ public final class JdbcPeerFileRepository implements PeerFileRepository {
             statement.setBoolean(1, sharing);
             statement.setObject(2, peerId);
             statement.setLong(3, fileId);
+            statement.executeUpdate();
+        }
+    }
+
+    @Override
+    public void demoteIfPartial(UUID peerId, long fileId) throws SQLException {
+        String sql = """
+                UPDATE peer_files SET is_sharing = FALSE, updated_at = CURRENT_TIMESTAMP
+                WHERE peer_id = ? AND file_id = ? AND availability_status = 'PARTIAL'
+                """;
+        try (Connection connection = connectionFactory.open();
+            PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, peerId);
+            statement.setLong(2, fileId);
             statement.executeUpdate();
         }
     }

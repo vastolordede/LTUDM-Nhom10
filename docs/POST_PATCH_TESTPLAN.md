@@ -33,6 +33,12 @@ metadata pagination va cac xu ly an toan. Chi danh dau 'Da Hoan Thanh' sau khi q
 | G14 | Tai trung ten file da co | Hien hop thoai xac nhan truoc overwrite/resume | D66 |
 | G15 | Nhap filename `../a.txt` hoac `folder/a.txt` | Tu choi ten file khong an toan | D66 |
 | G16 | Logout | Da log out, Peer Center/Upload server dung | D54 |
+| G17 | Peer A share file, rồi logout hoặc tắt hẳn Peer A, đợi quá 30 giây. Peer B Search lại. | Số nguồn của file giảm, A không còn trong danh sách nguồn | D59 |
+| G18 | Chọn thư mục đích gần đầy hoặc file lớn hơn dung lượng trống rồi bấm tải | Báo lỗi "Khong du dung luong" trước khi tải, không tạo file dở | D66, D75 |
+| G19 | Peer C đang tải từ A và B, tắt A giữa chừng | Tải tiếp từ B, hoàn thành, SHA-256 đúng | D59, S32 |
+| G20 | Nhập tên file `CON`, `a?b`, `abc.` ở ô tên file | Bị từ chối với thông báo rõ ràng | D74 |
+| G21 | Tải file 3 GB (hoặc lớn nhất máy cho phép) giữa 2 Peer, so SHA-256 | Hash khớp, không lỗi JSON/bộ nhớ | D63, N02 |
+| G22 | Tải dở rồi đóng ứng dụng, mở lại và tải cùng file vào cùng đường dẫn | Resume, chỉ tải các piece còn thiếu | D63, S41 |
 
 ## C. Test metadata lon
 

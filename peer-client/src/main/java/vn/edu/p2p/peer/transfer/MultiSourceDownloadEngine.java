@@ -48,7 +48,7 @@ public final class MultiSourceDownloadEngine {
                 fileRegistry,
                 downloadClient,
                 DEFAULT_WORKER_THREADS,
-                PieceScheduler.Strategy.ROUND_ROBIN
+                PieceScheduler.Strategy.RANKED
         );
     }
 

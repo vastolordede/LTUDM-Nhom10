@@ -4,7 +4,6 @@ import vn.edu.p2p.common.dto.FileSourceInfo;
 
 import java.util.ArrayList;
 import java.util.BitSet;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -28,7 +27,8 @@ public final class PieceScheduler {
 
     public enum Strategy {
         ROUND_ROBIN,
-        RAREST_FIRST
+        RAREST_FIRST,
+        RANKED
     }
 
     public record Assignment(
@@ -50,6 +50,10 @@ public final class PieceScheduler {
     private final Set<String> blacklistedPeers = new HashSet<>();
     private final List<String> sourceOrder = new ArrayList<>();
     private final AtomicInteger roundRobinCursor = new AtomicInteger(0);
+    private final Map<Integer, String> assignedPeer = new HashMap<>();
+    private final Map<Integer, Long> assignedAt = new HashMap<>();
+    private final Map<String, Integer> inFlightByPeer = new HashMap<>();
+    private final Map<String, Double> avgMillis = new HashMap<>();
 
     public PieceScheduler(int pieceCount, BitSet initialCompletedPieces, Strategy strategy) {
         this(pieceCount, initialCompletedPieces, strategy, DEFAULT_CORRUPT_STRIKE_LIMIT);
@@ -100,7 +104,7 @@ public final class PieceScheduler {
             return Optional.empty();
         }
 
-        int chosenPiece = (strategy == Strategy.RAREST_FIRST)
+        int chosenPiece = (strategy == Strategy.RAREST_FIRST || strategy == Strategy.RANKED)
                 ? selectRarestPendingPiece()
                 : selectSequentialPendingPiece();
 
@@ -108,12 +112,17 @@ public final class PieceScheduler {
             return Optional.empty();
         }
 
-        FileSourceInfo chosenSource = selectRoundRobinSourceForPiece(chosenPiece);
+        FileSourceInfo chosenSource = (strategy == Strategy.RANKED)
+                ? selectRankedSourceForPiece(chosenPiece)
+                : selectRoundRobinSourceForPiece(chosenPiece);
         if (chosenSource == null) {
             return Optional.empty();
         }
 
         states[chosenPiece] = PieceState.IN_FLIGHT;
+        assignedPeer.put(chosenPiece, chosenSource.peerId());
+        assignedAt.put(chosenPiece, System.nanoTime());
+        inFlightByPeer.merge(chosenSource.peerId(), 1, Integer::sum);
         return Optional.of(new Assignment(chosenPiece, chosenSource));
     }
 
@@ -179,6 +188,7 @@ public final class PieceScheduler {
     public synchronized void markPieceCompleted(int pieceIndex) {
         if (pieceIndex >= 0 && pieceIndex < pieceCount) {
             states[pieceIndex] = PieceState.COMPLETED;
+            releaseAssignment(pieceIndex, true);
         }
     }
 
@@ -188,6 +198,7 @@ public final class PieceScheduler {
     public synchronized void releasePieceToPending(int pieceIndex) {
         if (pieceIndex >= 0 && pieceIndex < pieceCount && states[pieceIndex] != PieceState.COMPLETED) {
             states[pieceIndex] = PieceState.PENDING;
+            releaseAssignment(pieceIndex, false);
         }
     }
 
@@ -258,5 +269,45 @@ public final class PieceScheduler {
             }
         }
         return false;
+    }
+
+    /** B04: chọn nguồn có chi phí kỳ vọng thấp nhất (độ trễ x tải x hệ số phạt piece lỗi). */
+    private FileSourceInfo selectRankedSourceForPiece(int pieceIndex) {
+        int size = sourceOrder.size();
+        if (size == 0) {
+            return null;
+        }
+        int start = Math.floorMod(roundRobinCursor.getAndIncrement(), size);
+        String best = null;
+        double bestCost = Double.MAX_VALUE;
+        for (int offset = 0; offset < size; offset++) {
+            String peerId = sourceOrder.get((start + offset) % size);
+            BitSet bits = sourceBitfields.get(peerId);
+            if (bits == null || !bits.get(pieceIndex)) {
+                continue;
+            }
+            double latency = avgMillis.getOrDefault(peerId, 0.0);
+            int load = inFlightByPeer.getOrDefault(peerId, 0);
+            int strikes = corruptStrikes.getOrDefault(peerId, 0);
+            double cost = (latency + 1.0) * (load + 1) * (1 + strikes);
+            if (cost < bestCost) {
+                bestCost = cost;
+                best = peerId;
+            }
+        }
+        return best == null ? null : activeSources.get(best);
+    }
+
+    private void releaseAssignment(int pieceIndex, boolean success) {
+        String peerId = assignedPeer.remove(pieceIndex);
+        Long startedAt = assignedAt.remove(pieceIndex);
+        if (peerId == null) {
+            return;
+        }
+        inFlightByPeer.merge(peerId, -1, Integer::sum);
+        if (success && startedAt != null) {
+            double ms = (System.nanoTime() - startedAt) / 1_000_000.0;
+            avgMillis.merge(peerId, ms, (old, cur) -> 0.7 * old + 0.3 * cur);
+        }
     }
 }

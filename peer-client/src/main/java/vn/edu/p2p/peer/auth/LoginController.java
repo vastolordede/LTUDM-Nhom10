@@ -15,6 +15,7 @@ import vn.edu.p2p.peer.session.HeartbeatListener;
 import vn.edu.p2p.peer.session.PeerConnectionState;
 import vn.edu.p2p.peer.transfer.PeerP2pSocketConfig;
 import vn.edu.p2p.peer.transfer.TransferDashboardWindow;
+import vn.edu.p2p.peer.share.SharedFilesStore;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -202,6 +203,8 @@ public final class LoginController {
             heartbeatCoordinator.start(session);
         }
 
+        SharedFilesStore.setCurrentUser(usernameField.getText().trim() + "-" + listeningPortField.getText().trim());
+
         openDashboardForSession(session);
     }
 
@@ -216,7 +219,7 @@ public final class LoginController {
         try {
             if (transferDashboard == null) {
                 int port = Integer.parseInt(listeningPortField.getText().trim());
-                transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.plainTcp());
+                transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
             }
             transferDashboard.show(trackerConnection, session.sessionId());
         } catch (Exception e) {
