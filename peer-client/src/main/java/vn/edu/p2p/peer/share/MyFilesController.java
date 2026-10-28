@@ -105,7 +105,18 @@ public final class MyFilesController {
     }
 
     private void onStopSuccess(SharedFileEntry entry) {
-        if (fileRegistry != null) fileRegistry.unregisterFile(entry.fileId());
+        SharedFilesStore store = SharedFilesStore.current();
+        if (fileRegistry != null) {
+            if (store != null) {
+                fileRegistry.find(entry.fileId()).ifPresent(reg -> {
+                    try {
+                        store.removeByHash(reg.metadata().fileHash());
+                    } catch (java.io.IOException ignored) {
+                    }
+                });
+            }
+            fileRegistry.unregisterFile(entry.fileId());
+        }
         myFilesListView.getItems().remove(entry);
         statusLabel.setText("Đã ngừng chia sẻ \"" + entry.fileName() + "\".");
     }

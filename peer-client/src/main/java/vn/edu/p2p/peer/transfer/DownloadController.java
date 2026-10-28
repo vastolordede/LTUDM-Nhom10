@@ -304,14 +304,26 @@ public final class DownloadController {
                 }
             };
 
-            DownloadSessionResult result = engine.downloadFile(
-                    fileId,
-                    sources,
-                    targetFilePath,
-                    uiListener,
-                    activeCancelSignal,
-                    initialTransferId
-            );
+            DownloadSessionResult current = engine.downloadFile(
+                    fileId, sources, targetFilePath, uiListener, activeCancelSignal, initialTransferId);
+
+            // D59: nguồn rớt giữa chừng -> hỏi lại Tracker lấy nguồn mới, tải tiếp phần còn thiếu (Resume)
+            for (int attempt = 1; attempt <= 3
+                    && "FAILED".equals(current.status())
+                    && current.failureReason() != null
+                    && current.failureReason().startsWith("Download incomplete")
+                    && !activeCancelSignal.get(); attempt++) {
+                final int n = attempt;
+                Thread.sleep(2000);
+                Platform.runLater(() -> sourceLogs.add("Nguon bi roi, hoi lai Tracker (lan " + n + "/3)..."));
+                List<FileSourceInfo> fresh = fileSourceClientService.findSources(sessionId, fileId).sources();
+                if (fresh.isEmpty()) {
+                    break;
+                }
+                current = engine.downloadFile(
+                        fileId, fresh, targetFilePath, uiListener, activeCancelSignal, initialTransferId);
+            }
+            final DownloadSessionResult result = current;
 
             // S36-S37: Lưu kết quả phiên tải (COMPLETED / FAILED / CANCELLED) và danh sách nguồn lên Tracker DB
             try {

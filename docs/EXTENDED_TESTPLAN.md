@@ -15,6 +15,9 @@ Ghi chú: các mục phụ thuộc D69, D70, D71, B04 chỉ đạt khi phần co
 | N09 | Peer ranking | A tải nhanh, B chậm, C gửi piece lỗi; chạy nhiều lần rồi truy vấn `v_peer_ranking` | Điểm A > B > C | B04 |
 | N10 | Traffic emulator | Chạy 5, 10, 20 virtual peer, vừa tải vừa đổi trạng thái ONLINE/OFFLINE | Không deadlock, không lỗi session, SHA-256 mọi file đúng | B03 |
 | N14 | Tương thích | Chia sẻ file đủ lớn để dùng metadata paging và adaptive chunking, tải từ 2 Peer | Không lỗi protocol, offset hay SHA-256 | D60-D63, D76 |
+| N15 | Unshare rồi mở lại app | File không tự Share lại | D70 |
+| N16 | Tắt Peer nguồn giữa lúc tải | Log "hoi lai Tracker", tải xong, SHA-256 đúng | D59 |
+| N17 | Gửi request version khác 1 tới cổng upload | Trả lỗi UNSUPPORTED_PROTOCOL_VERSION | D76 |
 
 ## Câu SQL kiểm tra
 
