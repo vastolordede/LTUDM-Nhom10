@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.ProgressBar?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.VBox?>
+
+<VBox xmlns="http://javafx.com/javafx"
+      xmlns:fx="http://javafx.com/fxml"
+      fx:controller="vn.edu.p2p.peer.share.FolderController"
+      spacing="10"
+      styleClass="login-root">
+
+    <padding>
+        <Insets top="16" right="20" bottom="16" left="20"/>
+    </padding>
+
+    <Label text="THƯ MỤC CHIA SẺ" styleClass="title"/>
+
+    <HBox spacing="10">
+        <TextField fx:id="queryField" promptText="Tên thư mục..." maxWidth="280"/>
+        <Button fx:id="searchButton" text="Tìm" onAction="#onSearch"/>
+    </HBox>
+
+    <ListView fx:id="groupsListView" prefHeight="110"/>
+
+    <Label text="File trong thư mục (Ctrl+click để chọn nhiều):" styleClass="subtitle"/>
+    <ListView fx:id="filesListView" prefHeight="150"/>
+
+    <HBox spacing="10">
+        <TextField fx:id="outputDirField" editable="false" prefWidth="320"/>
+        <Button fx:id="chooseDirButton" text="Chọn nơi lưu..." onAction="#onChooseDirectory"/>
+    </HBox>
+
+    <HBox spacing="10">
+        <Button fx:id="downloadAllButton" text="Tải cả thư mục" onAction="#onDownloadAll" disable="true"/>
+        <Button fx:id="downloadSelectedButton" text="Tải file đã chọn" onAction="#onDownloadSelected" disable="true"/>
+        <Button fx:id="cancelButton" text="Hủy" onAction="#onCancel" disable="true"/>
+    </HBox>
+
+    <ProgressBar fx:id="progressBar" prefWidth="420" progress="0"/>
+    <Label fx:id="statusLabel" wrapText="true" maxWidth="520" styleClass="status"/>
+</VBox>

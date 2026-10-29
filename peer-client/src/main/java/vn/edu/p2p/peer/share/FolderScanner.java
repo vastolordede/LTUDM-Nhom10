@@ -16,7 +16,7 @@ import java.util.Set;
 
 /** Quét thư mục để Share: bỏ symlink, giới hạn độ sâu/số file, chặn tên trùng. */
 public final class FolderScanner {
-    public static final int MAX_FILES = 5000;
+    public static final int MAX_FILES = 2000;
     public static final int MAX_DEPTH = 32;
 
     public record Entry(Path absolutePath, String relativePath, long size) {}

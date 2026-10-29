@@ -58,6 +58,9 @@ final class TrackerErrorResponses {
             case REQUEST_PIECE -> MessageType.PIECE_RESPONSE;
             case RECORD_TRANSFER_REQUEST -> MessageType.RECORD_TRANSFER_RESPONSE;
             case TRANSFER_HISTORY_REQUEST -> MessageType.TRANSFER_HISTORY_RESPONSE;
+            case FOLDER_SHARE_REQUEST -> MessageType.FOLDER_SHARE_RESPONSE;
+            case FOLDER_SEARCH_REQUEST -> MessageType.FOLDER_SEARCH_RESPONSE;
+            case FOLDER_DETAIL_REQUEST -> MessageType.FOLDER_DETAIL_RESPONSE;
             default -> MessageType.ERROR;
         };
     }

@@ -13,12 +13,16 @@ import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.transfer.LocalFileRegistry;
+import vn.edu.p2p.common.dto.FolderEntryDto;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.io.IOException;
+import javafx.stage.DirectoryChooser;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Controller for the Share File screen (T01-T15).
@@ -50,6 +54,11 @@ public final class ShareController {
 
     @FXML
     private Label statusLabel;
+   
+    @FXML
+    private Button chooseFolderButton;
+
+    private FolderClientService folderClientService;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "peer-share-io");
@@ -91,6 +100,7 @@ public final class ShareController {
         this.shareFileClientService = new ShareFileClientService(connection);
         this.sessionId = sessionId;
         this.fileRegistry = registry;
+        this.folderClientService = new FolderClientService(connection);
         restoreSharedFiles();
     }
 
@@ -210,5 +220,64 @@ public final class ShareController {
 
     public void shutdown() {
         ioExecutor.shutdownNow();
+    }
+
+    /** D64: chọn thư mục, Share từng file rồi đăng ký nhóm lên Tracker. */
+    @FXML
+    private void onShareFolder() {
+        if (shareFileClientService == null || folderClientService == null || sessionId == null) {
+            statusLabel.setText("Chưa cấu hình phiên đăng nhập cho màn hình Share.");
+            return;
+        }
+        File dir = new DirectoryChooser().showDialog(chooseFolderButton.getScene().getWindow());
+        if (dir == null) {
+            return;
+        }
+        chooseFolderButton.setDisable(true);
+        statusLabel.setText("Đang quét thư mục...");
+        SharedFilesStore store = SharedFilesStore.current();
+
+        ioExecutor.submit(() -> {
+            try {
+                List<FolderScanner.Entry> entries = FolderScanner.scan(dir.toPath());
+                List<FolderEntryDto> dto = new ArrayList<>();
+                int done = 0;
+                for (FolderScanner.Entry entry : entries) {
+                    if (entry.size() == 0) {
+                        continue; // bỏ qua file rỗng
+                    }
+                    final int n = ++done;
+                    Platform.runLater(() -> statusLabel.setText(
+                            "Đang chia sẻ " + n + "/" + entries.size() + ": " + entry.relativePath()));
+                    FileMetadata metadata = metadataBuilder.build(entry.absolutePath());
+                    ShareFileResponse r = shareFileClientService.publish(sessionId, metadata);
+                    if (fileRegistry != null) {
+                        fileRegistry.registerCompleteFile(r.fileId(), entry.absolutePath(), metadata);
+                    }
+                    if (store != null) {
+                        store.add(new SharedFilesStore.Entry(entry.absolutePath().toAbsolutePath().toString(),
+                                metadata.fileName(), metadata.fileSize(), metadata.fileHash()));
+                    }
+                    dto.add(new FolderEntryDto(r.fileId(), entry.relativePath()));
+                    Platform.runLater(() -> {
+                        sharedFiles.removeIf(x -> x.fileId() == r.fileId());
+                        sharedFiles.add(new SharedFileEntry(r.fileId(), entry.relativePath()));
+                    });
+                }
+                if (dto.isEmpty()) {
+                    throw new IOException("Thư mục không có file hợp lệ để chia sẻ.");
+                }
+                var res = folderClientService.share(sessionId, dir.getName(), dto);
+                Platform.runLater(() -> {
+                    statusLabel.setText("Đã chia sẻ thư mục \"" + dir.getName() + "\" (" + res.fileCount() + " file).");
+                    chooseFolderButton.setDisable(false);
+                });
+            } catch (Exception e) {
+                Platform.runLater(() -> {
+                    statusLabel.setText("Lỗi chia sẻ thư mục: " + e.getMessage());
+                    chooseFolderButton.setDisable(false);
+                });
+            }
+        });
     }
 }

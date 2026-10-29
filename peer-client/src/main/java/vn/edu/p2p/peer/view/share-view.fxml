@@ -28,6 +28,10 @@
                 text="Chia sẻ"
                 onAction="#onShareFile"
                 disable="true"/>
+
+        <Button fx:id="chooseFolderButton" 
+                text="Chia sẻ thư mục..." 
+                onAction="#onShareFolder"/>
     </HBox>
 
     <Label fx:id="selectedFileLabel"

@@ -10,6 +10,7 @@ import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.share.MyFilesController;
 import vn.edu.p2p.peer.share.SearchController;
 import vn.edu.p2p.peer.share.ShareController;
+import vn.edu.p2p.peer.share.FolderController;
 
 import java.io.IOException;
 
@@ -27,6 +28,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private TransferHistoryController historyController;
     private Stage stage;
     private boolean closed;
+    private FolderController folderController;
 
     public TransferDashboardWindow(int listeningPort, PeerP2pSocketConfig p2pConfig) {
         this.fileRegistry = new LocalFileRegistry();
@@ -60,6 +62,11 @@ public final class TransferDashboardWindow implements AutoCloseable {
             downloadController = downloadLoader.getController();
             downloadController.configure(connection, sessionId, fileRegistry, socketFactory, uploadServer);
 
+            FXMLLoader folderLoader = loader("folder-view.fxml");
+            Parent folderRoot = folderLoader.load();
+            folderController = folderLoader.getController();
+            folderController.configure(connection, sessionId, fileRegistry, socketFactory);
+
             FXMLLoader searchLoader = loader("search-view.fxml");
             Parent searchRoot = searchLoader.load();
             searchController = searchLoader.getController();
@@ -74,11 +81,12 @@ public final class TransferDashboardWindow implements AutoCloseable {
             Tab searchTab = tab("Tim kiem", searchRoot);
             Tab downloadTab = tab("Tai file", downloadRoot);
             Tab historyTab = tab("Lich su", historyRoot);
+            Tab folderTab = tab("Thu muc", folderRoot);
             historyTab.setOnSelectionChanged(event -> {
                 if (historyTab.isSelected()) historyController.onRefreshHistory();
             });
 
-            TabPane tabs = new TabPane(shareTab, myFilesTab, searchTab, downloadTab, historyTab);
+            TabPane tabs = new TabPane(shareTab, myFilesTab, searchTab, folderTab, downloadTab, historyTab);
             searchController.configure(connection, sessionId, item -> {
                 downloadController.prefillFromSearchResult(item);
                 tabs.getSelectionModel().select(downloadTab);
