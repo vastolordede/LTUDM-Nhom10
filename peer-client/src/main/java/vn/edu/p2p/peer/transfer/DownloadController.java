@@ -97,6 +97,7 @@ public final class DownloadController {
     private PeerP2pSocketFactory p2pSocketFactory;
     private PeerUploadServer uploadServer;
     private String sessionId;
+    private ConnectionPlanner planner;
 
     private Path selectedOutputDir;
     private AtomicBoolean activeCancelSignal;
@@ -132,6 +133,10 @@ public final class DownloadController {
         this.fileRegistry = fileRegistry;
         this.p2pSocketFactory = p2pSocketFactory;
         this.uploadServer = uploadServer;
+    }
+
+    public void setConnectionPlanner(ConnectionPlanner planner) {
+        this.planner = planner;
     }
 
     /**
@@ -267,6 +272,12 @@ public final class DownloadController {
             }
 
             PeerDownloadClient downloadClient = new PeerDownloadClient(p2pSocketFactory);
+                        if (planner != null) {
+                planner.remember(sources);
+                planner.setListener((peerId, mode) -> Platform.runLater(() ->
+                        sourceLogs.add("Peer " + shortPeer(peerId) + " -> kết nối " + mode)));
+                downloadClient.withPlanner(planner);
+            }
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     fileRegistry,
                     downloadClient,
@@ -319,6 +330,9 @@ public final class DownloadController {
                 List<FileSourceInfo> fresh = fileSourceClientService.findSources(sessionId, fileId).sources();
                 if (fresh.isEmpty()) {
                     break;
+                }
+                if (planner != null) {
+                    planner.remember(fresh);
                 }
                 current = engine.downloadFile(
                         fileId, fresh, targetFilePath, uiListener, activeCancelSignal, initialTransferId);

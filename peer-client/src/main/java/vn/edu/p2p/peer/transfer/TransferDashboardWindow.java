@@ -6,10 +6,15 @@ import javafx.scene.Scene;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
 import javafx.stage.Stage;
+import javafx.application.Platform;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.share.MyFilesController;
 import vn.edu.p2p.peer.share.SearchController;
 import vn.edu.p2p.peer.share.ShareController;
+import vn.edu.p2p.peer.share.FolderController;
+import vn.edu.p2p.common.config.EnvConfig;
+import vn.edu.p2p.peer.network.PeerSettings;
+import vn.edu.p2p.peer.network.RendezvousClient;
 
 import java.io.IOException;
 
@@ -27,8 +32,12 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private TransferHistoryController historyController;
     private Stage stage;
     private boolean closed;
+    private final boolean p2pTls;
+    private RelayAgent relayAgent;
+    private FolderController folderController;
 
     public TransferDashboardWindow(int listeningPort, PeerP2pSocketConfig p2pConfig) {
+        this.p2pTls = p2pConfig.tlsEnabled();
         this.fileRegistry = new LocalFileRegistry();
         this.socketFactory = new PeerP2pSocketFactory(p2pConfig);
         this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
@@ -60,6 +69,11 @@ public final class TransferDashboardWindow implements AutoCloseable {
             downloadController = downloadLoader.getController();
             downloadController.configure(connection, sessionId, fileRegistry, socketFactory, uploadServer);
 
+            FXMLLoader folderLoader = loader("folder-view.fxml");
+            Parent folderRoot = folderLoader.load();
+            folderController = folderLoader.getController();
+            folderController.configure(connection, sessionId, fileRegistry, socketFactory);
+
             FXMLLoader searchLoader = loader("search-view.fxml");
             Parent searchRoot = searchLoader.load();
             searchController = searchLoader.getController();
@@ -74,11 +88,12 @@ public final class TransferDashboardWindow implements AutoCloseable {
             Tab searchTab = tab("Tim kiem", searchRoot);
             Tab downloadTab = tab("Tai file", downloadRoot);
             Tab historyTab = tab("Lich su", historyRoot);
+            Tab folderTab = tab("Thu muc", folderRoot);
             historyTab.setOnSelectionChanged(event -> {
                 if (historyTab.isSelected()) historyController.onRefreshHistory();
             });
 
-            TabPane tabs = new TabPane(shareTab, myFilesTab, searchTab, downloadTab, historyTab);
+            TabPane tabs = new TabPane(shareTab, myFilesTab, searchTab, folderTab, downloadTab, historyTab);
             searchController.configure(connection, sessionId, item -> {
                 downloadController.prefillFromSearchResult(item);
                 tabs.getSelectionModel().select(downloadTab);
@@ -94,6 +109,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             });
             stage.show();
         } catch (IOException | RuntimeException e) {
+            configureConnectivity(sessionId);
             close();
             throw e;
         }
@@ -109,6 +125,49 @@ public final class TransferDashboardWindow implements AutoCloseable {
         Tab result = new Tab(name, root);
         result.setClosable(false);
         return result;
+    }
+
+    /** D77-D80: kiểm tra NAT, bật relay, gắn planner cho các màn hình tải. */
+    private void configureConnectivity(String sessionId) {
+        try {
+            PeerSettings settings = PeerSettings.load();
+            RendezvousClient rendezvous = new RendezvousClient(
+                    settings, EnvConfig.integer("RENDEZVOUS_PORT", 9001));
+            boolean relayWanted = EnvConfig.flag("RELAY_ENABLED", false);
+            boolean relayAllowed = relayWanted;
+            ConnectionPlanner planner = new ConnectionPlanner(
+                    socketFactory, relayAllowed ? rendezvous : null, sessionId);
+            downloadController.setConnectionPlanner(planner);
+            folderController.setConnectionPlanner(planner);
+            if (relayAllowed) {
+                relayAgent = new RelayAgent(rendezvous, sessionId, uploadServer);
+                relayAgent.start();
+            }
+            String baseTitle = stage.getTitle();
+            String relayNote = relayWanted && p2pTls ? " | Relay tat (P2P TLS dang bat)"
+                    : relayAllowed ? " | Relay san sang" : "";
+            Thread probe = new Thread(() -> {
+                String status;
+                try {
+                    RendezvousClient.Probe p = rendezvous.probe(sessionId, uploadServer.listeningPort());
+                    status = p.reachable()
+                            ? "Truy cap duoc tu ngoai (" + p.observedIp() + ")"
+                            : "Khong truy cap duoc tu ngoai (NAT/firewall)";
+                } catch (IOException e) {
+                    status = "Chua kiem tra duoc ket noi ngoai";
+                }
+                String title = baseTitle + " | " + status + relayNote;
+                Platform.runLater(() -> {
+                    if (stage != null && !closed) {
+                        stage.setTitle(title);
+                    }
+                });
+            }, "peer-nat-probe");
+            probe.setDaemon(true);
+            probe.start();
+        } catch (RuntimeException e) {
+            System.err.println("Connectivity setup skipped: " + e.getMessage());
+        }
     }
 
     public LocalFileRegistry fileRegistry() { return fileRegistry; }
@@ -127,6 +186,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (myFilesController != null) myFilesController.shutdown();
         if (downloadController != null) downloadController.shutdown();
         if (historyController != null) historyController.shutdown();
+        if (relayAgent != null) relayAgent.close();
         uploadServer.close();
     }
 }

@@ -44,6 +44,14 @@ public enum MessageType {
 
     TRANSFER_HISTORY_REQUEST,
     TRANSFER_HISTORY_RESPONSE,
+
+    FOLDER_SHARE_REQUEST,
+    FOLDER_SHARE_RESPONSE,
+    FOLDER_SEARCH_REQUEST,
+    FOLDER_SEARCH_RESPONSE,
+    FOLDER_DETAIL_REQUEST,
+    FOLDER_DETAIL_RESPONSE,
+
     /** Generic protocol-level error when no request-specific response exists. */
     ERROR
 }

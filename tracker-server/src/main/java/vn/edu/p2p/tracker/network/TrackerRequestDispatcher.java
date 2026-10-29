@@ -32,6 +32,10 @@ import vn.edu.p2p.tracker.peer.SessionException;
 import vn.edu.p2p.tracker.source.FileSourceException;
 import vn.edu.p2p.tracker.source.FileSourceService;
 import vn.edu.p2p.tracker.transfer.TransferHistoryService;
+import vn.edu.p2p.common.dto.FolderDetailRequest;
+import vn.edu.p2p.common.dto.FolderSearchRequest;
+import vn.edu.p2p.common.dto.FolderShareRequest;
+import vn.edu.p2p.tracker.catalog.FolderCatalogService;
 
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -45,6 +49,12 @@ public final class TrackerRequestDispatcher {
     private final FileCatalogService fileCatalogService;
     private final TransferHistoryService transferHistoryService;
     private final RequestValidator validator;
+    private FolderCatalogService folderCatalogService;
+
+    public TrackerRequestDispatcher withFolderCatalog(FolderCatalogService service) {
+        this.folderCatalogService = service;
+        return this;
+    }
 
     public TrackerRequestDispatcher(
             AuthService authService,
@@ -130,6 +140,9 @@ public final class TrackerRequestDispatcher {
                 case UNSHARE_FILE_REQUEST -> handleUnshareFile(request);
                 case RECORD_TRANSFER_REQUEST -> handleRecordTransfer(request);
                 case TRANSFER_HISTORY_REQUEST -> handleTransferHistory(request);
+                case FOLDER_SHARE_REQUEST -> handleFolder(request, 0);
+                case FOLDER_SEARCH_REQUEST -> handleFolder(request, 1);
+                case FOLDER_DETAIL_REQUEST -> handleFolder(request, 2);
                 default -> TrackerErrorResponses.forRequest(
                         request,
                         "UNSUPPORTED_MESSAGE",
@@ -367,4 +380,24 @@ public final class TrackerRequestDispatcher {
                 ProtocolCodec.toPayload(response)
         );
     }
+
+    private MessageEnvelope handleFolder(MessageEnvelope request, int kind) throws Exception {
+        if (folderCatalogService == null) {
+                return TrackerErrorResponses.forRequest(request, "FEATURE_UNAVAILABLE",
+                        "Folder sharing is not configured on this Tracker.");
+        }
+        if (kind == 0) {
+                var p = ProtocolCodec.fromPayload(request.payload(), FolderShareRequest.class);
+                return MessageEnvelope.success(MessageType.FOLDER_SHARE_RESPONSE, request.requestId(),
+                        ProtocolCodec.toPayload(folderCatalogService.share(p)));
+        }
+        if (kind == 1) {
+                var p = ProtocolCodec.fromPayload(request.payload(), FolderSearchRequest.class);
+                return MessageEnvelope.success(MessageType.FOLDER_SEARCH_RESPONSE, request.requestId(),
+                        ProtocolCodec.toPayload(folderCatalogService.search(p)));
+        }
+        var p = ProtocolCodec.fromPayload(request.payload(), FolderDetailRequest.class);
+        return MessageEnvelope.success(MessageType.FOLDER_DETAIL_RESPONSE, request.requestId(),
+                ProtocolCodec.toPayload(folderCatalogService.detail(p)));
+    }           
 }
