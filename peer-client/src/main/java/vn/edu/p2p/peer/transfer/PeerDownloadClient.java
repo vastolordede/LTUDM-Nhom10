@@ -33,9 +33,19 @@ public final class PeerDownloadClient {
     }
 
     private final PeerP2pSocketFactory socketFactory;
+    private ConnectionPlanner planner;
 
     public PeerDownloadClient(PeerP2pSocketFactory socketFactory) {
         this.socketFactory = Objects.requireNonNull(socketFactory, "socketFactory");
+    }
+
+    public PeerDownloadClient withPlanner(ConnectionPlanner planner) {
+        this.planner = planner;
+        return this;
+    }
+
+    private Socket open(String host, int port) throws IOException {
+        return planner == null ? socketFactory.openClientSocket(host, port) : planner.open(host, port);
     }
 
     /**
@@ -49,7 +59,7 @@ public final class PeerDownloadClient {
                 ProtocolCodec.toPayload(payload)
         );
 
-        try (Socket socket = socketFactory.openClientSocket(host, port)) {
+        try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
             MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
 
@@ -71,7 +81,7 @@ public final class PeerDownloadClient {
                 MessageType.METADATA_PAGE_REQUEST, UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize))
         );
-        try (Socket socket = socketFactory.openClientSocket(host, port)) {
+        try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
             MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
             if (response.status() == ResponseStatus.ERROR || response.type() != MessageType.METADATA_PAGE_RESPONSE) {
@@ -102,7 +112,7 @@ public final class PeerDownloadClient {
                 ProtocolCodec.toPayload(payload)
         );
 
-        try (Socket socket = socketFactory.openClientSocket(host, port)) {
+        try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
             MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
 

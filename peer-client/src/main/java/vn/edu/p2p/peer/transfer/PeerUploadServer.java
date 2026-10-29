@@ -91,6 +91,28 @@ public final class PeerUploadServer implements AutoCloseable {
         return totalBytesUploaded.get();
     }
 
+    /** D79: phục vụ một socket đã được relay nối sẵn. */
+    public void serveRelayedSocket(Socket socket) {
+        if (!running.get()) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+            return;
+        }
+        try {
+            socket.setTcpNoDelay(true);
+            socket.setSoTimeout(socketFactory.readTimeoutMillis());
+        } catch (IOException e) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+            return;
+        }
+        clientWorkers.submit(() -> handlePeerConnection(socket));
+    }
+
     private void acceptLoop() {
         while (running.get()) {
             try {

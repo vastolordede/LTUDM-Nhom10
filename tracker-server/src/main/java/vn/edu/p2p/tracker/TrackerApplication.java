@@ -1,9 +1,11 @@
 package vn.edu.p2p.tracker;
 
+import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.tracker.auth.BCryptPasswordService;
 import vn.edu.p2p.tracker.auth.DefaultAuthService;
 import vn.edu.p2p.tracker.catalog.FileCatalogService;
 import vn.edu.p2p.tracker.catalog.FileRepository;
+import vn.edu.p2p.tracker.catalog.FolderCatalogService;
 import vn.edu.p2p.tracker.catalog.JdbcFileRepository;
 import vn.edu.p2p.tracker.catalog.JdbcPeerFileRepository;
 import vn.edu.p2p.tracker.catalog.JdbcSessionPeerResolver;
@@ -14,6 +16,7 @@ import vn.edu.p2p.tracker.catalog.ShareEventRepository;
 import vn.edu.p2p.tracker.config.DatabaseConnectionFactory;
 import vn.edu.p2p.tracker.config.TrackerSettings;
 import vn.edu.p2p.tracker.logging.TrackerLogging;
+import vn.edu.p2p.tracker.network.RendezvousServer;
 import vn.edu.p2p.tracker.network.TrackerRequestDispatcher;
 import vn.edu.p2p.tracker.network.TrackerServerSocketProvider;
 import vn.edu.p2p.tracker.network.TlsTrackerServerSocketProvider;
@@ -36,6 +39,7 @@ import vn.edu.p2p.tracker.statistics.TrackerStatisticsService;
 import vn.edu.p2p.tracker.transfer.JdbcTransferHistoryRepository;
 import vn.edu.p2p.tracker.transfer.TransferHistoryService;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.logging.Logger;
 
@@ -93,6 +97,10 @@ public final class TrackerApplication {
                 sessionPeerResolver, new JdbcTransferHistoryRepository(connectionFactory), peerFiles
         );
 
+        // D64, D72, D73: chia sẻ thư mục
+        FolderCatalogService folderCatalogService =
+                new FolderCatalogService(sessionPeerResolver, connectionFactory);
+
         TrackerRequestDispatcher dispatcher =
                 new TrackerRequestDispatcher(
                         authService,
@@ -100,7 +108,7 @@ public final class TrackerApplication {
                         fileSourceService,
                         fileCatalogService,
                         transferHistoryService
-                );
+                ).withFolderCatalog(folderCatalogService);
 
         TrackerServerSocketProvider socketProvider =
                 settings.tls().enabled()
@@ -117,6 +125,22 @@ public final class TrackerApplication {
                 settings.tls().enabled() ? "TLS" : "TCP"
         );
 
+        // D77, D79: cổng Rendezvous (NAT probe + relay), chạy ở thread riêng
+        RendezvousServer rendezvous = new RendezvousServer(
+                EnvConfig.integer("RENDEZVOUS_PORT", 9001),
+                sessionPeerResolver,
+                EnvConfig.flag("RELAY_ENABLED", false)
+        );
+        Thread rendezvousThread = new Thread(() -> {
+            try {
+                rendezvous.start();
+            } catch (IOException e) {
+                LOG.warning("Rendezvous server stopped: " + e.getMessage());
+            }
+        }, "tracker-rendezvous-main");
+        rendezvousThread.setDaemon(true);
+        rendezvousThread.start();
+
         HeartbeatMonitor heartbeatMonitor = new HeartbeatMonitor(
                 sessions,
                 Duration.ofSeconds(settings.heartbeatTimeoutSeconds()),
@@ -131,6 +155,7 @@ public final class TrackerApplication {
                 new Thread(() -> {
                     statisticsMonitor.close();
                     heartbeatMonitor.close();
+                    rendezvous.close();
                     server.close();
                 }, "tracker-shutdown")
         );

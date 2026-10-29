@@ -25,6 +25,7 @@ import vn.edu.p2p.peer.transfer.PeerP2pSocketFactory;
 import vn.edu.p2p.peer.transfer.PieceScheduler;
 import vn.edu.p2p.peer.transfer.SafeFileName;
 import vn.edu.p2p.peer.transfer.TransferHistoryClientService;
+import vn.edu.p2p.peer.transfer.ConnectionPlanner;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -67,6 +68,7 @@ public final class FolderController {
     private Path outputDir = Path.of(System.getProperty("user.home"), "Downloads");
     private String currentGroupName;
     private volatile AtomicBoolean cancelSignal = new AtomicBoolean(false);
+    private volatile ConnectionPlanner planner;
 
     @FXML
     private void initialize() {
@@ -103,6 +105,10 @@ public final class FolderController {
         this.sessionId = sessionId;
         this.fileRegistry = registry;
         this.socketFactory = socketFactory;
+    }
+
+    public void setConnectionPlanner(ConnectionPlanner planner) {
+        this.planner = planner;
     }
 
     @FXML
@@ -192,7 +198,7 @@ public final class FolderController {
             int failed = 0;
             StringBuilder errors = new StringBuilder();
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
-                    fileRegistry, new PeerDownloadClient(socketFactory),
+                    fileRegistry, new PeerDownloadClient(socketFactory).withPlanner(planner),
                     MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED);
 
             for (int i = 0; i < files.size() && !cancel.get(); i++) {
@@ -214,6 +220,9 @@ public final class FolderController {
                     DownloadPreflight.check(target, f.fileSize());
 
                     List<FileSourceInfo> sources = sourceClient.findSources(sessionId, f.fileId()).sources();
+                    if (planner != null) {
+                        planner.remember(sources);
+                    }
                     UUID transferId = UUID.randomUUID();
                     try {
                         historyClient.reportTransferStart(sessionId, transferId, f.fileId());
