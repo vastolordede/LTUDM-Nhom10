@@ -129,7 +129,8 @@ public final class TrackerApplication {
         RendezvousServer rendezvous = new RendezvousServer(
                 EnvConfig.integer("RENDEZVOUS_PORT", 9001),
                 sessionPeerResolver,
-                EnvConfig.flag("RELAY_ENABLED", false)
+                EnvConfig.flag("RELAY_ENABLED", false),
+                socketProvider
         );
         Thread rendezvousThread = new Thread(() -> {
             try {

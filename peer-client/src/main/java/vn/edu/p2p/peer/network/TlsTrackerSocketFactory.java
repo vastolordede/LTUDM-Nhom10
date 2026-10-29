@@ -29,7 +29,17 @@ final class TlsTrackerSocketFactory {
         }
     }
 
+        Socket connect(
+            int connectTimeoutMillis,
+            int readTimeoutMillis
+    ) throws IOException {
+        return connect(config.host(), config.port(), connectTimeoutMillis, readTimeoutMillis);
+    }
+
+    /** D81: dùng cho cổng Rendezvous (khác cổng Tracker chính). */
     Socket connect(
+            String host,
+            int port,
             int connectTimeoutMillis,
             int readTimeoutMillis
     ) throws IOException {
@@ -37,7 +47,7 @@ final class TlsTrackerSocketFactory {
                 sslContext.getSocketFactory().createSocket();
 
         socket.connect(
-                new InetSocketAddress(config.host(), config.port()),
+                new InetSocketAddress(host, port),
                 connectTimeoutMillis
         );
         socket.setEnabledProtocols(

@@ -13,25 +13,39 @@ public final class RendezvousClient {
 
     public record Probe(String observedIp, boolean reachable) {}
 
-    private final String host;
-    private final int port;
+        private final String host;
+        private final int port;
+        private final TlsTrackerSocketFactory tls; // null = plain TCP
 
-    public RendezvousClient(String host, int port) {
-        this.host = host;
-        this.port = port;
-    }
-
-    private Socket open() throws IOException {
-        Socket socket = new Socket();
-        try {
-            socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
-            socket.setTcpNoDelay(true);
-            return socket;
-        } catch (IOException e) {
-            closeQuietly(socket);
-            throw e;
+        public RendezvousClient(String host, int port) {
+            this.host = host;
+            this.port = port;
+            this.tls = null;
         }
-    }
+
+        /** D81: dùng TLS cho cổng Rendezvous khi Tracker TLS đang bật. */
+        public RendezvousClient(PeerSettings settings, int port) {
+            this.host = settings.trackerHost();
+            this.port = port;
+            this.tls = settings.trackerTlsEnabled()
+                    ? new TlsTrackerSocketFactory(settings.trackerConnectionConfig())
+                    : null;
+        }
+
+        private Socket open() throws IOException {
+            if (tls != null) {
+                return tls.connect(host, port, CONNECT_TIMEOUT_MS, HANDSHAKE_TIMEOUT_MS);
+            }
+            Socket socket = new Socket();
+            try {
+                socket.connect(new InetSocketAddress(host, port), CONNECT_TIMEOUT_MS);
+                socket.setTcpNoDelay(true);
+                return socket;
+            } catch (IOException e) {
+                closeQuietly(socket);
+                throw e;
+            }
+        }
 
     /** D77. */
     public Probe probe(String sessionId, int listeningPort) throws IOException {

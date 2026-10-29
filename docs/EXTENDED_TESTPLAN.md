@@ -14,6 +14,9 @@ Ghi chú: các mục phụ thuộc D69, D70, D71, B04 chỉ đạt khi phần co
 | N08 | Tên file nguy hiểm | Nhập `CON`, `a?b`, `abc.`, `..\x`, `a/b` ở ô tên file | Mọi tên đều bị từ chối, không ghi ngoài thư mục đích | D74 |
 | N09 | Peer ranking | A tải nhanh, B chậm, C gửi piece lỗi; chạy nhiều lần rồi truy vấn `v_peer_ranking` | Điểm A > B > C | B04 |
 | N10 | Traffic emulator | Chạy 5, 10, 20 virtual peer, vừa tải vừa đổi trạng thái ONLINE/OFFLINE | Không deadlock, không lỗi session, SHA-256 mọi file đúng | B03 |
+| N11 | Hai mạng khác nhau, port-forward cổng upload của peer nguồn | Log "kết nối DIRECT", SHA-256 đúng | D77, D78 |
+| N12 | Chặn cổng upload bằng firewall, bật RELAY_ENABLED và P2P_TLS_ENABLED | Log "kết nối RELAY", tải xong, SHA-256 đúng | D79, D80, D81 |
+| N13 | Tracker ở máy khác (không dùng localhost), Peer từ mạng khác đăng nhập | Login, Search, Heartbeat chạy; cổng 5432 không truy cập được từ ngoài | D81 |
 | N14 | Tương thích | Chia sẻ file đủ lớn để dùng metadata paging và adaptive chunking, tải từ 2 Peer | Không lỗi protocol, offset hay SHA-256 | D60-D63, D76 |
 | N15 | Unshare rồi mở lại app | File không tự Share lại | D70 |
 | N16 | Tắt Peer nguồn giữa lúc tải | Log "hoi lai Tracker", tải xong, SHA-256 đúng | D59 |

@@ -86,6 +86,32 @@ public final class PeerP2pSocketFactory {
         return sslSocket;
     }
 
+        /** D81: bọc TLS lên socket relay đã nối sẵn (phía downloader). Tracker chỉ thấy dữ liệu mã hóa. */
+    public Socket wrapClient(Socket plain, String host, int port) throws IOException {
+        if (!config.tlsEnabled()) {
+            return plain;
+        }
+        SSLSocket ssl = (SSLSocket) clientSslContext.getSocketFactory()
+                .createSocket(plain, host, port, true);
+        ssl.setEnabledProtocols(supportedProtocols(ssl.getSupportedProtocols()));
+        ssl.setSoTimeout(config.readTimeoutMillis());
+        ssl.startHandshake();
+        return ssl;
+    }
+
+    /** D81: bọc TLS phía peer nguồn cho socket do relay nối. */
+    public Socket wrapServer(Socket plain) throws IOException {
+        if (!config.tlsEnabled()) {
+            return plain;
+        }
+        SSLSocket ssl = (SSLSocket) serverSslContext.getSocketFactory()
+                .createSocket(plain, null, plain.getPort(), true);
+        ssl.setUseClientMode(false);
+        ssl.setNeedClientAuth(false);
+        ssl.setEnabledProtocols(supportedProtocols(ssl.getSupportedProtocols()));
+        return ssl;
+    }
+
     public int readTimeoutMillis() {
         return config.readTimeoutMillis();
     }

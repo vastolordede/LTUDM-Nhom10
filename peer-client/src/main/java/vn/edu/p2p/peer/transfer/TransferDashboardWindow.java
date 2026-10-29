@@ -132,9 +132,9 @@ public final class TransferDashboardWindow implements AutoCloseable {
         try {
             PeerSettings settings = PeerSettings.load();
             RendezvousClient rendezvous = new RendezvousClient(
-                    settings.trackerHost(), EnvConfig.integer("RENDEZVOUS_PORT", 9001));
+                    settings, EnvConfig.integer("RENDEZVOUS_PORT", 9001));
             boolean relayWanted = EnvConfig.flag("RELAY_ENABLED", false);
-            boolean relayAllowed = relayWanted && !p2pTls;
+            boolean relayAllowed = relayWanted;
             ConnectionPlanner planner = new ConnectionPlanner(
                     socketFactory, relayAllowed ? rendezvous : null, sessionId);
             downloadController.setConnectionPlanner(planner);

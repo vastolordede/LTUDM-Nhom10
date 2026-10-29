@@ -92,6 +92,7 @@ public final class PeerUploadServer implements AutoCloseable {
     }
 
     /** D79: phục vụ một socket đã được relay nối sẵn. */
+        /** D79, D81: phục vụ socket do relay nối sẵn; bọc TLS nếu P2P TLS đang bật. */
     public void serveRelayedSocket(Socket socket) {
         if (!running.get()) {
             try {
@@ -110,7 +111,16 @@ public final class PeerUploadServer implements AutoCloseable {
             }
             return;
         }
-        clientWorkers.submit(() -> handlePeerConnection(socket));
+        clientWorkers.submit(() -> {
+            try {
+                handlePeerConnection(socketFactory.wrapServer(socket));
+            } catch (IOException e) {
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                }
+            }
+        });
     }
 
     private void acceptLoop() {

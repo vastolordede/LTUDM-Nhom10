@@ -62,7 +62,14 @@ public final class ConnectionPlanner {
         String peerId = peerByEndpoint.get(key);
         if (rendezvous != null && peerId != null) {
             try {
-                Socket socket = rendezvous.connectViaRelay(sessionId, peerId, direct.readTimeoutMillis());
+                Socket relay = rendezvous.connectViaRelay(sessionId, peerId, direct.readTimeoutMillis());
+                Socket socket;
+                try {
+                    socket = direct.wrapClient(relay, host, port);
+                } catch (IOException tlsFail) {
+                    relay.close();
+                    throw tlsFail;
+                }
                 relayUntil.put(key, System.currentTimeMillis() + RELAY_PREFERENCE_MS);
                 report(key, Mode.RELAY);
                 return socket;

@@ -12,6 +12,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,14 +29,16 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * D77, D79: NAT discovery (PROBE) và relay.
+ * D77, D79, D81: NAT discovery (PROBE) và relay.
  *
  * Giao thức (DataInput/OutputStream, chuỗi UTF), mọi lệnh đều mang sessionId:
- *  - PROBE   <session> <port>          -> OK <observedIp> <reachable>
- *  - REGISTER <session>                -> OK, rồi Tracker gửi PING / INCOMING <token>
- *  - CONNECT <session> <targetPeerId>  -> OK rồi nối thẳng sang peer đích
- *  - ACCEPT  <session> <token>         -> OK rồi nối thẳng sang downloader
+ *  - PROBE    <session> <port>          -> OK <observedIp> <reachable>
+ *  - REGISTER <session>                 -> OK, rồi Tracker gửi PING / INCOMING <token>
+ *  - CONNECT  <session> <targetPeerId>  -> OK rồi nối thẳng sang peer đích
+ *  - ACCEPT   <session> <token>         -> OK rồi nối thẳng sang downloader
  * Lỗi: ERR <message>.
+ *
+ * Cổng này dùng cùng socketProvider với Tracker chính (TLS nếu Tracker TLS bật).
  */
 public final class RendezvousServer implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger(RendezvousServer.class.getName());
@@ -52,6 +55,7 @@ public final class RendezvousServer implements AutoCloseable {
     private final int port;
     private final SessionPeerResolver resolver;
     private final boolean relayEnabled;
+    private final TrackerServerSocketProvider socketProvider;
     private final ExecutorService pool = new ThreadPoolExecutor(
             0, 256, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
                 Thread t = new Thread(runnable, "tracker-rendezvous");
@@ -72,16 +76,22 @@ public final class RendezvousServer implements AutoCloseable {
     private volatile ServerSocket server;
 
     public RendezvousServer(int port, SessionPeerResolver resolver, boolean relayEnabled) {
+        this(port, resolver, relayEnabled, TrackerServerSocketProvider.plain());
+    }
+
+    public RendezvousServer(int port, SessionPeerResolver resolver, boolean relayEnabled,
+                            TrackerServerSocketProvider socketProvider) {
         this.port = port;
         this.resolver = resolver;
         this.relayEnabled = relayEnabled;
+        this.socketProvider = Objects.requireNonNull(socketProvider, "socketProvider");
     }
 
     /** Chặn đến khi close(). Chạy trong một thread riêng. */
     public void start() throws IOException {
         running = true;
         pinger.scheduleAtFixedRate(this::pingControls, 20, 20, TimeUnit.SECONDS);
-        try (ServerSocket ss = new ServerSocket(port)) {
+        try (ServerSocket ss = socketProvider.open(port)) {
             server = ss;
             LOG.info("Rendezvous server on port " + port + " (relay " + (relayEnabled ? "ON" : "OFF") + ")");
             while (running) {
