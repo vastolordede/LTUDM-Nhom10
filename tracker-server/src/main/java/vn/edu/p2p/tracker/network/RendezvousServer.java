@@ -48,7 +48,7 @@ public final class RendezvousServer implements AutoCloseable {
     private static final int IDLE_TIMEOUT_MS = 60_000;
     private static final long MAX_BYTES_PER_PIPE = 64L * 1024 * 1024;
 
-    private record Control(Socket socket, DataOutputStream out) {}
+    private record Control(String sessionId, Socket socket, DataOutputStream out) {}
 
     private record Pending(UUID target, CompletableFuture<Socket> future) {}
 
@@ -165,11 +165,12 @@ public final class RendezvousServer implements AutoCloseable {
 
     /** Peer nguồn mở kênh điều khiển ra ngoài để Tracker báo có người muốn kết nối. */
     private boolean register(Socket socket, DataInputStream in, DataOutputStream out) throws Exception {
-        UUID peerId = authenticate(in.readUTF());
+        String sessionId = in.readUTF();
+        UUID peerId = authenticate(sessionId);
         if (!relayEnabled) {
             return reply(out, "ERR", "Relay is disabled on this Tracker");
         }
-        Control control = new Control(socket, out);
+        Control control = new Control(sessionId, socket, out);
         Control old = controls.put(peerId, control);
         if (old != null) {
             closeQuietly(old.socket());
@@ -192,6 +193,15 @@ public final class RendezvousServer implements AutoCloseable {
         Control control = controls.get(target);
         if (control == null) {
             return reply(out, "ERR", "Target peer is not registered for relay");
+        }
+        try {
+            if (!authenticate(control.sessionId()).equals(target)) {
+                throw new SecurityException("Target session has changed identity");
+            }
+        } catch (Exception expired) {
+            controls.remove(target, control);
+            closeQuietly(control.socket());
+            return reply(out, "ERR", "Target relay session is expired");
         }
         if (!relaySlots.tryAcquire()) {
             return reply(out, "ERR", "Relay is busy");
@@ -282,11 +292,14 @@ public final class RendezvousServer implements AutoCloseable {
         for (Map.Entry<UUID, Control> e : controls.entrySet()) {
             Control c = e.getValue();
             try {
+                if (!authenticate(c.sessionId()).equals(e.getKey())) {
+                    throw new IOException("Relay session has expired");
+                }
                 synchronized (c.out()) {
                     c.out().writeUTF("PING");
                     c.out().flush();
                 }
-            } catch (IOException ex) {
+            } catch (Exception ex) {
                 controls.remove(e.getKey(), c);
                 closeQuietly(c.socket());
             }

@@ -26,6 +26,11 @@ public interface FileRepository {
     List<SearchResultItem> searchByName(String likePattern) throws SQLException;
 
 
+    /** Fail closed on incompatible chunk geometry for a file with an existing hash. */
+    default boolean hasCompatibleGeometry(long fileId, FileMetadata metadata) throws SQLException {
+        return true; // In-memory test repositories may override; JDBC always checks.
+    }
+
     default Optional<String> findPublishStatus(long fileId) throws SQLException {
         return Optional.empty();
     }

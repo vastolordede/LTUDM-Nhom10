@@ -20,7 +20,10 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -63,11 +66,13 @@ public final class PeerUploadServer implements AutoCloseable {
         this.listeningPort = listeningPort;
         this.fileRegistry = fileRegistry;
         this.socketFactory = socketFactory;
-        this.clientWorkers = Executors.newFixedThreadPool(maxUploadWorkers, runnable -> {
-            Thread thread = new Thread(runnable, "peer-upload-worker");
-            thread.setDaemon(true);
-            return thread;
-        });
+        if (maxUploadWorkers <= 0) throw new IllegalArgumentException("maxUploadWorkers must be > 0");
+        this.clientWorkers = new ThreadPoolExecutor(maxUploadWorkers, maxUploadWorkers,
+                0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(128), runnable -> {
+                    Thread thread = new Thread(runnable, "peer-upload-worker");
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     /** S01-S02: Bắt đầu mở cổng lắng nghe kết nối từ các Peer khác. */
@@ -111,16 +116,17 @@ public final class PeerUploadServer implements AutoCloseable {
             }
             return;
         }
-        clientWorkers.submit(() -> {
-            try {
-                handlePeerConnection(socketFactory.wrapServer(socket));
-            } catch (IOException e) {
+        try {
+            clientWorkers.submit(() -> {
                 try {
-                    socket.close();
-                } catch (IOException ignored) {
+                    handlePeerConnection(socketFactory.wrapServer(socket));
+                } catch (IOException e) {
+                    try { socket.close(); } catch (IOException ignored) { }
                 }
-            }
-        });
+            });
+        } catch (RejectedExecutionException rejected) {
+            try { socket.close(); } catch (IOException ignored) { }
+        }
     }
 
     private void acceptLoop() {
@@ -129,7 +135,11 @@ public final class PeerUploadServer implements AutoCloseable {
                 Socket peerSocket = serverSocket.accept();
                 peerSocket.setTcpNoDelay(true);
                 peerSocket.setSoTimeout(socketFactory.readTimeoutMillis());
-                clientWorkers.submit(() -> handlePeerConnection(peerSocket));
+                try {
+                    clientWorkers.submit(() -> handlePeerConnection(peerSocket));
+                } catch (RejectedExecutionException rejected) {
+                    peerSocket.close();
+                }
             } catch (SocketException e) {
                 if (running.get()) {
                     LOG.log(Level.WARNING, "Upload server socket error", e);

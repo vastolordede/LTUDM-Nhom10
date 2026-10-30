@@ -52,6 +52,7 @@ public final class FileCatalogService {
         UUID peerId = sessionPeerResolver.resolvePeerId(sessionId);
 
         FileMetadata metadata = request.metadata();
+        if (metadata == null) throw new FileCatalogException("Missing file metadata");
 
         Optional<Long> existingFileId = fileRepository.findFileIdByHash(metadata.fileHash());
 
@@ -60,11 +61,27 @@ public final class FileCatalogService {
 
         if (existingFileId.isPresent()) {
             fileId = existingFileId.get();
+            if (!fileRepository.hasCompatibleGeometry(fileId, metadata)) {
+                throw new FileCatalogException("File hash already exists with incompatible chunk geometry");
+            }
             // D69: file còn PUBLISHING thì cho client gửi lại các trang còn thiếu
             isNewFile = "PUBLISHING".equals(fileRepository.findPublishStatus(fileId).orElse("READY"));
         } else {
-            fileId = fileRepository.insert(metadata);
-            isNewFile = true;
+            try {
+                fileId = fileRepository.insert(metadata);
+                isNewFile = true;
+            } catch (SQLException error) {
+                // Two peers can publish the same hash concurrently. Recover only a unique
+                // constraint collision; let every other database error propagate untouched.
+                if (!"23505".equals(error.getSQLState())) throw error;
+                Optional<Long> concurrent = fileRepository.findFileIdByHash(metadata.fileHash());
+                if (concurrent.isEmpty()) throw error;
+                fileId = concurrent.get();
+                if (!fileRepository.hasCompatibleGeometry(fileId, metadata)) {
+                    throw new FileCatalogException("Incompatible chunk layout for existing hash");
+                }
+                isNewFile = "PUBLISHING".equals(fileRepository.findPublishStatus(fileId).orElse("READY"));
+            }
         }
         // D71: lưu thêm tên file này làm alias
         fileRepository.addAlias(fileId, metadata.fileName(), peerId);
@@ -93,7 +110,7 @@ public final class FileCatalogService {
             throw new FileCatalogException("Peer does not own an active share for this file");
         }
         for (PieceInfo piece : request.pieces()) {
-            if (piece.pieceIndex() < 0 || piece.pieceLength() <= 0 || piece.pieceHash() == null
+            if (piece == null || piece.pieceIndex() < 0 || piece.pieceLength() <= 0 || piece.pieceHash() == null
                     || !piece.pieceHash().matches("^[0-9A-Fa-f]{64}$")) {
                 throw new FileCatalogException("Invalid piece metadata in page");
             }

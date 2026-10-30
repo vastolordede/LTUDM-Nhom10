@@ -16,6 +16,9 @@ public final class FolderPathResolver {
             throw new IOException("Duong dan tuong doi khong duoc tuyet doi hoac chua \\ va :");
         }
         Path root = destRoot.toAbsolutePath().normalize();
+        if (Files.isSymbolicLink(root)) {
+            throw new IOException("Thu muc dich la symlink.");
+        }
         for (String part : relativePath.split("/", -1)) {
             String err = SafeFileName.validate(part);
             if (err != null) throw new IOException("Thanh phan \"" + part + "\": " + err);

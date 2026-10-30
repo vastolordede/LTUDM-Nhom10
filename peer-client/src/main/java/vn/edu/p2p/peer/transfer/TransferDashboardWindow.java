@@ -108,8 +108,8 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 stage.hide();
             });
             stage.show();
-        } catch (IOException | RuntimeException e) {
             configureConnectivity(sessionId);
+        } catch (IOException | RuntimeException e) {
             close();
             throw e;
         }
@@ -144,8 +144,8 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 relayAgent.start();
             }
             String baseTitle = stage.getTitle();
-            String relayNote = relayWanted && p2pTls ? " | Relay tat (P2P TLS dang bat)"
-                    : relayAllowed ? " | Relay san sang" : "";
+            String relayNote = relayAllowed
+                    ? (p2pTls ? " | Relay dang ky (P2P TLS)" : " | Relay dang ky (TCP)") : "";
             Thread probe = new Thread(() -> {
                 String status;
                 try {
@@ -186,6 +186,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (myFilesController != null) myFilesController.shutdown();
         if (downloadController != null) downloadController.shutdown();
         if (historyController != null) historyController.shutdown();
+        if (folderController != null) folderController.shutdown();
         if (relayAgent != null) relayAgent.close();
         uploadServer.close();
     }

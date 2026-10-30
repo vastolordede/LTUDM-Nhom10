@@ -76,6 +76,12 @@ class FileCatalogServiceIntegrationTest {
     }
 
     @Test
+    void searchingPercentAndUnderscoreDoesNotTreatThemAsWildcards() throws Exception {
+        service.search(new SearchRequest(SESSION_ID.toString(), "50%_done"));
+        assertEquals("%50\\%\\_done%", catalog.lastLikePattern);
+    }
+
+    @Test
     void sharingIdenticalContentTwice_reusesTheSameFileId() throws Exception {
         FileMetadata metadata = sampleMetadata("original.bin");
         FileMetadata sameContentDifferentName = new FileMetadata(
@@ -133,6 +139,7 @@ class FileCatalogServiceIntegrationTest {
     private static final class InMemoryCatalog
             implements FileRepository, PeerFileRepository, ShareEventRepository {
 
+        private String lastLikePattern;
         private final Map<String, Long> fileIdByHash = new HashMap<>();
         private final Map<Long, FileMetadata> filesById = new HashMap<>();
         private final Map<String, Boolean> sharingByPeerFile = new HashMap<>();
@@ -154,6 +161,7 @@ class FileCatalogServiceIntegrationTest {
 
         @Override
         public List<SearchResultItem> searchByName(String likePattern) {
+            lastLikePattern = likePattern;
             String needle = likePattern.replace("%", "").toLowerCase();
             List<SearchResultItem> results = new ArrayList<>();
 

@@ -77,7 +77,8 @@ public final class ShareFileClientService {
                         }
                         FilePiecesPageResponse ack = ProtocolCodec.fromPayload(
                                 pageResponse.payload(), FilePiecesPageResponse.class);
-                        if (ack == null || ack.acceptedCount() != batch.size()) {
+                        if (ack == null || ack.fileId() != published.fileId()
+                                || ack.acceptedCount() != batch.size()) {
                             throw new IOException("Incorrect metadata page acknowledgement");
                         }
                     }

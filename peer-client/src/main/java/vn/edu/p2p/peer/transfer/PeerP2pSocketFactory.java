@@ -1,8 +1,10 @@
 package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.security.TlsContextFactory;
+import vn.edu.p2p.common.config.EnvConfig;
 
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLServerSocket;
 import javax.net.ssl.SSLSocket;
 import java.io.IOException;
@@ -82,6 +84,7 @@ public final class PeerP2pSocketFactory {
         sslSocket.setEnabledProtocols(supportedProtocols(sslSocket.getSupportedProtocols()));
         sslSocket.setSoTimeout(config.readTimeoutMillis());
         sslSocket.setTcpNoDelay(true);
+        configureHostnameVerification(sslSocket);
         sslSocket.startHandshake();
         return sslSocket;
     }
@@ -95,6 +98,7 @@ public final class PeerP2pSocketFactory {
                 .createSocket(plain, host, port, true);
         ssl.setEnabledProtocols(supportedProtocols(ssl.getSupportedProtocols()));
         ssl.setSoTimeout(config.readTimeoutMillis());
+        configureHostnameVerification(ssl);
         ssl.startHandshake();
         return ssl;
     }
@@ -114,6 +118,16 @@ public final class PeerP2pSocketFactory {
 
     public int readTimeoutMillis() {
         return config.readTimeoutMillis();
+    }
+
+    private static void configureHostnameVerification(SSLSocket socket) {
+        // Existing LAN/dev certificates may not include a SAN for each peer address.
+        // Require this option for a public Internet deployment with peer-specific certs.
+        if (EnvConfig.flag("P2P_TLS_VERIFY_HOSTNAME", false)) {
+            SSLParameters params = socket.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            socket.setSSLParameters(params);
+        }
     }
 
     private static String[] supportedProtocols(String[] supported) {
