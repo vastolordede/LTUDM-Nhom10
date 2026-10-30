@@ -76,7 +76,7 @@ public final class JdbcFileRepository implements FileRepository {
                     statement.setString(3, metadata.fileHash());
                     statement.setInt(4, metadata.pieceSize());
                     statement.setInt(5, metadata.pieceCount());
-                    statement.setString(6, metadata.pieces().size() >= metadata.pieceCount() ? "READY" : "PUBLISHING");
+                    statement.setString(6, metadata.pieces().size() == metadata.pieceCount() ? "READY" : "PUBLISHING");
                     statement.executeUpdate();
 
                     try (ResultSet keys = statement.getGeneratedKeys()) {
@@ -101,7 +101,7 @@ public final class JdbcFileRepository implements FileRepository {
                 try (PreparedStatement ready = connection.prepareStatement("""
                         UPDATE files SET publish_status = 'READY'
                         WHERE file_id = ? AND publish_status = 'PUBLISHING'
-                        AND (SELECT COUNT(*) FROM file_pieces WHERE file_id = ?) >= piece_count
+                        AND (SELECT COUNT(*) FROM file_pieces WHERE file_id = ?) = piece_count
                         """)) {
                     ready.setLong(1, fileId);
                     ready.setLong(2, fileId);
