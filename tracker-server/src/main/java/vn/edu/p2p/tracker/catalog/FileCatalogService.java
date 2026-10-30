@@ -110,7 +110,7 @@ public final class FileCatalogService {
             throw new FileCatalogException("Peer does not own an active share for this file");
         }
         for (PieceInfo piece : request.pieces()) {
-            if (piece.pieceIndex() < 0 || piece.pieceLength() <= 0 || piece.pieceHash() == null
+            if (piece == null || piece.pieceIndex() < 0 || piece.pieceLength() <= 0 || piece.pieceHash() == null
                     || !piece.pieceHash().matches("^[0-9A-Fa-f]{64}$")) {
                 throw new FileCatalogException("Invalid piece metadata in page");
             }
