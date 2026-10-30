@@ -144,8 +144,8 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 relayAgent.start();
             }
             String baseTitle = stage.getTitle();
-            String relayNote = relayWanted && p2pTls ? " | Relay tat (P2P TLS dang bat)"
-                    : relayAllowed ? " | Relay san sang" : "";
+            String relayNote = relayAllowed
+                    ? (p2pTls ? " | Relay dang ky (P2P TLS)" : " | Relay dang ky (TCP)") : "";
             Thread probe = new Thread(() -> {
                 String status;
                 try {
