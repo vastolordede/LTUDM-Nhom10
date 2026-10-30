@@ -66,8 +66,21 @@ public final class FileCatalogService {
             // D69: file còn PUBLISHING thì cho client gửi lại các trang còn thiếu
             isNewFile = "PUBLISHING".equals(fileRepository.findPublishStatus(fileId).orElse("READY"));
         } else {
-            fileId = fileRepository.insert(metadata);
-            isNewFile = true;
+            try {
+                fileId = fileRepository.insert(metadata);
+                isNewFile = true;
+            } catch (SQLException error) {
+                // Two peers can publish the same hash concurrently. Recover only a unique
+                // constraint collision; let every other database error propagate untouched.
+                if (!"23505".equals(error.getSQLState())) throw error;
+                Optional<Long> concurrent = fileRepository.findFileIdByHash(metadata.fileHash());
+                if (concurrent.isEmpty()) throw error;
+                fileId = concurrent.get();
+                if (!fileRepository.hasCompatibleGeometry(fileId, metadata)) {
+                    throw new FileCatalogException("Incompatible chunk layout for existing hash");
+                }
+                isNewFile = "PUBLISHING".equals(fileRepository.findPublishStatus(fileId).orElse("READY"));
+            }
         }
         // D71: lưu thêm tên file này làm alias
         fileRepository.addAlias(fileId, metadata.fileName(), peerId);
