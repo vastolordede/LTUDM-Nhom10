@@ -196,7 +196,7 @@ public final class JdbcFileRepository implements FileRepository {
                 FROM files f
                 JOIN LATERAL (
                     SELECT a.file_name FROM file_aliases a
-                    WHERE a.file_id = f.file_id AND a.file_name ILIKE ? ESCAPE '\'
+                    WHERE a.file_id = f.file_id AND a.file_name ILIKE ? ESCAPE '\\'
                     ORDER BY a.created_at LIMIT 1
                 ) m ON TRUE
                 WHERE f.publish_status = 'READY'
