@@ -52,6 +52,7 @@ public final class FileCatalogService {
         UUID peerId = sessionPeerResolver.resolvePeerId(sessionId);
 
         FileMetadata metadata = request.metadata();
+        if (metadata == null) throw new FileCatalogException("Missing file metadata");
 
         Optional<Long> existingFileId = fileRepository.findFileIdByHash(metadata.fileHash());
 
