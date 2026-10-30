@@ -20,6 +20,7 @@ import java.io.OutputStream;
  */
 public final class ProtocolCodec {
     public static final int MAX_JSON_BYTES = 1_048_576; // 1 MiB for control messages
+    public static final int MAX_BINARY_PIECE_BYTES = 32 * 1024 * 1024; // adaptive chunk <=16 MiB
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -103,7 +104,8 @@ public final class ProtocolCodec {
             int offset,
             int length
     ) throws IOException {
-        if (length < 0 || offset < 0 || offset + length > binaryPayload.length) {
+        if (binaryPayload == null || length < 0 || length > MAX_BINARY_PIECE_BYTES
+                || offset < 0 || offset > binaryPayload.length - length) {
             throw new IllegalArgumentException("Invalid binary payload bounds: length=" + length);
         }
 
@@ -123,8 +125,8 @@ public final class ProtocolCodec {
 
     public static byte[] readBinaryPayload(InputStream input, int expectedLength)
             throws IOException {
-        if (expectedLength < 0) {
-            throw new ProtocolException("Negative binary payload length: " + expectedLength);
+        if (expectedLength < 0 || expectedLength > MAX_BINARY_PIECE_BYTES) {
+            throw new ProtocolException("Invalid binary payload length: " + expectedLength);
         }
         if (expectedLength == 0) {
             return new byte[0];
