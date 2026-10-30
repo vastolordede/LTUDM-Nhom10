@@ -43,6 +43,26 @@ class DownloadSafetyTest {
     }
 
     @Test
+    void preflightRejectsNegativeFileSize(@TempDir Path dir) {
+        assertThrows(DownloadPreflight.PreflightException.class,
+                () -> DownloadPreflight.check(dir.resolve("file.bin"), -1));
+    }
+
+    @Test
+    void preflightRejectsSymlinkTarget(@TempDir Path dir) throws Exception {
+        Path actual = dir.resolve("actual.txt");
+        Files.writeString(actual, "untouched");
+        Path alias = dir.resolve("alias.txt");
+        try {
+            Files.createSymbolicLink(alias, actual);
+        } catch (UnsupportedOperationException | java.io.IOException | SecurityException unavailable) {
+            return; // OS/filesystem does not allow symlinks
+        }
+        assertThrows(DownloadPreflight.PreflightException.class,
+                () -> DownloadPreflight.check(alias, 5));
+    }
+
+    @Test
     void preflightRejectsDirectoryTarget(@TempDir Path dir) {
         assertThrows(DownloadPreflight.PreflightException.class,
                 () -> DownloadPreflight.check(dir, 10));
