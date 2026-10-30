@@ -30,6 +30,24 @@ public record FileMetadata(
         if (pieceSize <= 0) {
             throw new IllegalArgumentException("pieceSize must be > 0");
         }
+        long expectedCount = fileSize / pieceSize + (fileSize % pieceSize == 0 ? 0 : 1);
+        if (expectedCount > Integer.MAX_VALUE || pieceCount != (int) expectedCount) {
+            throw new IllegalArgumentException("pieceCount does not match fileSize/pieceSize");
+        }
         pieces = pieces == null ? List.of() : List.copyOf(pieces);
+        // The large-file publish protocol permits an empty piece list (header only).
+        // A nonempty list must describe the entire file, not an arbitrary partial set.
+        if (!pieces.isEmpty() && pieces.size() != pieceCount) {
+            throw new IllegalArgumentException("Nonempty metadata must contain all pieces");
+        }
+        for (int i = 0; i < pieces.size(); i++) {
+            PieceInfo part = pieces.get(i);
+            long start = (long) i * pieceSize;
+            int expectedLength = (int) Math.min(pieceSize, fileSize - start);
+            if (part == null || part.pieceIndex() != i || part.pieceLength() != expectedLength
+                    || part.pieceHash() == null || !part.pieceHash().matches("[0-9A-Fa-f]{64}")) {
+                throw new IllegalArgumentException("Invalid piece metadata at index " + i);
+            }
+        }
     }
 }
