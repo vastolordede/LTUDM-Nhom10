@@ -292,11 +292,14 @@ public final class RendezvousServer implements AutoCloseable {
         for (Map.Entry<UUID, Control> e : controls.entrySet()) {
             Control c = e.getValue();
             try {
+                if (!authenticate(c.sessionId()).equals(e.getKey())) {
+                    throw new IOException("Relay session has expired");
+                }
                 synchronized (c.out()) {
                     c.out().writeUTF("PING");
                     c.out().flush();
                 }
-            } catch (IOException ex) {
+            } catch (Exception ex) {
                 controls.remove(e.getKey(), c);
                 closeQuietly(c.socket());
             }
