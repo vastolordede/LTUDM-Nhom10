@@ -108,8 +108,8 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 stage.hide();
             });
             stage.show();
-        } catch (IOException | RuntimeException e) {
             configureConnectivity(sessionId);
+        } catch (IOException | RuntimeException e) {
             close();
             throw e;
         }
