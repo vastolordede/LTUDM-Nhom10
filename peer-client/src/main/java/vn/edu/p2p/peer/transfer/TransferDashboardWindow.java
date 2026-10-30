@@ -186,6 +186,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (myFilesController != null) myFilesController.shutdown();
         if (downloadController != null) downloadController.shutdown();
         if (historyController != null) historyController.shutdown();
+        if (folderController != null) folderController.shutdown();
         if (relayAgent != null) relayAgent.close();
         uploadServer.close();
     }
