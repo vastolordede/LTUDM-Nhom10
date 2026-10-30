@@ -106,6 +106,16 @@ Chi tiết workflow và testcase: `docs/POST_PATCH_TESTPLAN.md`.
 
 Tham số: số peer, username, password, cổng bắt đầu, thời gian chạy (giây).
 
+Để **thực hiện lượt tải thực** thay vì chỉ giả lập Online/Heartbeat, thêm đối số `download`:
+
+```bat
+.\gradlew.bat :peer-client:emulator -PemuArgs="5 alice demo123 8000 120 download"
+```
+
+Peer phải sử dụng các port khác nhau và cùng kết nối được tới Tracker. Emulator sẽ ghi
+`downloads` và `errors`, kiểm tra SHA-256; bài này không thay thế demo GUI ba máy.
+
+
 ## Cập nhật database
 
 Chạy theo thứ tự trên DB đã có `schema.sql`:
