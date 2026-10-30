@@ -47,6 +47,19 @@ class FolderSafetyTest {
     }
 
     @Test
+    void resolverRejectsSymlinkRoot(@TempDir Path dir) throws Exception {
+        Path real = dir.resolve("real");
+        Files.createDirectory(real);
+        Path alias = dir.resolve("alias");
+        try {
+            Files.createSymbolicLink(alias, real);
+        } catch (UnsupportedOperationException | IOException | SecurityException unavailable) {
+            return;
+        }
+        assertThrows(IOException.class, () -> FolderPathResolver.resolve(alias, "data.bin"));
+    }
+
+    @Test
     void uniquifyAddsCounter(@TempDir Path dir) throws Exception {
         Path f = dir.resolve("a.txt");
         Files.writeString(f, "x");
