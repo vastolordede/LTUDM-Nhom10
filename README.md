@@ -19,7 +19,7 @@ FileShare-P2P/
 ├── common/          # DTO, protocol, TLS helper
 ├── tracker-server/  # Tracker TCP server
 ├── peer-client/     # JavaFX GUI, upload server, downloader
-├── database/        # schema.sql, migration_v2.sql
+├── database/        # schema.sql, migration_v2..v5.sql
 └── docs/
 ```
 
@@ -39,9 +39,12 @@ FileShare-P2P/
 psql -U postgres -c "CREATE DATABASE fileshare_p2p"
 psql -U postgres -d fileshare_p2p -f database/schema.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v2.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v3.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v4.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v5.sql
 ```
 
-Chạy `schema.sql` và `migration_v2.sql` **một lần trên DB mới**.
+Chạy `schema.sql` rồi `migration_v2.sql` đến `migration_v5.sql` **theo thứ tự** trên DB mới. Trên DB đã có dữ liệu, chỉ chạy migration **chưa được áp dụng**; trước tiên sao lưu dữ liệu.
 
 ## Cấu hình
 
@@ -73,9 +76,9 @@ Login → Peer Center, dùng các tab Share / My Files / Search / Download / His
 
 ## Giới hạn đã biết
 
-- Chưa hỗ trợ chia sẻ/tải thư mục (D64-D65).
-- Không có NAT traversal: truyền file giữa các Peer demo trong cùng mạng LAN; chỉ Tracker cần triển khai trên Internet.
-- Chưa kiểm thử thực tế file lớn hơn 2 GB.
+- Có chia sẻ/tải thư mục, selective download và cơ chế NAT probe/relay, nhưng các luồng mở rộng này **chưa có kết quả nghiệm thu trên Internet thực tế**.
+- Kết nối trực tiếp qua NAT tùy thuộc cấu hình router/firewall; relay chỉ hoạt động khi cả Tracker và Peer đều bật `RELAY_ENABLED`.
+- Chưa kiểm thử thực tế file lớn hơn 2 GB trong bản audit; không đánh dấu PASS khi chỉ nhìn thấy code.
 - Chưa xác nhận đầy đủ LAN/JavaFX/PostgreSQL trên mọi môi trường; kiểm tra trên máy Windows trước khi merge.
 
 Chi tiết workflow và testcase: `docs/POST_PATCH_TESTPLAN.md`.
@@ -110,4 +113,14 @@ Chạy theo thứ tự trên DB đã có `schema.sql`:
 ```bat
 psql -U postgres -d fileshare_p2p -f database/migration_v2.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v3.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v4.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v5.sql
 ```
+
+## Lưu ý bảo mật và kiểm thử trước deploy
+
+- Khi bật TLS Tracker, certificate phải có SAN khớp `TRACKER_HOST`; hostname được kiểm tra trong handshake.
+- `P2P_TLS_VERIFY_HOSTNAME=true` chỉ bật sau khi cấp certificate Peer với SAN khớp địa chỉ kết nối.
+- Không deploy ra Internet với `TRACKER_TLS_ENABLED=false` hoặc `P2P_TLS_ENABLED=false` khi truyền dữ liệu nhạy cảm.
+- Không mở PostgreSQL cổng 5432 ra Internet.
+- Xem `docs/PREDEPLOY_FIXED_TESTS.md` trước khi tạo PR.
