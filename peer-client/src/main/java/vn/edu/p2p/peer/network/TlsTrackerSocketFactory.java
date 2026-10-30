@@ -3,6 +3,7 @@ package vn.edu.p2p.peer.network;
 import vn.edu.p2p.common.security.TlsContextFactory;
 
 import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLParameters;
 import javax.net.ssl.SSLSocket;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -55,6 +56,9 @@ final class TlsTrackerSocketFactory {
         );
         socket.setSoTimeout(readTimeoutMillis);
         socket.setTcpNoDelay(true);
+        SSLParameters params = socket.getSSLParameters();
+        params.setEndpointIdentificationAlgorithm("HTTPS");
+        socket.setSSLParameters(params);
         socket.startHandshake();
         return socket;
     }
