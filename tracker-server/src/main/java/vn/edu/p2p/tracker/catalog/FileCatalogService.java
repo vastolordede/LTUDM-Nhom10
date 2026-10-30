@@ -60,6 +60,9 @@ public final class FileCatalogService {
 
         if (existingFileId.isPresent()) {
             fileId = existingFileId.get();
+            if (!fileRepository.hasCompatibleGeometry(fileId, metadata)) {
+                throw new FileCatalogException("File hash already exists with incompatible chunk geometry");
+            }
             // D69: file còn PUBLISHING thì cho client gửi lại các trang còn thiếu
             isNewFile = "PUBLISHING".equals(fileRepository.findPublishStatus(fileId).orElse("READY"));
         } else {

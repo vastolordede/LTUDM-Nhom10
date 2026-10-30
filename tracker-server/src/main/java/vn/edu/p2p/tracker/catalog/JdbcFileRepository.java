@@ -223,6 +223,21 @@ public final class JdbcFileRepository implements FileRepository {
     }
 
     @Override
+    public boolean hasCompatibleGeometry(long fileId, FileMetadata metadata) throws SQLException {
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement sql = connection.prepareStatement("""
+                     SELECT file_size, piece_size, piece_count FROM files WHERE file_id = ?
+                     """)) {
+            sql.setLong(1, fileId);
+            try (ResultSet rs = sql.executeQuery()) {
+                return rs.next() && rs.getLong("file_size") == metadata.fileSize()
+                        && rs.getInt("piece_size") == metadata.pieceSize()
+                        && rs.getInt("piece_count") == metadata.pieceCount();
+            }
+        }
+    }
+
+    @Override
     public Optional<String> findPublishStatus(long fileId) throws SQLException {
         try (Connection connection = connectionFactory.open();
             PreparedStatement statement = connection.prepareStatement(
