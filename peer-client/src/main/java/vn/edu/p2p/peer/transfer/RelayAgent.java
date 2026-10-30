@@ -82,10 +82,15 @@ public final class RelayAgent implements AutoCloseable {
     }
 
     private void accept(String token) {
+        Socket data = null;
         try {
-            Socket data = client.accept(sessionId, token);
-            uploadServer.serveRelayedSocket(data);
-        } catch (IOException e) {
+            data = client.accept(sessionId, token);
+            uploadServer.serveRelayedSocket(data); // upload server owns socket after handoff
+            data = null;
+        } catch (IOException | RuntimeException e) {
+            if (data != null) {
+                try { data.close(); } catch (IOException ignored) { }
+            }
             LOG.log(Level.FINE, "Relay accept failed: " + e.getMessage(), e);
         }
     }
