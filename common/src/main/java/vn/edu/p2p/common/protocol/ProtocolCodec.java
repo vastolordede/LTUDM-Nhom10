@@ -10,7 +10,6 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 
 /**
  * TCP framing for control messages:
@@ -92,8 +91,8 @@ public final class ProtocolCodec {
         try {
             return MAPPER.readValue(json, MessageEnvelope.class);
         } catch (JsonProcessingException e) {
-            String raw = new String(json, StandardCharsets.UTF_8);
-            throw new ProtocolException("Invalid JSON message: " + raw, e);
+            // Never echo wire JSON: LOGIN_REQUEST may include passwords or session IDs.
+            throw new ProtocolException("Malformed JSON control message", e);
         }
     }
 
@@ -121,7 +120,7 @@ public final class ProtocolCodec {
         }
         dataOutput.flush();
     }
-    
+
     public static byte[] readBinaryPayload(InputStream input, int expectedLength)
             throws IOException {
         if (expectedLength < 0) {
