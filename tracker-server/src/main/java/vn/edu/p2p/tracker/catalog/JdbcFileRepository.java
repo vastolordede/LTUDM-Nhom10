@@ -121,27 +121,67 @@ public final class JdbcFileRepository implements FileRepository {
 
     @Override
     public void upsertPiecePage(long fileId, List<PieceInfo> pieces) throws SQLException {
-        String sql = """
+        // Lock the parent row to serialize concurrent page updates and the READY transition.
+        // A duplicate page with identical bytes is idempotent; a conflicting replay is rejected.
+        String upsertSql = """
                 INSERT INTO file_pieces (file_id, piece_index, piece_length, piece_hash)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT (file_id, piece_index) DO NOTHING
+                ON CONFLICT (file_id, piece_index) DO UPDATE
+                    SET piece_hash = EXCLUDED.piece_hash
+                WHERE file_pieces.piece_length = EXCLUDED.piece_length
+                  AND LOWER(file_pieces.piece_hash) = LOWER(EXCLUDED.piece_hash)
                 """;
-        try (Connection connection = connectionFactory.open();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = connectionFactory.open()) {
             connection.setAutoCommit(false);
             try {
-                for (PieceInfo piece : pieces) {
-                    statement.setLong(1, fileId);
-                    statement.setInt(2, piece.pieceIndex());
-                    statement.setInt(3, piece.pieceLength());
-                    statement.setString(4, piece.pieceHash());
-                    statement.addBatch();
+                long fileSize;
+                int pieceSize;
+                int pieceCount;
+                try (PreparedStatement lock = connection.prepareStatement("""
+                        SELECT file_size, piece_size, piece_count
+                        FROM files WHERE file_id = ? FOR UPDATE
+                        """)) {
+                    lock.setLong(1, fileId);
+                    try (ResultSet rs = lock.executeQuery()) {
+                        if (!rs.next()) throw new SQLException("Unknown fileId: " + fileId);
+                        fileSize = rs.getLong("file_size");
+                        pieceSize = rs.getInt("piece_size");
+                        pieceCount = rs.getInt("piece_count");
+                    }
                 }
-                statement.executeBatch();
+                try {
+                    PiecePageGuard.check(fileSize, pieceSize, pieceCount, pieces);
+                } catch (IllegalArgumentException ex) {
+                    throw new SQLException("Rejected metadata page: " + ex.getMessage(), ex);
+                }
+                try (PreparedStatement upsert = connection.prepareStatement(upsertSql)) {
+                    for (PieceInfo piece : pieces) {
+                        upsert.setLong(1, fileId);
+                        upsert.setInt(2, piece.pieceIndex());
+                        upsert.setInt(3, piece.pieceLength());
+                        upsert.setString(4, piece.pieceHash());
+                        if (upsert.executeUpdate() != 1) {
+                            throw new SQLException("Conflicting metadata for piece " + piece.pieceIndex());
+                        }
+                    }
+                }
+                // All indexes were verified to lie in [0, pieceCount); a unique PK and an
+                // exact count therefore prove that the complete contiguous index set exists.
+                try (PreparedStatement ready = connection.prepareStatement("""
+                        UPDATE files SET publish_status = 'READY'
+                        WHERE file_id = ? AND publish_status = 'PUBLISHING'
+                          AND (SELECT COUNT(*) FROM file_pieces WHERE file_id = ?) = piece_count
+                        """)) {
+                    ready.setLong(1, fileId);
+                    ready.setLong(2, fileId);
+                    ready.executeUpdate();
+                }
                 connection.commit();
-            } catch (SQLException e) {
+            } catch (SQLException | RuntimeException e) {
                 connection.rollback();
                 throw e;
+            } finally {
+                connection.setAutoCommit(true);
             }
         }
     }
