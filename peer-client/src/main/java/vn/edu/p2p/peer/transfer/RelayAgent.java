@@ -6,8 +6,10 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -20,11 +22,12 @@ public final class RelayAgent implements AutoCloseable {
     private final String sessionId;
     private final PeerUploadServer uploadServer;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private final ExecutorService acceptors = Executors.newCachedThreadPool(runnable -> {
-        Thread t = new Thread(runnable, "peer-relay-accept");
-        t.setDaemon(true);
-        return t;
-    });
+    private final ExecutorService acceptors = new ThreadPoolExecutor(
+            0, 16, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
+                Thread t = new Thread(runnable, "peer-relay-accept");
+                t.setDaemon(true);
+                return t;
+            });
 
     private volatile Socket control;
     private Thread thread;
