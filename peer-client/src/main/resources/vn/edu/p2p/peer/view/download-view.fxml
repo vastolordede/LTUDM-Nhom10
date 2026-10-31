@@ -20,10 +20,8 @@
     <Label text="Tải File Đa Nguồn (Multi-Source P2P Downloader)"
            style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
 
-    <!-- Khu vực nhập File ID, Tên file và chọn thuật toán lập lịch -->
+    <!-- Khu vực chọn tên lưu và thuật toán lập lịch; File ID được truyền tự động từ kết quả tìm kiếm -->
     <HBox spacing="10.0" alignment="CENTER_LEFT">
-        <Label text="File ID:"/>
-        <TextField fx:id="fileIdField" promptText="Nhập file_id (VD: 1)" prefWidth="90.0"/>
         <Label text="Tên file lưu:"/>
         <TextField fx:id="fileNameField" promptText="VD: video.mp4" HBox.hgrow="ALWAYS"/>
         <ComboBox fx:id="strategyComboBox" prefWidth="150.0"/>

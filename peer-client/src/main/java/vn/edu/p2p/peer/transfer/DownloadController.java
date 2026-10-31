@@ -37,8 +37,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class DownloadController {
 
-    @FXML
-    private TextField fileIdField;
+    /** R63: internal file ID set by prefillFromSearchResult; never exposed as a text field. */
+    private long selectedFileId = 0;
 
     @FXML
     private TextField fileNameField;
@@ -146,7 +146,7 @@ public final class DownloadController {
         if (item == null) {
             return;
         }
-        fileIdField.setText(Long.toString(item.fileId()));
+        selectedFileId = item.fileId();
         fileNameField.setText(item.fileName());
         statusLabel.setText("Đã chọn file \"" + item.fileName() + "\" (ID=" + item.fileId() + "). Nhấn Bắt đầu tải.");
     }
@@ -173,16 +173,12 @@ public final class DownloadController {
             return;
         }
 
-        final long fileId;
-        try {
-            fileId = Long.parseLong(fileIdField.getText().trim());
-            if (fileId <= 0) {
-                throw new NumberFormatException();
-            }
-        } catch (NumberFormatException e) {
-            statusLabel.setText("File ID phải là số nguyên dương hợp lệ.");
+        // R63: file ID comes from search selection, not a manual text field
+        if (selectedFileId <= 0) {
+            statusLabel.setText("Chọn file từ tab Tìm kiếm trước khi bắt đầu tải.");
             return;
         }
+        final long fileId = selectedFileId;
 
         String targetFileName = fileNameField.getText() == null || fileNameField.getText().isBlank()
                 ? ("downloaded-file-" + fileId + ".bin")
