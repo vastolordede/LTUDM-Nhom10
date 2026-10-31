@@ -43,9 +43,6 @@ public final class LoginController {
     private Button loginButton;
 
     @FXML
-    private Button logoutButton;
-
-    @FXML
     private Button openDashboardButton;
 
     @FXML
@@ -69,7 +66,6 @@ public final class LoginController {
     @FXML
     private void initialize() {
         listeningPortField.setText("7001");
-        logoutButton.setDisable(true);
         openDashboardButton.setDisable(true);
         connectionStatusLabel.setText("Tracker: chưa đăng nhập");
 
@@ -146,8 +142,7 @@ public final class LoginController {
                 }));
     }
 
-    @FXML
-    private void onLogout() {
+    void onLogout() {
         if (authClientService == null || authClientService.currentSession() == null) {
             return;
         }
@@ -191,7 +186,6 @@ public final class LoginController {
         passwordField.setDisable(true);
         listeningPortField.setDisable(true);
         loginButton.setDisable(true);
-        logoutButton.setDisable(false);
         openDashboardButton.setDisable(false);
         statusLabel.setText(
                 "Đăng nhập thành công. Peer=" + shortId(session.peerId())
@@ -221,7 +215,7 @@ public final class LoginController {
                 int port = Integer.parseInt(listeningPortField.getText().trim());
                 transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
             }
-            transferDashboard.show(trackerConnection, session.sessionId());
+            transferDashboard.show(trackerConnection, session.sessionId(), this::onLogout);
         } catch (Exception e) {
             closeTransferDashboard();
             statusLabel.setText("Peer Center cannot start (check upload port): " + e.getMessage());
@@ -238,7 +232,6 @@ public final class LoginController {
         passwordField.setDisable(false);
         listeningPortField.setDisable(false);
         loginButton.setDisable(false);
-        logoutButton.setDisable(true);
         openDashboardButton.setDisable(true);
         statusLabel.setText(message);
         connectionStatusLabel.setText("Tracker: LOGGED OUT");
@@ -259,13 +252,10 @@ public final class LoginController {
     private void setBusy(boolean busy) {
         if (busy) {
             loginButton.setDisable(true);
-            logoutButton.setDisable(true);
         } else if (authClientService != null && authClientService.currentSession() != null) {
             loginButton.setDisable(true);
-            logoutButton.setDisable(false);
         } else {
             loginButton.setDisable(false);
-            logoutButton.setDisable(true);
         }
     }
 

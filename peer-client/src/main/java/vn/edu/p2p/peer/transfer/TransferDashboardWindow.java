@@ -1,10 +1,17 @@
 package vn.edu.p2p.peer.transfer;
 
 import javafx.fxml.FXMLLoader;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
+import javafx.scene.control.Button;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 import javafx.application.Platform;
 import vn.edu.p2p.peer.network.TrackerConnection;
@@ -35,6 +42,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private final boolean p2pTls;
     private RelayAgent relayAgent;
     private FolderController folderController;
+    private Runnable logoutCallback;
 
     public TransferDashboardWindow(int listeningPort, PeerP2pSocketConfig p2pConfig) {
         this.p2pTls = p2pConfig.tlsEnabled();
@@ -43,7 +51,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
     }
 
-    public void show(TrackerConnection connection, String sessionId) throws IOException {
+    public void show(TrackerConnection connection, String sessionId, Runnable onLogout) throws IOException {
         if (stage != null && !closed) {
             stage.show();
             stage.toFront();
@@ -52,6 +60,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("Dashboard was closed; create a new instance");
         }
+        this.logoutCallback = onLogout;
         uploadServer.start();
         try {
             FXMLLoader shareLoader = loader("share-view.fxml");
@@ -99,9 +108,20 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 tabs.getSelectionModel().select(downloadTab);
             });
 
+            // R62: Logout button anchored in the Peer Center toolbar
+            Button logoutBtn = new Button("Đăng xuất");
+            logoutBtn.setOnAction(e -> { if (logoutCallback != null) logoutCallback.run(); });
+            Region spacer = new Region();
+            HBox.setHgrow(spacer, Priority.ALWAYS);
+            HBox toolbar = new HBox(spacer, logoutBtn);
+            toolbar.setAlignment(Pos.CENTER_RIGHT);
+            toolbar.setPadding(new Insets(6, 12, 6, 12));
+            VBox.setVgrow(tabs, Priority.ALWAYS);
+            VBox sceneRoot = new VBox(toolbar, tabs);
+
             stage = new Stage();
             stage.setTitle("FileShare-P2P - Peer Center (Port: " + uploadServer.listeningPort() + ")");
-            stage.setScene(new Scene(tabs, 880, 600));
+            stage.setScene(new Scene(sceneRoot, 880, 620));
             // Hide keeps the peer available for uploads; logout closes all background work.
             stage.setOnCloseRequest(event -> {
                 event.consume();
