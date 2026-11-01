@@ -1,5 +1,6 @@
 package vn.edu.p2p.tracker.catalog;
 
+import vn.edu.p2p.common.dto.DiscoverySort;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.PieceInfo;
 import vn.edu.p2p.common.dto.SearchResultItem;
@@ -25,6 +26,21 @@ public interface FileRepository {
     /** T16-T17: search the catalog by (partial) file name, with each row's current source count. */
     List<SearchResultItem> searchByName(String likePattern) throws SQLException;
 
+    /** Page-aware search; test fakes may remain on their first page. */
+    default List<SearchResultItem> searchByName(String likePattern, int page, int pageSize)
+            throws SQLException {
+        if (page == 0) {
+            List<SearchResultItem> rows = searchByName(likePattern);
+            return rows.size() <= pageSize ? rows : rows.subList(0, pageSize);
+        }
+        return List.of();
+    }
+
+
+    default List<SearchResultItem> searchByName(String likePattern, int page,
+                                                 int pageSize, DiscoverySort sort) throws SQLException {
+        return searchByName(likePattern, page, pageSize);
+    }
 
     /** Fail closed on incompatible chunk geometry for a file with an existing hash. */
     default boolean hasCompatibleGeometry(long fileId, FileMetadata metadata) throws SQLException {

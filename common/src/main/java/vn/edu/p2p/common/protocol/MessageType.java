@@ -54,6 +54,8 @@ public enum MessageType {
     FOLDER_SEARCH_RESPONSE,
     FOLDER_DETAIL_REQUEST,
     FOLDER_DETAIL_RESPONSE,
+    FOLDER_DOWNLOAD_COMPLETED_REQUEST,
+    FOLDER_DOWNLOAD_COMPLETED_RESPONSE,
 
     /** Generic protocol-level error when no request-specific response exists. */
     ERROR

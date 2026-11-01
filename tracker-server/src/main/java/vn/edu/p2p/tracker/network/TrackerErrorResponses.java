@@ -62,6 +62,7 @@ final class TrackerErrorResponses {
             case FOLDER_SHARE_REQUEST -> MessageType.FOLDER_SHARE_RESPONSE;
             case FOLDER_SEARCH_REQUEST -> MessageType.FOLDER_SEARCH_RESPONSE;
             case FOLDER_DETAIL_REQUEST -> MessageType.FOLDER_DETAIL_RESPONSE;
+            case FOLDER_DOWNLOAD_COMPLETED_REQUEST -> MessageType.FOLDER_DOWNLOAD_COMPLETED_RESPONSE;
             default -> MessageType.ERROR;
         };
     }

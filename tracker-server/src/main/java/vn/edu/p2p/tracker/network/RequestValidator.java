@@ -124,13 +124,7 @@ final class RequestValidator {
             throw invalid("Missing search payload.");
         }
         requireUuid(request.sessionId(), "INVALID_SESSION", "sessionId");
-        if (request.query() == null || request.query().isBlank()) {
-            throw new RequestValidationException(
-                    "INVALID_SEARCH_QUERY",
-                    "query is required."
-            );
-        }
-        if (request.query().trim().length() > MAX_SEARCH_QUERY_LENGTH) {
+        if (request.query() != null && request.query().trim().length() > MAX_SEARCH_QUERY_LENGTH) {
             throw new RequestValidationException(
                     "INVALID_SEARCH_QUERY",
                     "query is too long."

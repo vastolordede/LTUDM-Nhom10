@@ -1,5 +1,6 @@
 package vn.edu.p2p.tracker.catalog;
 
+import vn.edu.p2p.common.dto.DiscoverySort;
 import vn.edu.p2p.common.dto.FolderDetailRequest;
 import vn.edu.p2p.common.dto.FolderDetailResponse;
 import vn.edu.p2p.common.dto.FolderEntryDto;
@@ -9,6 +10,8 @@ import vn.edu.p2p.common.dto.FolderSearchRequest;
 import vn.edu.p2p.common.dto.FolderSearchResponse;
 import vn.edu.p2p.common.dto.FolderShareRequest;
 import vn.edu.p2p.common.dto.FolderShareResponse;
+import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
+import vn.edu.p2p.common.dto.RecordFolderDownloadResponse;
 import vn.edu.p2p.tracker.config.DatabaseConnectionFactory;
 
 import java.sql.Connection;
@@ -100,8 +103,16 @@ public final class FolderCatalogService {
     public FolderSearchResponse search(FolderSearchRequest request) throws FileCatalogException, SQLException {
         sessionPeerResolver.resolvePeerId(parse(request.sessionId()));
         String q = request.query() == null ? "" : request.query().trim();
-        if (q.isEmpty()) throw new FileCatalogException("Search query must not be empty");
         String like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+        String orderBy = switch (request.sort()) {
+            case POPULARITY -> "completed_downloads DESC, g.created_at DESC, g.group_id DESC";
+            case NAME_ASC -> "g.group_name ASC, g.group_id DESC";
+            case NAME_DESC -> "g.group_name DESC, g.group_id DESC";
+            case DATE_NEWEST -> "g.created_at DESC, g.group_id DESC";
+            case DATE_OLDEST -> "g.created_at ASC, g.group_id ASC";
+            case SIZE_ASC -> "total_size ASC, g.group_id DESC";
+            case SIZE_DESC -> "total_size DESC, g.group_id DESC";
+        };
         String sql = """
                 SELECT g.group_id, g.group_name,
                   (SELECT COUNT(*) FROM group_files x WHERE x.group_id = g.group_id) AS file_count,
@@ -115,19 +126,67 @@ public final class FolderCatalogService {
                       GROUP BY pf.peer_id
                      HAVING COUNT(DISTINCT x.file_id) =
                             (SELECT COUNT(DISTINCT file_id) FROM group_files WHERE group_id = g.group_id)
-                   ) t) AS source_count
+                   ) t) AS source_count,
+                  (EXTRACT(EPOCH FROM g.created_at) * 1000)::bigint AS created_at_epoch,
+                  (SELECT COUNT(*) FROM folder_download_sessions fd
+                    WHERE fd.group_id = g.group_id) AS completed_downloads
                 FROM file_groups g WHERE g.group_name ILIKE ?
-                ORDER BY g.group_name LIMIT 50""";
+                ORDER BY %s
+                LIMIT ? OFFSET ?""".formatted(orderBy);
         try (Connection c = connectionFactory.open(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, like);
+            ps.setInt(2, request.pageSize());
+            ps.setLong(3, (long) request.page() * request.pageSize());
             try (ResultSet rs = ps.executeQuery()) {
                 List<FolderSearchItem> list = new ArrayList<>();
                 while (rs.next()) {
                     list.add(new FolderSearchItem(rs.getLong("group_id"), rs.getString("group_name"),
-                            rs.getInt("file_count"), rs.getLong("total_size"), rs.getInt("source_count")));
+                            rs.getInt("file_count"), rs.getLong("total_size"), rs.getInt("source_count"),
+                            rs.getLong("completed_downloads"), rs.getLong("created_at_epoch")));
                 }
                 return new FolderSearchResponse(list);
             }
+        }
+    }
+
+    /** A successful whole-folder attempt is reported once by its UUID. */
+    public RecordFolderDownloadResponse recordCompletedDownload(RecordFolderDownloadRequest request)
+            throws FileCatalogException, SQLException {
+        if (request == null || request.groupId() <= 0 || request.groupTransferId() == null) {
+            throw new FileCatalogException("Invalid folder completion request");
+        }
+        UUID transferId;
+        try {
+            transferId = UUID.fromString(request.groupTransferId());
+        } catch (IllegalArgumentException e) {
+            throw new FileCatalogException("Invalid groupTransferId");
+        }
+        UUID peerId = sessionPeerResolver.resolvePeerId(parse(request.sessionId()));
+        try (Connection c = connectionFactory.open();
+             PreparedStatement ps = c.prepareStatement("""
+                INSERT INTO folder_download_sessions(group_transfer_id, group_id, destination_peer_id)
+                SELECT ?, g.group_id, ? FROM file_groups g WHERE g.group_id = ?
+                    AND EXISTS (SELECT 1 FROM group_files gf WHERE gf.group_id = g.group_id)
+                ON CONFLICT (group_transfer_id) DO NOTHING
+                """)) {
+            ps.setObject(1, transferId);
+            ps.setObject(2, peerId);
+            ps.setLong(3, request.groupId());
+            int inserted = ps.executeUpdate();
+            if (inserted == 0) {
+                try (PreparedStatement check = c.prepareStatement("""
+                        SELECT group_id, destination_peer_id FROM folder_download_sessions
+                        WHERE group_transfer_id = ?""")) {
+                    check.setObject(1, transferId);
+                    try (ResultSet rs = check.executeQuery()) {
+                        if (!rs.next()) throw new FileCatalogException("Folder does not exist or is empty");
+                        if (rs.getLong(1) != request.groupId() || !peerId.equals(rs.getObject(2, UUID.class))) {
+                            throw new FileCatalogException("Transfer ID belongs to another folder/peer");
+                        }
+                    }
+                }
+            }
+            return new RecordFolderDownloadResponse(request.groupId(), inserted == 1);
         }
     }
 

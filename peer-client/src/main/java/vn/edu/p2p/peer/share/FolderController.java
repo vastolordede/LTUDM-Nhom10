@@ -67,6 +67,7 @@ public final class FolderController {
 
     private Path outputDir = Path.of(System.getProperty("user.home"), "Downloads");
     private String currentGroupName;
+    private long currentGroupId;
     private volatile AtomicBoolean cancelSignal = new AtomicBoolean(false);
     private volatile ConnectionPlanner planner;
 
@@ -111,6 +112,18 @@ public final class FolderController {
         this.planner = planner;
     }
 
+    /** Explore selection opens the detail/download view without typing Group ID. */
+    public void prefillFromExplore(FolderSearchItem item) {
+        if (item == null) return;
+        queryField.setText(item.groupName());
+        groupsListView.getItems().setAll(item);
+        filesListView.getItems().clear();
+        currentGroupName = null;
+        currentGroupId = 0;
+        groupsListView.getSelectionModel().select(item);
+        statusLabel.setText("Đang tải chi tiết thư mục " + item.groupName() + "...");
+    }
+
     @FXML
     private void onSearch() {
         String q = queryField.getText();
@@ -148,6 +161,7 @@ public final class FolderController {
                 FolderDetailResponse d = folderClient.detail(sessionId, item.groupId());
                 Platform.runLater(() -> {
                     currentGroupName = d.groupName();
+                    currentGroupId = d.groupId();
                     filesListView.getItems().setAll(d.files());
                     downloadAllButton.setDisable(d.files().isEmpty());
                 });
@@ -168,12 +182,12 @@ public final class FolderController {
 
     @FXML
     private void onDownloadAll() {
-        startDownload(new ArrayList<>(filesListView.getItems()));
+        startDownload(new ArrayList<>(filesListView.getItems()), true);
     }
 
     @FXML
     private void onDownloadSelected() {
-        startDownload(new ArrayList<>(filesListView.getSelectionModel().getSelectedItems()));
+        startDownload(new ArrayList<>(filesListView.getSelectionModel().getSelectedItems()), false);
     }
 
     @FXML
@@ -182,13 +196,15 @@ public final class FolderController {
         statusLabel.setText("Đang hủy...");
     }
 
-    private void startDownload(List<FolderFileInfo> files) {
-        if (files.isEmpty() || currentGroupName == null || sessionId == null) {
+    private void startDownload(List<FolderFileInfo> files, boolean fullFolder) {
+        if (files.isEmpty() || currentGroupName == null || currentGroupId <= 0 || sessionId == null) {
             return;
         }
         String group = SafeFileName.validate(currentGroupName) == null
                 ? currentGroupName : SafeFileName.sanitize(currentGroupName);
         Path root = outputDir.resolve(group);
+        final long targetGroupId = currentGroupId;
+        final UUID groupTransferId = UUID.randomUUID();
         cancelSignal = new AtomicBoolean(false);
         AtomicBoolean cancel = cancelSignal;
         setBusy(true);
@@ -246,6 +262,13 @@ public final class FolderController {
                 }
             }
 
+            if (fullFolder && !cancel.get() && failed == 0 && ok == files.size()) {
+                try {
+                    folderClient.reportCompletedDownload(sessionId, groupTransferId, targetGroupId);
+                } catch (Exception e) {
+                    errors.append("\n- Không thể ghi lượt tải thư mục: ").append(e.getMessage());
+                }
+            }
             final int okCount = ok;
             final int failCount = failed;
             final String detail = errors.toString();
