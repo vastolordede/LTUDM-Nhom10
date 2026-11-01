@@ -114,7 +114,8 @@ public final class MultiSourceDownloadEngine {
                 BitfieldResponse bf = downloadClient.fetchBitfield(
                         source.ipAddress(),
                         source.listeningPort(),
-                        fileId
+                        fileId,
+                        source.accessTicket()
                 );
                 if (discoveredMetadata == null && bf.metadata() != null) {
                     discoveredMetadata = bf.metadata();
@@ -158,7 +159,7 @@ public final class MultiSourceDownloadEngine {
                         List<PieceInfo> allPieces = new ArrayList<>(header.pieceCount());
                         for (int offset = 0; offset < header.pieceCount(); offset += 400) {
                             var page = downloadClient.fetchMetadataPage(source.ipAddress(),
-                                    source.listeningPort(), fileId, offset, 400);
+                                    source.listeningPort(), fileId, offset, 400, source.accessTicket());
                             if (page.pieces().isEmpty()) throw new IOException("Empty metadata page");
                             for (PieceInfo piece : page.pieces()) {
                                 if (piece.pieceIndex() != allPieces.size() || piece.pieceLength() <= 0
@@ -353,7 +354,8 @@ public final class MultiSourceDownloadEngine {
                         source.ipAddress(),
                         source.listeningPort(),
                         fileId,
-                        pieceIndex
+                        pieceIndex,
+                        source.accessTicket()
                 );
 
                 // S31 & S43: Kiểm tra SHA-256 của từng piece ngay khi nhận

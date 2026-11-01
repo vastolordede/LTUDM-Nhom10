@@ -1,6 +1,9 @@
 package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.dto.BitfieldResponse;
+import vn.edu.p2p.common.security.PeerAccessTickets;
+import java.security.PublicKey;
+import java.time.Instant;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
 import vn.edu.p2p.common.dto.MetadataPageRequest;
@@ -41,6 +44,9 @@ public final class PeerUploadServer implements AutoCloseable {
 
     private final int listeningPort;
     private final LocalFileRegistry fileRegistry;
+    private final PublicKey ticketVerificationKey;
+    private final boolean allowInsecureLoopbackDemo;
+    private volatile String uploaderPeerId;
     private final PeerP2pSocketFactory socketFactory;
     private final ExecutorService clientWorkers;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -63,8 +69,18 @@ public final class PeerUploadServer implements AutoCloseable {
             PeerP2pSocketFactory socketFactory,
             int maxUploadWorkers
     ) {
+        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers,
+                PeerAccessTickets.optionalPeerKey(), PeerAccessTickets.localInsecureDemoEnabled());
+    }
+
+    /** Package-private key injection for deterministic tests only. */
+    PeerUploadServer(int listeningPort, LocalFileRegistry fileRegistry,
+                     PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
+                     PublicKey ticketVerificationKey, boolean allowInsecureLoopbackDemo) {
         this.listeningPort = listeningPort;
         this.fileRegistry = fileRegistry;
+        this.ticketVerificationKey = ticketVerificationKey;
+        this.allowInsecureLoopbackDemo = allowInsecureLoopbackDemo;
         this.socketFactory = socketFactory;
         if (maxUploadWorkers <= 0) throw new IllegalArgumentException("maxUploadWorkers must be > 0");
         this.clientWorkers = new ThreadPoolExecutor(maxUploadWorkers, maxUploadWorkers,
@@ -86,6 +102,12 @@ public final class PeerUploadServer implements AutoCloseable {
         acceptThread = new Thread(this::acceptLoop, "peer-upload-acceptor-" + listeningPort);
         acceptThread.setDaemon(true);
         acceptThread.start();
+    }
+
+    /** Must be set after login and before accepting requests; tickets target this peer. */
+    public void setUploaderPeerId(String peerId) {
+        if (running.get()) throw new IllegalStateException("Cannot replace peer identity while serving");
+        this.uploaderPeerId = peerId;
     }
 
     public int listeningPort() {
@@ -196,6 +218,8 @@ public final class PeerUploadServer implements AutoCloseable {
                 request.payload(), GetBitfieldRequest.class
         );
 
+        if (!authorize(client, request, payload.fileId(), payload.accessTicket(),
+                MessageType.BITFIELD_RESPONSE)) return;
         Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.find(payload.fileId());
         if (found.isEmpty()) {
             MessageEnvelope err = MessageEnvelope.error(
@@ -236,6 +260,8 @@ public final class PeerUploadServer implements AutoCloseable {
                     "INVALID_METADATA_PAGE", "Invalid metadata page bounds"));
             return;
         }
+        if (!authorize(client, request, payload.fileId(), payload.accessTicket(),
+                MessageType.METADATA_PAGE_RESPONSE)) return;
         Optional<LocalFileRegistry.RegisteredFile> file = fileRegistry.find(payload.fileId());
         if (file.isEmpty() || payload.startIndex() >= file.get().metadata().pieceCount()) {
             ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
@@ -260,6 +286,8 @@ public final class PeerUploadServer implements AutoCloseable {
                 request.payload(), PieceRequest.class
         );
 
+        if (!authorize(client, request, payload.fileId(), payload.accessTicket(),
+                MessageType.PIECE_RESPONSE)) return;
         Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.find(payload.fileId());
         if (found.isEmpty()) {
             MessageEnvelope err = MessageEnvelope.error(
@@ -308,6 +336,21 @@ public final class PeerUploadServer implements AutoCloseable {
                 pieceBytes.length
         );
         totalBytesUploaded.addAndGet(pieceBytes.length);
+    }
+
+    private boolean authorize(Socket client, MessageEnvelope request, long fileId, String ticket,
+                              MessageType responseType) throws IOException {
+        boolean allowed = ticketVerificationKey != null && uploaderPeerId != null
+                && PeerAccessTickets.verify(ticketVerificationKey, ticket, fileId,
+                        uploaderPeerId, Instant.now());
+        if (!allowed && ticketVerificationKey == null && allowInsecureLoopbackDemo
+                && client.getInetAddress().isLoopbackAddress()) {
+            allowed = true; // Explicit local-only migration/demo option.
+        }
+        if (allowed) return true;
+        ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(responseType,
+                request.requestId(), "ACCESS_DENIED", "A valid Tracker-issued file ticket is required"));
+        return false;
     }
 
     private static String resolvePieceHash(FileMetadata meta, int pieceIndex, byte[] pieceBytes) {

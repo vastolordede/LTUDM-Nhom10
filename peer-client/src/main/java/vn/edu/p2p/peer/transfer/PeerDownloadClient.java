@@ -52,7 +52,12 @@ public final class PeerDownloadClient {
      * S21-S22: Gửi GET_BITFIELD_REQUEST tới một Peer nguồn và nhận BITFIELD_RESPONSE.
      */
     public BitfieldResponse fetchBitfield(String host, int port, long fileId) throws IOException {
-        GetBitfieldRequest payload = new GetBitfieldRequest(fileId);
+        return fetchBitfield(host, port, fileId, null);
+    }
+
+    public BitfieldResponse fetchBitfield(String host, int port, long fileId,
+                                          String accessTicket) throws IOException {
+        GetBitfieldRequest payload = new GetBitfieldRequest(fileId, accessTicket);
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.GET_BITFIELD_REQUEST,
                 UUID.randomUUID().toString(),
@@ -77,9 +82,15 @@ public final class PeerDownloadClient {
 
     public MetadataPageResponse fetchMetadataPage(String host, int port, long fileId,
                                                  int startIndex, int pageSize) throws IOException {
+        return fetchMetadataPage(host, port, fileId, startIndex, pageSize, null);
+    }
+
+    public MetadataPageResponse fetchMetadataPage(String host, int port, long fileId,
+                                                 int startIndex, int pageSize,
+                                                 String accessTicket) throws IOException {
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.METADATA_PAGE_REQUEST, UUID.randomUUID().toString(),
-                ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize))
+                ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize, accessTicket))
         );
         try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
@@ -105,7 +116,12 @@ public final class PeerDownloadClient {
             long fileId,
             int pieceIndex
     ) throws IOException {
-        PieceRequest payload = new PieceRequest(fileId, pieceIndex);
+        return downloadPiece(host, port, fileId, pieceIndex, null);
+    }
+
+    public DownloadedPiece downloadPiece(String host, int port, long fileId,
+                                         int pieceIndex, String accessTicket) throws IOException {
+        PieceRequest payload = new PieceRequest(fileId, pieceIndex, accessTicket);
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.REQUEST_PIECE,
                 UUID.randomUUID().toString(),
