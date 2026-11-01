@@ -3,12 +3,16 @@ package vn.edu.p2p.peer.auth;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.common.auth.RegisterInputPolicy;
 import vn.edu.p2p.peer.network.PeerSettings;
+import vn.edu.p2p.peer.network.UserTrackerSettingsStore;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
+import vn.edu.p2p.peer.network.TrackerConnectionConfig;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.session.ClientSession;
 import vn.edu.p2p.peer.session.HeartbeatCoordinator;
@@ -46,6 +50,13 @@ public final class LoginController {
     @FXML
     private TextField listeningPortField;
 
+    @FXML private TextField trackerHostField;
+    @FXML private TextField trackerPortField;
+    @FXML private CheckBox trackerTlsCheckBox;
+    @FXML private TextField trackerTrustStoreField;
+    @FXML private Button saveTrackerButton;
+    @FXML private Button diagnoseTrackerButton;
+
     @FXML
     private Button loginButton;
 
@@ -70,6 +81,9 @@ public final class LoginController {
     private TrackerConnection trackerConnection;
     private TransferDashboardWindow transferDashboard;
     private boolean logoutInProgress;
+    private final UserTrackerSettingsStore trackerSettingsStore = UserTrackerSettingsStore.defaultStore();
+    private PeerSettings trackerDefaults;
+    private TrackerConnectionConfig activeTrackerConfig;
 
     @FXML
     private void initialize() {
@@ -78,27 +92,77 @@ public final class LoginController {
         connectionStatusLabel.setText("Tracker: chưa đăng nhập");
 
         try {
-            PeerSettings settings = PeerSettings.load();
-            PeerIdentityStore identityStore = PeerIdentityStore.defaultStore();
-            PeerIdentity identity = identityStore.loadOrCreate();
-            trackerConnection = new TrackerConnection(
-                    settings.trackerConnectionConfig()
-            );
-            authClientService = new AuthClientService(trackerConnection, identityStore, identity);
-
-            heartbeatCoordinator = new HeartbeatCoordinator(
-                    authClientService::heartbeat,
-                    new UiHeartbeatListener()
-            );
-            statusLabel.setText(
-                    "Tracker: " + settings.trackerHost() + ":" + settings.trackerPort()
-            );
+            trackerDefaults = PeerSettings.load();
+            UserTrackerSettingsStore.Endpoint saved = trackerSettingsStore.load(trackerDefaults);
+            trackerHostField.setText(saved.host());
+            trackerPortField.setText(Integer.toString(saved.port()));
+            trackerTlsCheckBox.setSelected(saved.tls());
+            trackerTrustStoreField.setText(saved.trustStorePath());
+            applyTrackerConfig(saved);
+            statusLabel.setText("Tracker: " + saved.host() + ":" + saved.port());
         } catch (Exception e) {
             initializationError = e.getMessage();
             loginButton.setDisable(true);
             registerButton.setDisable(true);
             statusLabel.setText("Không thể khởi tạo Peer: " + e.getMessage());
         }
+    }
+
+    @FXML
+    private void onSaveTrackerSettings() {
+        if (authClientService != null && authClientService.currentSession() != null) {
+            statusLabel.setText("Please log out before changing Tracker settings.");
+            return;
+        }
+        try {
+            UserTrackerSettingsStore.Endpoint endpoint = new UserTrackerSettingsStore.Endpoint(
+                    trackerHostField.getText().trim(),
+                    Integer.parseInt(trackerPortField.getText().trim()),
+                    trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText());
+            // Validate all fields including TLS truststore configuration BEFORE persisting.
+            endpoint.toConnectionConfig(trackerDefaults);
+            trackerSettingsStore.save(endpoint);
+            applyTrackerConfig(endpoint);
+            statusLabel.setText("Tracker settings saved: " + endpoint.host() + ":" + endpoint.port());
+        } catch (Exception e) {
+            statusLabel.setText("Tracker config error: " + TrackerConnectionDiagnostics.explain(e));
+        }
+    }
+
+    @FXML
+    private void onDiagnoseTracker() {
+        TrackerConnectionConfig target;
+        try {
+            target = new UserTrackerSettingsStore.Endpoint(
+                    trackerHostField.getText().trim(),
+                    Integer.parseInt(trackerPortField.getText().trim()),
+                    trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText())
+                    .toConnectionConfig(trackerDefaults);
+        } catch (Exception e) {
+            statusLabel.setText("Invalid Tracker config: " + e.getMessage());
+            return;
+        }
+        diagnoseTrackerButton.setDisable(true);
+        statusLabel.setText("Testing Tracker TCP/TLS connection...");
+        CompletableFuture.supplyAsync(() -> TrackerConnectionDiagnostics.probe(target), ioExecutor)
+                .whenComplete((message, error) -> Platform.runLater(() -> {
+                    diagnoseTrackerButton.setDisable(false);
+                    statusLabel.setText(error == null ? message : TrackerConnectionDiagnostics.explain(error));
+                }));
+    }
+
+    private void applyTrackerConfig(UserTrackerSettingsStore.Endpoint endpoint) throws Exception {
+        TrackerConnectionConfig config = endpoint.toConnectionConfig(trackerDefaults);
+        if (trackerConnection != null) trackerConnection.close();
+        activeTrackerConfig = config;
+        PeerIdentityStore identityStore = PeerIdentityStore.defaultStore();
+        PeerIdentity identity = identityStore.loadOrCreate();
+        trackerConnection = new TrackerConnection(config);
+        authClientService = new AuthClientService(trackerConnection, identityStore, identity);
+        heartbeatCoordinator = new HeartbeatCoordinator(authClientService::heartbeat, new UiHeartbeatListener());
+        initializationError = null;
+        loginButton.setDisable(false);
+        registerButton.setDisable(false);
     }
 
     @FXML
@@ -143,7 +207,8 @@ public final class LoginController {
 
                     if (throwable != null) {
                         Throwable cause = unwrap(throwable);
-                        statusLabel.setText("Đăng nhập thất bại: " + cause.getMessage());
+                        statusLabel.setText("Đăng nhập thất bại: "
+                                + TrackerConnectionDiagnostics.explain(cause));
                         connectionStatusLabel.setText("Tracker: OFFLINE");
                         return;
                     }
@@ -241,6 +306,11 @@ public final class LoginController {
         usernameField.setDisable(true);
         passwordField.setDisable(true);
         listeningPortField.setDisable(true);
+        trackerHostField.setDisable(true);
+        trackerPortField.setDisable(true);
+        trackerTlsCheckBox.setDisable(true);
+        trackerTrustStoreField.setDisable(true);
+        saveTrackerButton.setDisable(true);
         loginButton.setDisable(true);
         openDashboardButton.setDisable(false);
         statusLabel.setText(
@@ -288,6 +358,11 @@ public final class LoginController {
         usernameField.setDisable(false);
         passwordField.setDisable(false);
         listeningPortField.setDisable(false);
+        trackerHostField.setDisable(false);
+        trackerPortField.setDisable(false);
+        trackerTlsCheckBox.setDisable(false);
+        trackerTrustStoreField.setDisable(false);
+        saveTrackerButton.setDisable(false);
         loginButton.setDisable(false);
         registerButton.setDisable(false);
         openDashboardButton.setDisable(true);

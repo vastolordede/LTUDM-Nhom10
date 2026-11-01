@@ -13,10 +13,12 @@ psql -v ON_ERROR_STOP=1 -f database/migration_v3.sql
 psql -v ON_ERROR_STOP=1 -f database/migration_v4.sql
 psql -v ON_ERROR_STOP=1 -f database/migration_v5.sql
 psql -v ON_ERROR_STOP=1 -f database/migration_v6.sql
+psql -v ON_ERROR_STOP=1 -f database/migration_v7.sql
+psql -v ON_ERROR_STOP=1 -f database/migration_v8.sql
 psql -v ON_ERROR_STOP=1 -f database/verify_schema.sql
 ```
 
-The `schema.sql` file creates the foundational tables/views, v2 adds publish status and aliases, v3 filters non-READY sources, v4 adds folders, v5 repairs eligible legacy metadata, and v6 adds idempotent completed-folder events.
+The `schema.sql` file creates the foundational tables/views, v2 adds publish status and aliases, v3 filters non-READY sources, v4 adds folders, v5 repairs eligible legacy metadata, and v6 adds completed-folder events; v7 requires completed child-transfer evidence; v8 preserves empty nested directories.
 
 ## Existing / populated database
 
