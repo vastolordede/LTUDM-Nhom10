@@ -2,6 +2,8 @@ package vn.edu.p2p.peer.network;
 
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
+import vn.edu.p2p.common.protocol.MessageType;
+import vn.edu.p2p.common.protocol.ProtocolException;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -18,24 +20,44 @@ public final class TrackerConnection implements AutoCloseable {
         this.config = config;
     }
 
-    public synchronized MessageEnvelope request(MessageEnvelope request)
-            throws IOException {
-        ensureConnected();
-
+    /** A stale persistent socket can appear connected even after Tracker timeout. */
+    public synchronized MessageEnvelope request(MessageEnvelope request) throws IOException {
+        boolean wasEstablished = socket != null && socket.isConnected() && !socket.isClosed();
         try {
-            ProtocolCodec.write(socket.getOutputStream(), request);
-            MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
-
-            if (!request.requestId().equals(response.requestId())) {
-                throw new IOException(
-                        "Tracker response requestId mismatch: " + response.requestId()
-                );
-            }
-            return response;
-        } catch (IOException e) {
+            return requestOnce(request);
+        } catch (IOException first) {
             closeSocket();
-            throw e;
+            // Never replay registration, share, unshare or history mutations after
+            // uncertain delivery. A duplicate login replaces the previous Peer session.
+            if (!wasEstablished || !isSafeToReplay(request.type())
+                    || first instanceof ProtocolException) throw first;
+            try {
+                return requestOnce(request);
+            } catch (IOException retryFailed) {
+                closeSocket();
+                retryFailed.addSuppressed(first);
+                throw retryFailed;
+            }
         }
+    }
+
+    private MessageEnvelope requestOnce(MessageEnvelope request) throws IOException {
+        ensureConnected();
+        ProtocolCodec.write(socket.getOutputStream(), request);
+        MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+        if (!request.requestId().equals(response.requestId())) {
+            throw new ProtocolException("Tracker response requestId mismatch");
+        }
+        return response;
+    }
+
+    private static boolean isSafeToReplay(MessageType type) {
+        return switch (type) {
+            case LOGIN_REQUEST, HEARTBEAT, SEARCH_REQUEST, FILE_SOURCES_REQUEST,
+                    FOLDER_SEARCH_REQUEST, FOLDER_DETAIL_REQUEST,
+                    TRANSFER_HISTORY_REQUEST -> true;
+            default -> false;
+        };
     }
 
     private void ensureConnected() throws IOException {
@@ -52,13 +74,17 @@ public final class TrackerConnection implements AutoCloseable {
         }
 
         Socket candidate = new Socket();
-        candidate.connect(
-                new InetSocketAddress(config.host(), config.port()),
-                CONNECT_TIMEOUT_MILLIS
-        );
-        candidate.setSoTimeout(READ_TIMEOUT_MILLIS);
-        candidate.setTcpNoDelay(true);
-        socket = candidate;
+        boolean connected = false;
+        try {
+            candidate.connect(new InetSocketAddress(config.host(), config.port()),
+                    CONNECT_TIMEOUT_MILLIS);
+            candidate.setSoTimeout(READ_TIMEOUT_MILLIS);
+            candidate.setTcpNoDelay(true);
+            socket = candidate;
+            connected = true;
+        } finally {
+            if (!connected) candidate.close();
+        }
     }
 
     @Override

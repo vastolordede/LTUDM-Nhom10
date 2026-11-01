@@ -20,6 +20,7 @@ import java.util.UUID;
 public final class AuthClientService implements AutoCloseable {
     private final TrackerConnection connection;
     private final PeerIdentity peerIdentity;
+    private final PeerIdentityStore identityStore;
     private ClientSession currentSession;
 
     public AuthClientService(
@@ -28,6 +29,15 @@ public final class AuthClientService implements AutoCloseable {
     ) {
         this.connection = connection;
         this.peerIdentity = peerIdentity;
+        this.identityStore = null;
+    }
+
+    /** Desktop account switching: resolve identity per user, preserving legacy peer.id. */
+    public AuthClientService(TrackerConnection connection, PeerIdentityStore identityStore,
+                             PeerIdentity initialIdentity) {
+        this.connection = connection;
+        this.identityStore = identityStore;
+        this.peerIdentity = initialIdentity;
     }
 
     public synchronized ClientSession login(
@@ -35,22 +45,30 @@ public final class AuthClientService implements AutoCloseable {
             String password,
             int listeningPort
     ) throws AuthClientException {
-        LoginRequest payload = new LoginRequest(
-                username,
-                password,
-                listeningPort,
-                peerIdentity.peerId(),
-                peerIdentity.deviceName()
-        );
-
-        MessageEnvelope request = MessageEnvelope.request(
-                MessageType.LOGIN_REQUEST,
-                UUID.randomUUID().toString(),
-                ProtocolCodec.toPayload(payload)
-        );
-
-        MessageEnvelope response = send(request);
+        PeerIdentity currentIdentity = peerIdentity;
+        if (identityStore != null) {
+            try {
+                currentIdentity = identityStore.loadOrCreateForAccount(username);
+            } catch (IOException e) {
+                throw new AuthClientException("LOCAL_IDENTITY_ERROR",
+                        "Cannot load per-account Peer ID: " + e.getMessage(), e);
+            }
+        }
+        MessageEnvelope response = sendLogin(username, password, listeningPort, currentIdentity);
         requireType(response, MessageType.LOGIN_RESPONSE);
+        if (identityStore != null && response.status() == ResponseStatus.ERROR
+                && "PEER_OWNERSHIP_MISMATCH".equals(response.errorCode())) {
+            // Credentials are validated by Tracker before the mismatch. Retry only
+            // this case once with a separate persistent ID for this account.
+            try {
+                currentIdentity = identityStore.rotateForAccount(username);
+            } catch (IOException e) {
+                throw new AuthClientException("LOCAL_IDENTITY_ERROR",
+                        "Cannot save account-specific Peer ID: " + e.getMessage(), e);
+            }
+            response = sendLogin(username, password, listeningPort, currentIdentity);
+            requireType(response, MessageType.LOGIN_RESPONSE);
+        }
         requireSuccess(response);
 
         try {
@@ -78,6 +96,15 @@ public final class AuthClientService implements AutoCloseable {
                     e
             );
         }
+    }
+
+    private MessageEnvelope sendLogin(String username, String password, int listeningPort,
+                                      PeerIdentity identity) throws AuthClientException {
+        LoginRequest payload = new LoginRequest(username, password, listeningPort,
+                identity.peerId(), identity.deviceName());
+        MessageEnvelope request = MessageEnvelope.request(MessageType.LOGIN_REQUEST,
+                UUID.randomUUID().toString(), ProtocolCodec.toPayload(payload));
+        return send(request);
     }
 
     /** Register an account without logging this Peer in automatically. */
