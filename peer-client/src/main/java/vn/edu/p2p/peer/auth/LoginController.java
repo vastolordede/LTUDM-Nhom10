@@ -7,6 +7,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import vn.edu.p2p.common.dto.HeartbeatResponse;
+import vn.edu.p2p.common.auth.RegisterInputPolicy;
 import vn.edu.p2p.peer.network.PeerSettings;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.session.ClientSession;
@@ -37,13 +38,16 @@ public final class LoginController {
     private PasswordField passwordField;
 
     @FXML
+    private PasswordField confirmPasswordField;
+
+    @FXML
+    private Button registerButton;
+
+    @FXML
     private TextField listeningPortField;
 
     @FXML
     private Button loginButton;
-
-    @FXML
-    private Button logoutButton;
 
     @FXML
     private Button openDashboardButton;
@@ -65,11 +69,11 @@ public final class LoginController {
     private String initializationError;
     private TrackerConnection trackerConnection;
     private TransferDashboardWindow transferDashboard;
+    private boolean logoutInProgress;
 
     @FXML
     private void initialize() {
         listeningPortField.setText("7001");
-        logoutButton.setDisable(true);
         openDashboardButton.setDisable(true);
         connectionStatusLabel.setText("Tracker: chưa đăng nhập");
 
@@ -91,6 +95,7 @@ public final class LoginController {
         } catch (Exception e) {
             initializationError = e.getMessage();
             loginButton.setDisable(true);
+            registerButton.setDisable(true);
             statusLabel.setText("Không thể khởi tạo Peer: " + e.getMessage());
         }
     }
@@ -147,10 +152,48 @@ public final class LoginController {
     }
 
     @FXML
-    private void onLogout() {
-        if (authClientService == null || authClientService.currentSession() == null) {
+    private void onRegister() {
+        if (authClientService == null || authClientService.currentSession() != null) {
+            statusLabel.setText("Chỉ đăng ký khi chưa đăng nhập.");
             return;
         }
+        String username = usernameField.getText() == null ? "" : usernameField.getText().trim();
+        String password = passwordField.getText();
+        String error = RegisterInputPolicy.validate(username, password);
+        if (error == null && !password.equals(confirmPasswordField.getText())) {
+            error = "Mật khẩu xác nhận không khớp.";
+        }
+        if (error != null) {
+            statusLabel.setText(error);
+            return;
+        }
+        setBusy(true);
+        statusLabel.setText("Đang đăng ký tài khoản...");
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return authClientService.register(username, password);
+            } catch (AuthClientException e) {
+                throw new AuthOperationRuntimeException(e);
+            }
+        }, ioExecutor).whenComplete((registered, throwable) -> Platform.runLater(() -> {
+            setBusy(false);
+            if (throwable != null) {
+                statusLabel.setText("Đăng ký thất bại: " + unwrap(throwable).getMessage());
+                return;
+            }
+            passwordField.clear();
+            confirmPasswordField.clear();
+            statusLabel.setText("Đã tạo tài khoản " + registered.username()
+                    + ". Nhập mật khẩu để đăng nhập.");
+        }));
+    }
+
+    private void onLogout() {
+        if (logoutInProgress || authClientService == null || authClientService.currentSession() == null) {
+            return;
+        }
+        logoutInProgress = true;
+        if (transferDashboard != null) transferDashboard.setLogoutPending(true);
 
         ClientSession currentSession = authClientService.currentSession();
         if (heartbeatCoordinator != null) {
@@ -169,11 +212,16 @@ public final class LoginController {
                     }
                 }, ioExecutor)
                 .whenComplete((ignored, throwable) -> Platform.runLater(() -> {
+                    logoutInProgress = false;
+                    if (transferDashboard != null) transferDashboard.setLogoutPending(false);
                     setBusy(false);
 
                     if (throwable != null) {
                         Throwable cause = unwrap(throwable);
                         statusLabel.setText("Đăng xuất thất bại: " + cause.getMessage());
+                        if (transferDashboard != null) {
+                            transferDashboard.showMessage("Không thể đăng xuất: " + cause.getMessage());
+                        }
                         if (heartbeatCoordinator != null
                                 && authClientService.currentSession() != null) {
                             heartbeatCoordinator.start(currentSession);
@@ -187,11 +235,12 @@ public final class LoginController {
 
     private void onLoginSuccess(ClientSession session) {
         passwordField.clear();
+        confirmPasswordField.clear();
+        registerButton.setDisable(true);
         usernameField.setDisable(true);
         passwordField.setDisable(true);
         listeningPortField.setDisable(true);
         loginButton.setDisable(true);
-        logoutButton.setDisable(false);
         openDashboardButton.setDisable(false);
         statusLabel.setText(
                 "Đăng nhập thành công. Peer=" + shortId(session.peerId())
@@ -220,6 +269,7 @@ public final class LoginController {
             if (transferDashboard == null) {
                 int port = Integer.parseInt(listeningPortField.getText().trim());
                 transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
+                transferDashboard.setOnLogoutRequested(this::onLogout);
             }
             transferDashboard.show(trackerConnection, session.sessionId());
         } catch (Exception e) {
@@ -238,7 +288,7 @@ public final class LoginController {
         passwordField.setDisable(false);
         listeningPortField.setDisable(false);
         loginButton.setDisable(false);
-        logoutButton.setDisable(true);
+        registerButton.setDisable(false);
         openDashboardButton.setDisable(true);
         statusLabel.setText(message);
         connectionStatusLabel.setText("Tracker: LOGGED OUT");
@@ -257,16 +307,10 @@ public final class LoginController {
     }
 
     private void setBusy(boolean busy) {
-        if (busy) {
-            loginButton.setDisable(true);
-            logoutButton.setDisable(true);
-        } else if (authClientService != null && authClientService.currentSession() != null) {
-            loginButton.setDisable(true);
-            logoutButton.setDisable(false);
-        } else {
-            loginButton.setDisable(false);
-            logoutButton.setDisable(true);
-        }
+        boolean loggedIn = authClientService != null && authClientService.currentSession() != null;
+        loginButton.setDisable(busy || loggedIn || initializationError != null);
+        registerButton.setDisable(busy || loggedIn || initializationError != null);
+        openDashboardButton.setDisable(busy || !loggedIn);
     }
 
     public void shutdown() {

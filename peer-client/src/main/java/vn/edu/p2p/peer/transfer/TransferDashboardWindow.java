@@ -5,6 +5,14 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.stage.Stage;
 import javafx.application.Platform;
 import vn.edu.p2p.peer.network.TrackerConnection;
@@ -35,6 +43,23 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private final boolean p2pTls;
     private RelayAgent relayAgent;
     private FolderController folderController;
+    private Runnable onLogoutRequested;
+    private Button logoutButton;
+    private Label dashboardMessage;
+
+    /** Logout runs through LoginController so heartbeat/session are closed once. */
+    public void setOnLogoutRequested(Runnable action) {
+        this.onLogoutRequested = action;
+    }
+
+    public void setLogoutPending(boolean busy) {
+        if (logoutButton != null) logoutButton.setDisable(busy);
+    }
+
+    public void showMessage(String message) {
+        if (dashboardMessage != null) dashboardMessage.setText(message);
+    }
+
 
     public TransferDashboardWindow(int listeningPort, PeerP2pSocketConfig p2pConfig) {
         this.p2pTls = p2pConfig.tlsEnabled();
@@ -99,9 +124,35 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 tabs.getSelectionModel().select(downloadTab);
             });
 
+            logoutButton = new Button("Đăng xuất");
+            logoutButton.getStyleClass().add("danger-button");
+            logoutButton.setOnAction(event -> {
+                if (onLogoutRequested != null) onLogoutRequested.run();
+            });
+            dashboardMessage = new Label("Tracker: phiên đăng nhập đang hoạt động");
+            dashboardMessage.getStyleClass().add("connection-label");
+            HBox toolbar = new HBox(12);
+            toolbar.setAlignment(Pos.CENTER_LEFT);
+            toolbar.setPadding(new Insets(12, 18, 12, 18));
+            toolbar.getStyleClass().add("app-toolbar");
+            Label heading = new Label("FILESHARE  /  PEER CENTER");
+            heading.getStyleClass().add("toolbar-title");
+            Region spacer = new Region();
+            HBox.setHgrow(spacer, Priority.ALWAYS);
+            toolbar.getChildren().addAll(heading, spacer, dashboardMessage, logoutButton);
+            BorderPane root = new BorderPane();
+            root.getStyleClass().add("app-root");
+            root.setTop(toolbar);
+            root.setCenter(tabs);
+
             stage = new Stage();
             stage.setTitle("FileShare-P2P - Peer Center (Port: " + uploadServer.listeningPort() + ")");
-            stage.setScene(new Scene(tabs, 880, 600));
+            Scene scene = new Scene(root, 1024, 700);
+            var css = TransferDashboardWindow.class.getResource(VIEW_PATH + "styles.css");
+            if (css != null) scene.getStylesheets().add(css.toExternalForm());
+            stage.setScene(scene);
+            stage.setMinWidth(850);
+            stage.setMinHeight(560);
             // Hide keeps the peer available for uploads; logout closes all background work.
             stage.setOnCloseRequest(event -> {
                 event.consume();
@@ -189,5 +240,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (folderController != null) folderController.shutdown();
         if (relayAgent != null) relayAgent.close();
         uploadServer.close();
+        logoutButton = null;
+        dashboardMessage = null;
     }
 }

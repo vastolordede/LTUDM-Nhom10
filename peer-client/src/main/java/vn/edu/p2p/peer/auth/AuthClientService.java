@@ -5,6 +5,8 @@ import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
+import vn.edu.p2p.common.dto.RegisterRequest;
+import vn.edu.p2p.common.dto.RegisterResponse;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
@@ -75,6 +77,23 @@ public final class AuthClientService implements AutoCloseable {
                     "Cannot decode Tracker login response.",
                     e
             );
+        }
+    }
+
+    /** Register an account without logging this Peer in automatically. */
+    public synchronized RegisterResponse register(String username, String password)
+            throws AuthClientException {
+        MessageEnvelope request = MessageEnvelope.request(
+                MessageType.REGISTER_REQUEST,
+                UUID.randomUUID().toString(),
+                ProtocolCodec.toPayload(new RegisterRequest(username, password)));
+        MessageEnvelope response = send(request);
+        requireType(response, MessageType.REGISTER_RESPONSE);
+        requireSuccess(response);
+        try {
+            return ProtocolCodec.fromPayload(response.payload(), RegisterResponse.class);
+        } catch (IOException e) {
+            throw new AuthClientException("INVALID_RESPONSE", "Cannot decode registration response.", e);
         }
     }
 
