@@ -47,9 +47,21 @@ public final class PeerAccessTickets {
 
     /** Only use for Tracker boot; fail fast before opening any sockets. */
     public static PrivateKey requiredTrackerKey() {
-        String base64 = setting("P2P_TICKET_SIGNING_KEY_B64");
-        if (base64 == null) {
-            throw new IllegalStateException("P2P_TICKET_SIGNING_KEY_B64 is required for Tracker startup");
+        // Staging: prefer an externally mounted read-only secret rather than env vars.
+        String file = setting("P2P_TICKET_SIGNING_KEY_FILE");
+        String base64;
+        if (file != null) {
+            try {
+                base64 = java.nio.file.Files.readString(java.nio.file.Path.of(file),
+                        StandardCharsets.US_ASCII).trim();
+            } catch (java.io.IOException e) {
+                throw new IllegalStateException("Cannot read Tracker signing key file", e);
+            }
+        } else {
+            base64 = setting("P2P_TICKET_SIGNING_KEY_B64");
+        }
+        if (base64 == null || base64.isBlank()) {
+            throw new IllegalStateException("Tracker Ed25519 signing key file or env is required");
         }
         return decodePrivateKey(base64);
     }

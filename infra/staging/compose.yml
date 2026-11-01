@@ -1,0 +1,64 @@
+# STAGING ONLY. Requires operator-created local secrets and a migrated DB.
+# Do not publish PostgreSQL port. Do not commit infra/staging/local-secrets/.
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fileshare_p2p
+      POSTGRES_USER: fileshare
+      POSTGRES_PASSWORD: ${P2P_STAGING_DB_PASSWORD:?set a strong staging database password}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fileshare -d fileshare_p2p"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+    networks: [private_db]
+
+  tracker:
+    build:
+      context: ../..
+      dockerfile: infra/staging/Tracker.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/fileshare_p2p
+      DB_USER: fileshare
+      DB_PASSWORD: ${P2P_STAGING_DB_PASSWORD:?set a strong staging database password}
+      TRACKER_PORT: 9000
+      TRACKER_TLS_ENABLED: 'true'
+      TRACKER_TLS_KEYSTORE: /run/secrets/tracker_keystore
+      TRACKER_TLS_KEYSTORE_PASSWORD: ${P2P_STAGING_TLS_PASSWORD:?set keystore password}
+      P2P_TICKET_SIGNING_KEY_FILE: /run/secrets/tracker_signing_key
+      RENDEZVOUS_PORT: 9001
+      RELAY_ENABLED: 'true'
+      P2P_RELAY_MAX_CONNECTIONS: '32'
+      P2P_RELAY_MAX_SESSION_GIB: '8'
+      P2P_RELAY_MAX_MIB_PER_SECOND: '8'
+    secrets:
+      - tracker_keystore
+      - tracker_signing_key
+    ports:
+      - '9000:9000/tcp'
+      - '9001:9001/tcp'
+    read_only: true
+    tmpfs: ['/tmp']
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
+    networks: [private_db, public_tcp]
+
+volumes:
+  pg_data: {}
+networks:
+  private_db:
+    internal: true
+  public_tcp: {}
+secrets:
+  tracker_keystore:
+    file: ./local-secrets/tracker.p12
+  tracker_signing_key:
+    file: ./local-secrets/tracker-signing.key.b64
