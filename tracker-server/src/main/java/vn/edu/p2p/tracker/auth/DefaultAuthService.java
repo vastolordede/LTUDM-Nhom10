@@ -3,6 +3,9 @@ package vn.edu.p2p.tracker.auth;
 import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
+import vn.edu.p2p.common.dto.RegisterRequest;
+import vn.edu.p2p.common.dto.RegisterResponse;
+import vn.edu.p2p.common.auth.RegisterInputPolicy;
 import vn.edu.p2p.tracker.domain.PeerRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
@@ -107,6 +110,33 @@ public final class DefaultAuthService implements AuthService {
                     "Tracker cannot access the database.",
                     e
             );
+        }
+    }
+
+    @Override
+    public RegisterResponse register(RegisterRequest request) throws AuthException {
+        String error = request == null
+                ? "Missing registration payload."
+                : RegisterInputPolicy.validate(request.username(), request.password());
+        if (error != null) {
+            throw new AuthException("INVALID_REGISTRATION", error);
+        }
+
+        String username = request.username().trim();
+        try {
+            if (userRepository.findByUsername(username).isPresent()) {
+                throw new AuthException("USERNAME_TAKEN", "Tên đăng nhập đã tồn tại.");
+            }
+            // Repository's case-insensitive UNIQUE index is the final race guard.
+            var created = userRepository.create(username, passwordService.hash(request.password()));
+            return new RegisterResponse(created.username());
+        } catch (AuthException e) {
+            throw e;
+        } catch (SQLException e) {
+            if ("23505".equals(e.getSQLState())) {
+                throw new AuthException("USERNAME_TAKEN", "Tên đăng nhập đã tồn tại.", e);
+            }
+            throw new AuthException("DATABASE_ERROR", "Tracker không thể tạo tài khoản.", e);
         }
     }
 

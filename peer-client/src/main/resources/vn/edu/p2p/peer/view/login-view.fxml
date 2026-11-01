@@ -33,22 +33,21 @@
                    promptText="Password"
                    maxWidth="320"/>
 
+    <PasswordField fx:id="confirmPasswordField"
+                   promptText="Nhập lại mật khẩu (khi đăng ký)"
+                   maxWidth="320"/>
+
     <TextField fx:id="listeningPortField"
                promptText="Peer listening port"
                maxWidth="320"/>
 
-    <HBox alignment="CENTER" spacing="10">
-        <Button fx:id="loginButton"
-                text="LOGIN"
-                onAction="#onLogin"
-                defaultButton="true"
-                prefWidth="155"/>
+    <Button fx:id="loginButton"
+            text="ĐĂNG NHẬP"
+            onAction="#onLogin"
+            defaultButton="true" prefWidth="320"/>
 
-        <Button fx:id="logoutButton"
-                text="LOGOUT"
-                onAction="#onLogout"
-                prefWidth="155"/>
-    </HBox>
+    <Button fx:id="registerButton" text="TẠO TÀI KHOẢN"
+            maxWidth="320" onAction="#onRegister"/>
 
     <Button fx:id="openDashboardButton" text="Mo Peer Center" disable="true" onAction="#onOpenDashboard"/>
 

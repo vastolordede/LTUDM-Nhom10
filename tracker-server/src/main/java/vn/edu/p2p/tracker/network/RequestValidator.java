@@ -4,6 +4,8 @@ import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.HeartbeatRequest;
 import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LogoutRequest;
+import vn.edu.p2p.common.dto.RegisterRequest;
+import vn.edu.p2p.common.auth.RegisterInputPolicy;
 import vn.edu.p2p.common.dto.SearchRequest;
 import vn.edu.p2p.common.dto.ShareFileRequest;
 import vn.edu.p2p.common.dto.UnshareFileRequest;
@@ -62,6 +64,13 @@ final class RequestValidator {
                 && request.deviceName().trim().length() > MAX_DEVICE_NAME_LENGTH) {
             throw invalid("Device name is too long.");
         }
+    }
+
+    void validateRegister(RegisterRequest request) throws RequestValidationException {
+        String error = request == null
+                ? "Missing registration payload."
+                : RegisterInputPolicy.validate(request.username(), request.password());
+        if (error != null) throw new RequestValidationException("INVALID_REGISTRATION", error);
     }
 
     void validateLogout(LogoutRequest request) throws RequestValidationException {

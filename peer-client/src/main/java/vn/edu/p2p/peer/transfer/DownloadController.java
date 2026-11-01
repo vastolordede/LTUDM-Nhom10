@@ -37,8 +37,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class DownloadController {
 
-    @FXML
-    private TextField fileIdField;
+    /** Selected from Explore/Search, never entered as a raw ID. */
+    private long selectedFileId;
+    private long selectedFileSize = -1L;
 
     @FXML
     private TextField fileNameField;
@@ -111,6 +112,8 @@ public final class DownloadController {
         strategyComboBox.getSelectionModel().select(PieceScheduler.Strategy.RAREST_FIRST);
 
         selectedOutputDir = Path.of(System.getProperty("user.home"), "Downloads");
+        fileNameField.setEditable(false);
+        startDownloadButton.setDisable(true);
         outputDirField.setText(selectedOutputDir.toString());
 
         // S40: Định kỳ mỗi giây tính tốc độ Upload (KB/s hoặc MB/s) từ PeerUploadServer
@@ -146,9 +149,11 @@ public final class DownloadController {
         if (item == null) {
             return;
         }
-        fileIdField.setText(Long.toString(item.fileId()));
+        selectedFileId = item.fileId();
+        startDownloadButton.setDisable(false);
+        selectedFileSize = item.fileSize();
         fileNameField.setText(item.fileName());
-        statusLabel.setText("Đã chọn file \"" + item.fileName() + "\" (ID=" + item.fileId() + "). Nhấn Bắt đầu tải.");
+        statusLabel.setText("Đã chọn: " + item.fileName() + " (" + item.fileSize() + " bytes). Nhấn Bắt đầu tải.");
     }
 
     @FXML
@@ -173,16 +178,11 @@ public final class DownloadController {
             return;
         }
 
-        final long fileId;
-        try {
-            fileId = Long.parseLong(fileIdField.getText().trim());
-            if (fileId <= 0) {
-                throw new NumberFormatException();
-            }
-        } catch (NumberFormatException e) {
-            statusLabel.setText("File ID phải là số nguyên dương hợp lệ.");
+        if (selectedFileId <= 0 || selectedFileSize < 0) {
+            statusLabel.setText("Hãy chọn file từ tab Khám phá trước khi tải.");
             return;
         }
+        final long fileId = selectedFileId;
 
         String targetFileName = fileNameField.getText() == null || fileNameField.getText().isBlank()
                 ? ("downloaded-file-" + fileId + ".bin")
@@ -196,7 +196,7 @@ public final class DownloadController {
             statusLabel.setText("Duong dan dich nam ngoai thu muc da chon."); return;
         }
         try {
-            DownloadPreflight.check(targetFilePath, 0);
+            DownloadPreflight.check(targetFilePath, selectedFileSize);
         } catch (DownloadPreflight.PreflightException ex) {
             statusLabel.setText(ex.getMessage()); return;
         }

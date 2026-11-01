@@ -10,6 +10,8 @@ import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
+import vn.edu.p2p.common.dto.RegisterRequest;
+import vn.edu.p2p.common.dto.RegisterResponse;
 import vn.edu.p2p.common.dto.RecordTransferRequest;
 import vn.edu.p2p.common.dto.RecordTransferResponse;
 import vn.edu.p2p.common.dto.SearchRequest;
@@ -131,6 +133,7 @@ public final class TrackerRequestDispatcher {
 
             return switch (request.type()) {
                 case LOGIN_REQUEST -> handleLogin(request, remoteIp);
+                case REGISTER_REQUEST -> handleRegister(request);
                 case LOGOUT_REQUEST -> handleLogout(request);
                 case HEARTBEAT -> handleHeartbeat(request);
                 case FILE_SOURCES_REQUEST -> handleFileSources(request);
@@ -200,6 +203,14 @@ public final class TrackerRequestDispatcher {
                 request.requestId(),
                 ProtocolCodec.toPayload(response)
         );
+    }
+
+    private MessageEnvelope handleRegister(MessageEnvelope request) throws Exception {
+        RegisterRequest payload = ProtocolCodec.fromPayload(request.payload(), RegisterRequest.class);
+        validator.validateRegister(payload);
+        RegisterResponse response = authService.register(payload);
+        return MessageEnvelope.success(
+                MessageType.REGISTER_RESPONSE, request.requestId(), ProtocolCodec.toPayload(response));
     }
 
     private MessageEnvelope handleLogout(MessageEnvelope request) throws Exception {

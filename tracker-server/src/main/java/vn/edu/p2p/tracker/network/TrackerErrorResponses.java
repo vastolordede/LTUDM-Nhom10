@@ -47,6 +47,7 @@ final class TrackerErrorResponses {
 
         return switch (requestType) {
             case LOGIN_REQUEST -> MessageType.LOGIN_RESPONSE;
+            case REGISTER_REQUEST -> MessageType.REGISTER_RESPONSE;
             case LOGOUT_REQUEST -> MessageType.LOGOUT_RESPONSE;
             case HEARTBEAT -> MessageType.HEARTBEAT_ACK;
             case FILE_SOURCES_REQUEST -> MessageType.FILE_SOURCES_RESPONSE;
