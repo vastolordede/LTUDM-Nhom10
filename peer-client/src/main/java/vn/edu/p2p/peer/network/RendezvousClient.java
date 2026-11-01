@@ -23,13 +23,15 @@ public final class RendezvousClient {
             this.tls = null;
         }
 
-        /** D81: dùng TLS cho cổng Rendezvous khi Tracker TLS đang bật. */
+        /** D81: use the active selected Tracker TCP/TLS configuration for Rendezvous. */
         public RendezvousClient(PeerSettings settings, int port) {
-            this.host = settings.trackerHost();
+            this(settings.trackerConnectionConfig(), port);
+        }
+
+        public RendezvousClient(TrackerConnectionConfig config, int port) {
+            this.host = config.host();
             this.port = port;
-            this.tls = settings.trackerTlsEnabled()
-                    ? new TlsTrackerSocketFactory(settings.trackerConnectionConfig())
-                    : null;
+            this.tls = config.tlsEnabled() ? new TlsTrackerSocketFactory(config) : null;
         }
 
         private Socket open() throws IOException {

@@ -1,0 +1,67 @@
+name: FileShare P2P - PR36 extended checks and Windows package
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Java 21 + tests + FXML
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Check FXML controller bindings
+        run: python3 tools/check_fxml_bindings.py
+      - name: JVM tests and build
+        run: gradle --no-daemon clean check build --stacktrace
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-and-build-logs
+          path: |
+            **/build/test-results/test/**
+            **/build/reports/tests/**
+            **/build/libs/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-app:
+    name: Windows app-image (tag/manual only)
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: check
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Build Windows Gradle application distribution
+        run: gradle --no-daemon clean :peer-client:installDist :peer-client:test --stacktrace
+      - name: Create bundled app-image using JDK jpackage
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FileShare-P2P-Windows
+          path: dist/FileShare-P2P-windows.zip
+          if-no-files-found: error
+          retention-days: 30

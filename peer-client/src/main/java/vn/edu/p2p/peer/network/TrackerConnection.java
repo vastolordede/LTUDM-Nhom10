@@ -17,8 +17,11 @@ public final class TrackerConnection implements AutoCloseable {
     private Socket socket;
 
     public TrackerConnection(TrackerConnectionConfig config) {
-        this.config = config;
+        this.config = java.util.Objects.requireNonNull(config);
     }
+
+    /** Reuse the actual selected Tracker endpoint (including UI-saved TLS settings). */
+    public TrackerConnectionConfig configuration() { return config; }
 
     /** A stale persistent socket can appear connected even after Tracker timeout. */
     public synchronized MessageEnvelope request(MessageEnvelope request) throws IOException {
