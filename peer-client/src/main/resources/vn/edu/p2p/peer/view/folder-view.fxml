@@ -19,9 +19,11 @@
         <Insets top="16" right="20" bottom="16" left="20"/>
     </padding>
 
-    <Label text="THƯ MỤC CHIA SẺ" styleClass="title"/>
+    <Label text="CHI TIẾT VÀ TẢI THƯ MỤC" styleClass="title"/>
+    <Label text="Chọn một thư mục trong Khám phá để xem danh sách file." styleClass="subtitle"/>
 
-    <HBox spacing="10">
+    <!-- Kept injected for compatibility; discovery is centralized in Explore. -->
+    <HBox spacing="10" visible="false" managed="false">
         <TextField fx:id="queryField" promptText="Tên thư mục..." maxWidth="280"/>
         <Button fx:id="searchButton" text="Tìm" onAction="#onSearch"/>
     </HBox>

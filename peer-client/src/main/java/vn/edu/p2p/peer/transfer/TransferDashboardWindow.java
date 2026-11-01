@@ -17,7 +17,7 @@ import javafx.stage.Stage;
 import javafx.application.Platform;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.share.MyFilesController;
-import vn.edu.p2p.peer.share.SearchController;
+import vn.edu.p2p.peer.share.ExploreController;
 import vn.edu.p2p.peer.share.ShareController;
 import vn.edu.p2p.peer.share.FolderController;
 import vn.edu.p2p.common.config.EnvConfig;
@@ -34,7 +34,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private final PeerP2pSocketFactory socketFactory;
     private final PeerUploadServer uploadServer;
     private ShareController shareController;
-    private SearchController searchController;
+    private ExploreController exploreController;
     private MyFilesController myFilesController;
     private DownloadController downloadController;
     private TransferHistoryController historyController;
@@ -99,9 +99,9 @@ public final class TransferDashboardWindow implements AutoCloseable {
             folderController = folderLoader.getController();
             folderController.configure(connection, sessionId, fileRegistry, socketFactory);
 
-            FXMLLoader searchLoader = loader("search-view.fxml");
-            Parent searchRoot = searchLoader.load();
-            searchController = searchLoader.getController();
+            FXMLLoader exploreLoader = loader("explore-view.fxml");
+            Parent exploreRoot = exploreLoader.load();
+            exploreController = exploreLoader.getController();
 
             FXMLLoader historyLoader = loader("history-view.fxml");
             Parent historyRoot = historyLoader.load();
@@ -110,18 +110,21 @@ public final class TransferDashboardWindow implements AutoCloseable {
 
             Tab shareTab = tab("Chia se", shareRoot);
             Tab myFilesTab = tab("File cua toi", myFilesRoot);
-            Tab searchTab = tab("Tim kiem", searchRoot);
+            Tab exploreTab = tab("Khám phá", exploreRoot);
             Tab downloadTab = tab("Tai file", downloadRoot);
             Tab historyTab = tab("Lich su", historyRoot);
-            Tab folderTab = tab("Thu muc", folderRoot);
+            Tab folderTab = tab("Chi tiết thư mục", folderRoot);
             historyTab.setOnSelectionChanged(event -> {
                 if (historyTab.isSelected()) historyController.onRefreshHistory();
             });
 
-            TabPane tabs = new TabPane(shareTab, myFilesTab, searchTab, folderTab, downloadTab, historyTab);
-            searchController.configure(connection, sessionId, item -> {
+            TabPane tabs = new TabPane(exploreTab, shareTab, myFilesTab, downloadTab, folderTab, historyTab);
+            exploreController.configure(connection, sessionId, item -> {
                 downloadController.prefillFromSearchResult(item);
                 tabs.getSelectionModel().select(downloadTab);
+            }, folder -> {
+                folderController.prefillFromExplore(folder);
+                tabs.getSelectionModel().select(folderTab);
             });
 
             logoutButton = new Button("Đăng xuất");
@@ -233,7 +236,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             stage.close();
         }
         if (shareController != null) shareController.shutdown();
-        if (searchController != null) searchController.shutdown();
+        if (exploreController != null) exploreController.shutdown();
         if (myFilesController != null) myFilesController.shutdown();
         if (downloadController != null) downloadController.shutdown();
         if (historyController != null) historyController.shutdown();

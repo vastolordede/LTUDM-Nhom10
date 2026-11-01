@@ -5,6 +5,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 import org.xml.sax.InputSource;
+import vn.edu.p2p.peer.share.ExploreController;
 import vn.edu.p2p.peer.share.FolderController;
 import vn.edu.p2p.peer.share.ShareController;
 
@@ -21,7 +22,14 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ViewResourceClasspathTest {
     private static final String ROOT = "/vn/edu/p2p/peer/view/";
-    private static final String FX = "http://javafx.com/fxml";
+
+    @Test
+    void exploreFXMLIsPackagedAndSelectsByName() throws Exception {
+        Document xml = verifyView("explore-view.fxml", ExploreController.class);
+        assertNotNull(findId(xml, "resultsTable"));
+        assertNotNull(findId(xml, "sortCombo"));
+        assertNotNull(findId(xml, "downloadSelectedButton"));
+    }
 
     @Test
     void folderTabFXMLIsPackagedAndItsHandlersExist() throws Exception {
@@ -50,11 +58,11 @@ class ViewResourceClasspathTest {
             factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
             xml = factory.newDocumentBuilder().parse(new InputSource(stream));
         }
-        assertEquals(controller.getName(), xml.getDocumentElement().getAttributeNS(FX, "controller"));
+        assertEquals(controller.getName(), xml.getDocumentElement().getAttributeNS(fxNamespace(xml), "controller"));
         NodeList nodes = xml.getElementsByTagName("*");
         for (int i = 0; i < nodes.getLength(); i++) {
             Element el = (Element) nodes.item(i);
-            String id = el.getAttributeNS(FX, "id");
+            String id = el.getAttributeNS(fxNamespace(xml), "id");
             if (!id.isBlank()) {
                 assertDoesNotThrow(() -> controller.getDeclaredField(id),
                         () -> "Missing controller field for fx:id=" + id + " in " + filename);
@@ -70,11 +78,20 @@ class ViewResourceClasspathTest {
         return xml;
     }
 
+    /** Respect each view's declared JavaFX namespace (versioned or unversioned). */
+    private static String fxNamespace(Document xml) {
+        String namespace = xml.getDocumentElement().lookupNamespaceURI("fx");
+        assertTrue("http://javafx.com/fxml".equals(namespace)
+                        || "http://javafx.com/fxml/1".equals(namespace),
+                () -> "Unexpected JavaFX FXML namespace: " + namespace);
+        return namespace;
+    }
+
     private static Element findId(Document xml, String id) {
         NodeList nodes = xml.getElementsByTagName("*");
         for (int i = 0; i < nodes.getLength(); i++) {
             Element el = (Element) nodes.item(i);
-            if (id.equals(el.getAttributeNS(FX, "id"))) return el;
+            if (id.equals(el.getAttributeNS(fxNamespace(xml), "id"))) return el;
         }
         return null;
     }

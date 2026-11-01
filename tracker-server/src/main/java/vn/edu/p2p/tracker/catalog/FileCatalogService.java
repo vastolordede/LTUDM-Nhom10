@@ -128,12 +128,9 @@ public final class FileCatalogService {
         sessionPeerResolver.resolvePeerId(sessionId);
 
         String query = request.query() == null ? "" : request.query().trim();
-        if (query.isEmpty()) {
-            throw new FileCatalogException("Search query must not be empty");
-        }
-
         String likePattern = "%" + escapeLike(query) + "%";
-        List<SearchResultItem> results = fileRepository.searchByName(likePattern);
+        List<SearchResultItem> results = fileRepository.searchByName(
+                likePattern, request.page(), request.pageSize(), request.sort());
 
         return new SearchResponse(results);
     }

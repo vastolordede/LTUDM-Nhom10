@@ -1,5 +1,6 @@
 package vn.edu.p2p.peer.share;
 
+import vn.edu.p2p.common.dto.DiscoverySort;
 import vn.edu.p2p.common.dto.SearchRequest;
 import vn.edu.p2p.common.dto.SearchResponse;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
@@ -21,7 +22,17 @@ public final class SearchClientService {
     }
 
     public SearchResponse search(String sessionId, String query) throws ShareFileClientException {
-        SearchRequest payload = new SearchRequest(sessionId, query);
+        return search(sessionId, query, 0, 50);
+    }
+
+    public SearchResponse search(String sessionId, String query, int page, int pageSize)
+            throws ShareFileClientException {
+        return search(sessionId, query, page, pageSize, DiscoverySort.POPULARITY);
+    }
+
+    public SearchResponse search(String sessionId, String query, int page, int pageSize,
+                                 DiscoverySort sort) throws ShareFileClientException {
+        SearchRequest payload = new SearchRequest(sessionId, query, page, pageSize, sort);
 
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.SEARCH_REQUEST,

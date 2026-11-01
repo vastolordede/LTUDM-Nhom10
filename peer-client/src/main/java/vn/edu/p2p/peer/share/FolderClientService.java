@@ -1,6 +1,7 @@
 package vn.edu.p2p.peer.share;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import vn.edu.p2p.common.dto.DiscoverySort;
 import vn.edu.p2p.common.dto.FolderDetailRequest;
 import vn.edu.p2p.common.dto.FolderDetailResponse;
 import vn.edu.p2p.common.dto.FolderEntryDto;
@@ -8,6 +9,8 @@ import vn.edu.p2p.common.dto.FolderSearchRequest;
 import vn.edu.p2p.common.dto.FolderSearchResponse;
 import vn.edu.p2p.common.dto.FolderShareRequest;
 import vn.edu.p2p.common.dto.FolderShareResponse;
+import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
+import vn.edu.p2p.common.dto.RecordFolderDownloadResponse;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
@@ -33,9 +36,28 @@ public final class FolderClientService {
     }
 
     public FolderSearchResponse search(String sessionId, String query) throws ShareFileClientException {
+        return search(sessionId, query, 0, 50);
+    }
+
+    public FolderSearchResponse search(String sessionId, String query, int page, int pageSize)
+            throws ShareFileClientException {
+        return search(sessionId, query, page, pageSize, DiscoverySort.POPULARITY);
+    }
+
+    public FolderSearchResponse search(String sessionId, String query, int page, int pageSize,
+                                       DiscoverySort sort) throws ShareFileClientException {
         return call(MessageType.FOLDER_SEARCH_REQUEST, MessageType.FOLDER_SEARCH_RESPONSE,
-                ProtocolCodec.toPayload(new FolderSearchRequest(sessionId, query)),
+                ProtocolCodec.toPayload(new FolderSearchRequest(sessionId, query, page, pageSize, sort)),
                 FolderSearchResponse.class);
+    }
+
+    public RecordFolderDownloadResponse reportCompletedDownload(
+            String sessionId, UUID groupTransferId, long groupId) throws ShareFileClientException {
+        return call(MessageType.FOLDER_DOWNLOAD_COMPLETED_REQUEST,
+                MessageType.FOLDER_DOWNLOAD_COMPLETED_RESPONSE,
+                ProtocolCodec.toPayload(new RecordFolderDownloadRequest(
+                        sessionId, groupTransferId.toString(), groupId)),
+                RecordFolderDownloadResponse.class);
     }
 
     public FolderDetailResponse detail(String sessionId, long groupId) throws ShareFileClientException {

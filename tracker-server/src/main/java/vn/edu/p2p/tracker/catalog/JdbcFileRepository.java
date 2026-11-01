@@ -1,5 +1,6 @@
 package vn.edu.p2p.tracker.catalog;
 
+import vn.edu.p2p.common.dto.DiscoverySort;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.PieceInfo;
 import vn.edu.p2p.common.dto.SearchResultItem;
@@ -188,11 +189,35 @@ public final class JdbcFileRepository implements FileRepository {
 
     @Override
     public List<SearchResultItem> searchByName(String likePattern) throws SQLException {
+        return searchByName(likePattern, 0, SEARCH_RESULT_LIMIT, DiscoverySort.POPULARITY);
+    }
+
+    @Override
+    public List<SearchResultItem> searchByName(String likePattern, int page, int pageSize)
+            throws SQLException {
+        return searchByName(likePattern, page, pageSize, DiscoverySort.POPULARITY);
+    }
+
+    @Override
+    public List<SearchResultItem> searchByName(String likePattern, int page, int pageSize,
+                                                DiscoverySort sort) throws SQLException {
+        String orderBy = switch (sort == null ? DiscoverySort.POPULARITY : sort) {
+            case POPULARITY -> "completed_downloads DESC, f.created_at DESC, f.file_id DESC";
+            case NAME_ASC -> "m.file_name ASC, f.file_id DESC";
+            case NAME_DESC -> "m.file_name DESC, f.file_id DESC";
+            case DATE_NEWEST -> "f.created_at DESC, f.file_id DESC";
+            case DATE_OLDEST -> "f.created_at ASC, f.file_id ASC";
+            case SIZE_ASC -> "f.file_size ASC, f.file_id DESC";
+            case SIZE_DESC -> "f.file_size DESC, f.file_id DESC";
+        };
         String sql = """
                 SELECT f.file_id, m.file_name, f.file_size, f.file_hash,
                     (SELECT COUNT(*) FROM peer_files pf
                         JOIN v_online_peers op ON op.peer_id = pf.peer_id
-                        WHERE pf.file_id = f.file_id AND pf.is_sharing = TRUE) AS source_count
+                        WHERE pf.file_id = f.file_id AND pf.is_sharing = TRUE) AS source_count,
+                    (SELECT COUNT(*) FROM transfer_sessions ts
+                        WHERE ts.file_id = f.file_id AND ts.status = 'COMPLETED') AS completed_downloads,
+                    (EXTRACT(EPOCH FROM f.created_at) * 1000)::bigint AS created_at_epoch
                 FROM files f
                 JOIN LATERAL (
                     SELECT a.file_name FROM file_aliases a
@@ -200,13 +225,14 @@ public final class JdbcFileRepository implements FileRepository {
                     ORDER BY a.created_at LIMIT 1
                 ) m ON TRUE
                 WHERE f.publish_status = 'READY'
-                ORDER BY m.file_name
-                LIMIT ?
-                """;
+                ORDER BY %s
+                LIMIT ? OFFSET ?
+                """.formatted(orderBy);
         try (Connection connection = connectionFactory.open();
             PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, likePattern);
-            statement.setInt(2, SEARCH_RESULT_LIMIT);
+            statement.setInt(2, pageSize);
+            statement.setLong(3, (long) page * pageSize);
             try (ResultSet rs = statement.executeQuery()) {
                 List<SearchResultItem> results = new ArrayList<>();
                 while (rs.next()) {
@@ -215,7 +241,9 @@ public final class JdbcFileRepository implements FileRepository {
                             rs.getString("file_name"),
                             rs.getLong("file_size"),
                             rs.getString("file_hash"),
-                            rs.getInt("source_count")));
+                            rs.getInt("source_count"),
+                            rs.getLong("completed_downloads"),
+                            rs.getLong("created_at_epoch")));
                 }
                 return results;
             }

@@ -12,6 +12,7 @@ import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
 import vn.edu.p2p.common.dto.RegisterRequest;
 import vn.edu.p2p.common.dto.RegisterResponse;
+import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
 import vn.edu.p2p.common.dto.RecordTransferRequest;
 import vn.edu.p2p.common.dto.RecordTransferResponse;
 import vn.edu.p2p.common.dto.SearchRequest;
@@ -146,6 +147,7 @@ public final class TrackerRequestDispatcher {
                 case FOLDER_SHARE_REQUEST -> handleFolder(request, 0);
                 case FOLDER_SEARCH_REQUEST -> handleFolder(request, 1);
                 case FOLDER_DETAIL_REQUEST -> handleFolder(request, 2);
+                case FOLDER_DOWNLOAD_COMPLETED_REQUEST -> handleFolderDownloadCompleted(request);
                 default -> TrackerErrorResponses.forRequest(
                         request,
                         "UNSUPPORTED_MESSAGE",
@@ -390,6 +392,16 @@ public final class TrackerRequestDispatcher {
                 request.requestId(),
                 ProtocolCodec.toPayload(response)
         );
+    }
+
+    private MessageEnvelope handleFolderDownloadCompleted(MessageEnvelope request) throws Exception {
+        if (folderCatalogService == null) {
+            return TrackerErrorResponses.forRequest(request, "FEATURE_UNAVAILABLE",
+                    "Folder sharing is not configured on this Tracker.");
+        }
+        var payload = ProtocolCodec.fromPayload(request.payload(), RecordFolderDownloadRequest.class);
+        return MessageEnvelope.success(MessageType.FOLDER_DOWNLOAD_COMPLETED_RESPONSE,
+                request.requestId(), ProtocolCodec.toPayload(folderCatalogService.recordCompletedDownload(payload)));
     }
 
     private MessageEnvelope handleFolder(MessageEnvelope request, int kind) throws Exception {
