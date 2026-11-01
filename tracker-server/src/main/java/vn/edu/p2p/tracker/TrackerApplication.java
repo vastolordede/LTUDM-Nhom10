@@ -42,6 +42,10 @@ import vn.edu.p2p.tracker.transfer.TransferHistoryService;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.sql.SQLException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 public final class TrackerApplication {
@@ -68,7 +72,8 @@ public final class TrackerApplication {
                 new JdbcFileSourceRepository(connectionFactory);
 
         // T11-T25: Share / Search / Unshare (File Catalog).
-        FileRepository files = new JdbcFileRepository(connectionFactory);
+        JdbcFileRepository jdbcFiles = new JdbcFileRepository(connectionFactory);
+        FileRepository files = jdbcFiles;
         PeerFileRepository peerFiles = new JdbcPeerFileRepository(connectionFactory);
         ShareEventRepository shareEvents = new JdbcShareEventRepository(connectionFactory);
         SessionPeerResolver sessionPeerResolver = new JdbcSessionPeerResolver(connectionFactory);
@@ -154,8 +159,24 @@ public final class TrackerApplication {
                 Duration.ofSeconds(settings.statisticsIntervalSeconds())
         );
 
+        // R05: repair READY after interrupted publish, preserve active partial metadata.
+        ScheduledExecutorService metadataMaintenance = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread worker = new Thread(r, "tracker-metadata-maintenance");
+            worker.setDaemon(true);
+            return worker;
+        });
+        metadataMaintenance.scheduleWithFixedDelay(() -> {
+            try {
+                int recovered = jdbcFiles.reconcileInterruptedPublications();
+                if (recovered > 0) LOG.info("Recovered READY metadata: " + recovered);
+            } catch (SQLException e) {
+                LOG.warning("Metadata reconcile failed: " + e.getMessage());
+            }
+        }, 0, 60, TimeUnit.MINUTES);
+
         Runtime.getRuntime().addShutdownHook(
                 new Thread(() -> {
+                    metadataMaintenance.shutdownNow();
                     statisticsMonitor.close();
                     heartbeatMonitor.close();
                     rendezvous.close();

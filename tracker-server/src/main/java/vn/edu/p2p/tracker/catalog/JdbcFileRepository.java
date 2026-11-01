@@ -187,6 +187,50 @@ public final class JdbcFileRepository implements FileRepository {
         }
     }
 
+    /**
+     * R01-R05: reconcile complete interrupted publications, and safely prune only
+     * old truly orphaned metadata. Never remove active shares or transfer history.
+     * A partial publication with an owner stays PUBLISHING so the peer may replay
+     * missing pages idempotently after reconnect/restart.
+     */
+    public int reconcileInterruptedPublications() throws SQLException {
+        String complete = """
+                UPDATE files f SET publish_status = 'READY'
+                WHERE f.publish_status = 'PUBLISHING'
+                  AND (SELECT COUNT(*) FROM file_pieces fp WHERE fp.file_id = f.file_id) = f.piece_count
+                  AND NOT EXISTS (SELECT 1 FROM file_pieces fp
+                    WHERE fp.file_id = f.file_id AND (
+                      fp.piece_index < 0 OR fp.piece_index >= f.piece_count
+                      OR fp.piece_length <> LEAST(f.piece_size,
+                          f.file_size - fp.piece_index::BIGINT * f.piece_size)
+                      OR fp.piece_hash IS NULL OR fp.piece_hash !~ '^[0-9A-Fa-f]{64}$'))
+                """;
+        String prune = """
+                DELETE FROM files f
+                WHERE f.publish_status = 'PUBLISHING'
+                  AND f.created_at < CURRENT_TIMESTAMP - INTERVAL '7 days'
+                  AND NOT EXISTS (SELECT 1 FROM peer_files p WHERE p.file_id = f.file_id)
+                  AND NOT EXISTS (SELECT 1 FROM share_events s WHERE s.file_id = f.file_id)
+                  AND NOT EXISTS (SELECT 1 FROM transfer_sessions t WHERE t.file_id = f.file_id)
+                  AND NOT EXISTS (SELECT 1 FROM group_files gf WHERE gf.file_id = f.file_id)
+                """;
+        try (Connection c = connectionFactory.open()) {
+            c.setAutoCommit(false);
+            try (PreparedStatement ready = c.prepareStatement(complete);
+                 PreparedStatement cleanup = c.prepareStatement(prune)) {
+                int recovered = ready.executeUpdate();
+                cleanup.executeUpdate();
+                c.commit();
+                return recovered;
+            } catch (SQLException | RuntimeException e) {
+                c.rollback();
+                throw e;
+            } finally {
+                c.setAutoCommit(true);
+            }
+        }
+    }
+
     @Override
     public List<SearchResultItem> searchByName(String likePattern) throws SQLException {
         return searchByName(likePattern, 0, SEARCH_RESULT_LIMIT, DiscoverySort.POPULARITY);

@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -69,10 +70,12 @@ public final class TrafficEmulator {
         PeerP2pSocketConfig p2p = PeerP2pSocketConfig.fromEnvironment();
 
         ExecutorService pool = Executors.newFixedThreadPool(count);
+        // R29: release a real burst after every virtual source has finished publishing.
+        CountDownLatch allPublished = new CountDownLatch(count);
         for (int i = 0; i < count; i++) {
             final int idx = i;
             pool.submit(() -> runPeer(idx, count, runDownloads, basePort + idx, user, pass,
-                    settings, p2p, work, common, deadline));
+                    settings, p2p, work, common, deadline, allPublished));
         }
         pool.shutdown();
         while (!pool.awaitTermination(10, TimeUnit.SECONDS)) {
@@ -84,7 +87,8 @@ public final class TrafficEmulator {
 
     private static void runPeer(int idx, int count, boolean runDownloads, int port,
                                 String user, String pass, PeerSettings settings,
-                                PeerP2pSocketConfig p2p, Path work, Path common, long deadline) {
+                                PeerP2pSocketConfig p2p, Path work, Path common, long deadline,
+                                CountDownLatch allPublished) {
         String tag = "vpeer-" + idx;
         boolean online = false;
         try (TrackerConnection connection = new TrackerConnection(settings.trackerConnectionConfig())) {
@@ -92,8 +96,10 @@ public final class TrafficEmulator {
             AuthClientService auth = new AuthClientService(connection, identity);
             LocalFileRegistry registry = new LocalFileRegistry();
             try (PeerUploadServer server = new PeerUploadServer(port, registry, new PeerP2pSocketFactory(p2p))) {
-                server.start();
                 ClientSession session = auth.login(user, pass, port);
+                // R43 tickets bind the destination to this exact peer identity.
+                server.setUploaderPeerId(session.peerId());
+                server.start();
                 ONLINE.incrementAndGet();
                 online = true;
 
@@ -112,12 +118,11 @@ public final class TrafficEmulator {
                     registry.registerCompleteFile(r.fileId(), p, meta);
                     if (p.equals(common)) commonFileId = r.fileId();
                 }
+                allPublished.countDown();
                 if (runDownloads && count > 1) {
-                    // Allow all virtual peers to publish and start serving before the burst.
-                    long warmupEnds = Math.min(deadline, System.currentTimeMillis() + 8_000);
-                    while (System.currentTimeMillis() < warmupEnds) {
-                        Thread.sleep(1_000);
-                        auth.heartbeat();
+                    // All virtual peers enter this actual concurrent download burst.
+                    if (!allPublished.await(30, TimeUnit.SECONDS)) {
+                        throw new java.io.IOException("Not all virtual peers published within 30 seconds");
                     }
                     var available = new FileSourceClientService(connection)
                             .findSources(session.sessionId(), commonFileId).sources();
@@ -163,6 +168,7 @@ public final class TrafficEmulator {
                 }
             }
         } catch (Exception e) {
+            allPublished.countDown(); // Never hold others indefinitely on a failed virtual peer.
             ERRORS.incrementAndGet();
             System.err.println("[" + tag + "] " + e);
         }
