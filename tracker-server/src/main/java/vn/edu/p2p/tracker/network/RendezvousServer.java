@@ -24,7 +24,6 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -46,7 +45,11 @@ public final class RendezvousServer implements AutoCloseable {
     private static final int PROBE_TIMEOUT_MS = 3_000;
     private static final int PAIR_TIMEOUT_SECONDS = 8;
     private static final int IDLE_TIMEOUT_MS = 60_000;
-    private static final long MAX_BYTES_PER_PIPE = 64L * 1024 * 1024;
+    // R56: configurable, bounded resource usage. Session byte cap is above 2GB by default.
+    private static final int RELAY_MAX_CONNECTIONS = intSetting("P2P_RELAY_MAX_CONNECTIONS", 32, 1, 128);
+    private static final long RELAY_MAX_BYTES = (long) intSetting("P2P_RELAY_MAX_SESSION_GIB", 8, 1, 1024) * 1024 * 1024 * 1024;
+    private static final long RELAY_BPS = (long) intSetting("P2P_RELAY_MAX_MIB_PER_SECOND", 8, 1, 1000) * 1024 * 1024;
+    private static final int RELAY_MAX_SECONDS = intSetting("P2P_RELAY_MAX_SESSION_SECONDS", 7200, 60, 86400);
 
     private record Control(String sessionId, Socket socket, DataOutputStream out) {}
 
@@ -70,7 +73,7 @@ public final class RendezvousServer implements AutoCloseable {
     private final Map<UUID, Control> controls = new ConcurrentHashMap<>();
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final Map<UUID, Long> lastProbe = new ConcurrentHashMap<>();
-    private final Semaphore relaySlots = new Semaphore(64);
+    private final Semaphore relaySlots = new Semaphore(RELAY_MAX_CONNECTIONS);
 
     private volatile boolean running;
     private volatile ServerSocket server;
@@ -256,7 +259,7 @@ public final class RendezvousServer implements AutoCloseable {
     }
 
     private void pipe(Socket a, Socket b) {
-        AtomicLong budget = new AtomicLong(MAX_BYTES_PER_PIPE);
+        RelayBudget budget = new RelayBudget(RELAY_MAX_BYTES, RELAY_BPS, RELAY_MAX_SECONDS);
         try {
             pool.execute(() -> copy(b, a, budget));
         } catch (RejectedExecutionException e) {
@@ -267,16 +270,14 @@ public final class RendezvousServer implements AutoCloseable {
         copy(a, b, budget);
     }
 
-    private static void copy(Socket from, Socket to, AtomicLong budget) {
+    private static void copy(Socket from, Socket to, RelayBudget budget) {
         byte[] buffer = new byte[16 * 1024];
         try {
             InputStream in = from.getInputStream();
             OutputStream out = to.getOutputStream();
             int n;
             while ((n = in.read(buffer)) >= 0) {
-                if (budget.addAndGet(-n) < 0) {
-                    break;
-                }
+                budget.take(n);
                 out.write(buffer, 0, n);
                 out.flush();
             }
@@ -317,6 +318,16 @@ public final class RendezvousServer implements AutoCloseable {
         }
         out.flush();
         return false;
+    }
+
+    private static int intSetting(String key, int fallback, int min, int max) {
+        String raw = System.getenv(key);
+        if (raw == null || raw.isBlank()) return fallback;
+        try {
+            int n = Integer.parseInt(raw);
+            if (n >= min && n <= max) return n;
+        } catch (NumberFormatException ignored) { }
+        throw new IllegalArgumentException("Invalid " + key + " (expected " + min + ".." + max + ")");
     }
 
     private static void closeQuietly(Socket socket) {

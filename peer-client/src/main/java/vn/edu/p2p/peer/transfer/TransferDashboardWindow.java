@@ -23,7 +23,6 @@ import vn.edu.p2p.peer.share.ExploreController;
 import vn.edu.p2p.peer.share.ShareController;
 import vn.edu.p2p.peer.share.FolderController;
 import vn.edu.p2p.common.config.EnvConfig;
-import vn.edu.p2p.peer.network.PeerSettings;
 import vn.edu.p2p.peer.network.RendezvousClient;
 
 import java.io.IOException;
@@ -194,7 +193,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 stage.hide();
             });
             stage.show();
-            configureConnectivity(sessionId);
+            configureConnectivity(connection, sessionId);
         } catch (IOException | RuntimeException e) {
             close();
             throw e;
@@ -224,11 +223,10 @@ public final class TransferDashboardWindow implements AutoCloseable {
     }
 
     /** D77-D80: kiểm tra NAT, bật relay, gắn planner cho các màn hình tải. */
-    private void configureConnectivity(String sessionId) {
+    private void configureConnectivity(TrackerConnection connection, String sessionId) {
         try {
-            PeerSettings settings = PeerSettings.load();
             RendezvousClient rendezvous = new RendezvousClient(
-                    settings, EnvConfig.integer("RENDEZVOUS_PORT", 9001));
+                    connection.configuration(), EnvConfig.integer("RENDEZVOUS_PORT", 9001));
             boolean relayWanted = EnvConfig.flag("RELAY_ENABLED", false);
             boolean relayAllowed = relayWanted;
             ConnectionPlanner planner = new ConnectionPlanner(
@@ -253,16 +251,21 @@ public final class TransferDashboardWindow implements AutoCloseable {
                     status = "Chua kiem tra duoc ket noi ngoai";
                 }
                 String title = baseTitle + " | " + status + relayNote;
+                final String display = status + (relayAllowed
+                        ? " | Relay: requested, check Tracker connection" : " | Relay: disabled");
                 Platform.runLater(() -> {
                     if (stage != null && !closed) {
                         stage.setTitle(title);
+                        if (dashboardMessage != null) dashboardMessage.setText(display);
                     }
                 });
             }, "peer-nat-probe");
             probe.setDaemon(true);
             probe.start();
         } catch (RuntimeException e) {
-            System.err.println("Connectivity setup skipped: " + e.getMessage());
+            if (dashboardMessage != null) {
+                dashboardMessage.setText("Cannot configure Direct/Relay: " + e.getMessage());
+            }
         }
     }
 
