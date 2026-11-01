@@ -3,10 +3,12 @@ package vn.edu.p2p.peer.transfer;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
-import javafx.scene.control.Tab;
-import javafx.scene.control.TabPane;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.layout.StackPane;
+import javafx.scene.layout.VBox;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -46,6 +48,9 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private Runnable onLogoutRequested;
     private Button logoutButton;
     private Label dashboardMessage;
+    private StackPane contentPane;
+    private Map<String, Parent> views;
+    private Map<String, Button> navButtons;
 
     /** Logout runs through LoginController so heartbeat/session are closed once. */
     public void setOnLogoutRequested(Runnable action) {
@@ -108,24 +113,50 @@ public final class TransferDashboardWindow implements AutoCloseable {
             historyController = historyLoader.getController();
             historyController.configure(connection, sessionId);
 
-            Tab shareTab = tab("Chia se", shareRoot);
-            Tab myFilesTab = tab("File cua toi", myFilesRoot);
-            Tab exploreTab = tab("Khám phá", exploreRoot);
-            Tab downloadTab = tab("Tai file", downloadRoot);
-            Tab historyTab = tab("Lich su", historyRoot);
-            Tab folderTab = tab("Chi tiết thư mục", folderRoot);
-            historyTab.setOnSelectionChanged(event -> {
-                if (historyTab.isSelected()) historyController.onRefreshHistory();
-            });
+            views = new LinkedHashMap<>();
+            views.put("Khám phá", exploreRoot);
+            views.put("Chia sẻ", shareRoot);
+            views.put("Tệp của tôi", myFilesRoot);
+            views.put("Đang tải", downloadRoot);
+            views.put("Chi tiết thư mục", folderRoot);
+            views.put("Lịch sử", historyRoot);
+            contentPane = new StackPane();
+            contentPane.getStyleClass().add("content-pane");
+            contentPane.getChildren().addAll(views.values());
+            navButtons = new LinkedHashMap<>();
+            VBox sidebar = new VBox(6);
+            sidebar.getStyleClass().add("app-sidebar");
+            Label sidebarBrand = new Label("FILESHARE");
+            sidebarBrand.getStyleClass().add("sidebar-brand");
+            Label sidebarTag = new Label("P2P  •  DESKTOP");
+            sidebarTag.getStyleClass().add("sidebar-tagline");
+            sidebar.getChildren().addAll(sidebarBrand, sidebarTag);
+            for (String name : views.keySet()) {
+                Button nav = new Button(name);
+                nav.getStyleClass().add("nav-button");
+                nav.setMaxWidth(Double.MAX_VALUE);
+                nav.setOnAction(event -> showSection(name));
+                sidebar.getChildren().add(nav);
+                navButtons.put(name, nav);
+            }
+            Region sideSpacer = new Region();
+            VBox.setVgrow(sideSpacer, Priority.ALWAYS);
+            sidebar.getChildren().add(sideSpacer);
+            Label sidebarFooter = new Label("Tracker  •  Session online");
+            sidebarFooter.getStyleClass().add("sidebar-footer");
+            sidebar.getChildren().add(sidebarFooter);
+            HBox body = new HBox(sidebar, contentPane);
+            HBox.setHgrow(contentPane, Priority.ALWAYS);
 
-            TabPane tabs = new TabPane(exploreTab, shareTab, myFilesTab, downloadTab, folderTab, historyTab);
-            exploreController.configure(connection, sessionId, item -> {
-                downloadController.prefillFromSearchResult(item);
-                tabs.getSelectionModel().select(downloadTab);
-            }, folder -> {
-                folderController.prefillFromExplore(folder);
-                tabs.getSelectionModel().select(folderTab);
-            });
+            exploreController.configure(connection, sessionId,
+                    item -> {
+                        downloadController.prefillFromSearchResult(item);
+                        showSection("Đang tải");
+                    }, folder -> {
+                        folderController.prefillFromExplore(folder);
+                        showSection("Chi tiết thư mục");
+                    });
+            showSection("Khám phá");
 
             logoutButton = new Button("Đăng xuất");
             logoutButton.getStyleClass().add("danger-button");
@@ -146,7 +177,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             BorderPane root = new BorderPane();
             root.getStyleClass().add("app-root");
             root.setTop(toolbar);
-            root.setCenter(tabs);
+            root.setCenter(body);
 
             stage = new Stage();
             stage.setTitle("FileShare-P2P - Peer Center (Port: " + uploadServer.listeningPort() + ")");
@@ -175,10 +206,20 @@ public final class TransferDashboardWindow implements AutoCloseable {
         return new FXMLLoader(url);
     }
 
-    private static Tab tab(String name, Parent root) {
-        Tab result = new Tab(name, root);
-        result.setClosable(false);
-        return result;
+    private void showSection(String name) {
+        if (views == null) return;
+        views.forEach((key, node) -> {
+            boolean active = key.equals(name);
+            node.setVisible(active);
+            node.setManaged(active);
+        });
+        navButtons.forEach((key, button) -> {
+            button.getStyleClass().remove("nav-selected");
+            if (key.equals(name)) button.getStyleClass().add("nav-selected");
+        });
+        if ("Lịch sử".equals(name) && historyController != null) {
+            historyController.onRefreshHistory();
+        }
     }
 
     /** D77-D80: kiểm tra NAT, bật relay, gắn planner cho các màn hình tải. */
@@ -245,5 +286,8 @@ public final class TransferDashboardWindow implements AutoCloseable {
         uploadServer.close();
         logoutButton = null;
         dashboardMessage = null;
+        contentPane = null;
+        views = null;
+        navButtons = null;
     }
 }

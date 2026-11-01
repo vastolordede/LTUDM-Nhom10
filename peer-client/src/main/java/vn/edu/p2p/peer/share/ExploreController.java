@@ -152,7 +152,11 @@ public final class ExploreController {
                         ? folders.search(sessionId, searchQuery, folderPage, PAGE_SIZE, sort).groups()
                         : List.of();
                 Platform.runLater(() -> {
-                    if (requestGeneration != generation) return;
+                    if (requestGeneration != generation) {
+                        busy = false;
+                        loadNextPage();
+                        return;
+                    }
                     if (getFiles) {
                         nextFilePage++;
                         moreFiles = fileResult.size() == PAGE_SIZE;
@@ -173,7 +177,11 @@ public final class ExploreController {
                 });
             } catch (Exception e) {
                 Platform.runLater(() -> {
-                    if (requestGeneration != generation) return;
+                    if (requestGeneration != generation) {
+                        busy = false;
+                        loadNextPage();
+                        return;
+                    }
                     busy = false;
                     searchButton.setDisable(false);
                     loadMoreButton.setDisable(false);
