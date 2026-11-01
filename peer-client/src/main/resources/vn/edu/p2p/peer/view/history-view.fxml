@@ -10,7 +10,7 @@
 <?import javafx.scene.layout.VBox?>
 
 <VBox spacing="12.0" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
-      fx:controller="vn.edu.p2p.peer.transfer.TransferHistoryController">
+      styleClass="page-root" fx:controller="vn.edu.p2p.peer.transfer.TransferHistoryController">
     <padding>
         <Insets top="16.0" right="16.0" bottom="16.0" left="16.0"/>
     </padding>
