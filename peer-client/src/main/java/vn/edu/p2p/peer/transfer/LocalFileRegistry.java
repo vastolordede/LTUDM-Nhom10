@@ -2,6 +2,7 @@ package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.PieceInfo;
+import vn.edu.p2p.peer.share.FileHashUtil;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -73,6 +74,13 @@ public final class LocalFileRegistry {
         public synchronized void markPieceCompleted(int pieceIndex) {
             if (pieceIndex >= 0 && pieceIndex < metadata.pieceCount()) {
                 completedPieces.set(pieceIndex);
+            }
+        }
+
+        /** A shared file may change after publishing; never advertise a corrupt piece. */
+        public synchronized void invalidatePiece(int pieceIndex) {
+            if (pieceIndex >= 0 && pieceIndex < metadata.pieceCount()) {
+                completedPieces.clear(pieceIndex);
             }
         }
 
@@ -167,6 +175,11 @@ public final class LocalFileRegistry {
                 raf.seek(offset);
                 byte[] buffer = new byte[expectedLength];
                 raf.readFully(buffer);
+                if (!pieceHashMatches(meta, pieceIndex, buffer)) {
+                    entry.invalidatePiece(pieceIndex);
+                    throw new IOException("Shared file content changed or corrupted: fileId="
+                            + fileId + ", piece=" + pieceIndex);
+                }
                 return buffer;
             }
         }
@@ -195,6 +208,10 @@ public final class LocalFileRegistry {
             );
         }
 
+        // Validate before marking a downloaded piece as available for onward upload.
+        if (!pieceHashMatches(meta, pieceIndex, data)) {
+            throw new IOException("Downloaded piece hash does not match published metadata: " + pieceIndex);
+        }
         long offset = pieceOffset(pieceIndex, meta.pieceSize());
         synchronized (entry.fileLock) {
             try (RandomAccessFile raf = new RandomAccessFile(entry.filePath().toFile(), "rw")) {
@@ -203,6 +220,15 @@ public final class LocalFileRegistry {
             }
         }
         entry.markPieceCompleted(pieceIndex);
+    }
+
+    /** Header-only metadata has no trusted piece hash and requires full metadata before upload. */
+    private static boolean pieceHashMatches(FileMetadata meta, int pieceIndex, byte[] data) {
+        if (meta.pieces().isEmpty() || pieceIndex >= meta.pieces().size()) return false;
+        PieceInfo expected = meta.pieces().get(pieceIndex);
+        return expected.pieceIndex() == pieceIndex
+                && expected.pieceLength() == data.length
+                && expected.pieceHash().equalsIgnoreCase(FileHashUtil.sha256(data, 0, data.length));
     }
 
     public static int expectedPieceLength(FileMetadata meta, int pieceIndex) {

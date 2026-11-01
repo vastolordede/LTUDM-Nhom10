@@ -28,6 +28,7 @@ import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.tracker.auth.AuthException;
 import vn.edu.p2p.tracker.auth.AuthService;
+import vn.edu.p2p.tracker.auth.LoginAttemptLimiter;
 import vn.edu.p2p.tracker.catalog.FileCatalogException;
 import vn.edu.p2p.tracker.catalog.FileCatalogService;
 import vn.edu.p2p.tracker.peer.PeerSessionService;
@@ -52,6 +53,7 @@ public final class TrackerRequestDispatcher {
     private final FileCatalogService fileCatalogService;
     private final TransferHistoryService transferHistoryService;
     private final RequestValidator validator;
+    private final LoginAttemptLimiter loginLimiter = new LoginAttemptLimiter();
     private FolderCatalogService folderCatalogService;
 
     public TrackerRequestDispatcher withFolderCatalog(FolderCatalogService service) {
@@ -198,7 +200,20 @@ public final class TrackerRequestDispatcher {
                 request.payload(), LoginRequest.class
         );
         validator.validateLogin(payload);
-        LoginResponse response = authService.login(payload, remoteIp);
+        if (!loginLimiter.allow(remoteIp)) {
+            throw new AuthException("TOO_MANY_LOGIN_ATTEMPTS",
+                    "Too many failed logins. Retry later.");
+        }
+        final LoginResponse response;
+        try {
+            response = authService.login(payload, remoteIp);
+        } catch (AuthException error) {
+            if ("INVALID_CREDENTIALS".equals(error.errorCode())) {
+                loginLimiter.recordFailed(remoteIp);
+            }
+            throw error;
+        }
+        loginLimiter.recordSuccess(remoteIp);
 
         return MessageEnvelope.success(
                 MessageType.LOGIN_RESPONSE,

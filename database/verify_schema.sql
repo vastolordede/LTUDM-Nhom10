@@ -5,7 +5,7 @@ BEGIN
     SELECT string_agg(t.name, ', ') INTO missing
     FROM (VALUES ('users'),('peers'),('peer_sessions'),('files'),('file_pieces'),
                  ('peer_files'),('share_events'),('transfer_sessions'),('transfer_sources'),
-                 ('file_aliases'),('file_groups'),('group_files')) AS t(name)
+                 ('file_aliases'),('file_groups'),('group_files'),('folder_download_sessions')) AS t(name)
     WHERE to_regclass('public.' || t.name) IS NULL;
     IF missing IS NOT NULL THEN RAISE EXCEPTION 'Missing required tables: %', missing; END IF;
     IF to_regclass('public.v_file_sources') IS NULL THEN
@@ -16,3 +16,16 @@ SELECT publish_status, COUNT(*) AS file_count FROM files GROUP BY publish_status
 SELECT COUNT(*) AS ready_files_missing_pieces
 FROM files f WHERE f.publish_status='READY' AND f.piece_count <>
        (SELECT COUNT(*) FROM file_pieces fp WHERE fp.file_id = f.file_id);
+
+-- R47: migrations v2-v6 must exist before Tracker starts.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name='files'
+                     AND column_name='publish_status') THEN
+        RAISE EXCEPTION 'Missing migration_v2: files.publish_status';
+    END IF;
+    IF to_regclass('public.idx_folder_download_group') IS NULL THEN
+        RAISE EXCEPTION 'Missing migration_v6 index: idx_folder_download_group';
+    END IF;
+END $$;

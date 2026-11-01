@@ -79,11 +79,12 @@ public final class LoginController {
 
         try {
             PeerSettings settings = PeerSettings.load();
-            PeerIdentity identity = PeerIdentityStore.defaultStore().loadOrCreate();
+            PeerIdentityStore identityStore = PeerIdentityStore.defaultStore();
+            PeerIdentity identity = identityStore.loadOrCreate();
             trackerConnection = new TrackerConnection(
                     settings.trackerConnectionConfig()
             );
-            authClientService = new AuthClientService(trackerConnection, identity);
+            authClientService = new AuthClientService(trackerConnection, identityStore, identity);
 
             heartbeatCoordinator = new HeartbeatCoordinator(
                     authClientService::heartbeat,
