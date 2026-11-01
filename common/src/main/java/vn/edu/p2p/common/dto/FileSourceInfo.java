@@ -8,6 +8,12 @@ public record FileSourceInfo(
         String availabilityStatus,
         String ipAddress,
         int listeningPort,
-        long lastSeenEpochMillis
+        long lastSeenEpochMillis,
+        String accessTicket
 ) {
+    public FileSourceInfo(String peerId, String availabilityStatus, String ipAddress,
+                          int listeningPort, long lastSeenEpochMillis) {
+        this(peerId, availabilityStatus, ipAddress, listeningPort, lastSeenEpochMillis, null);
+    }
+
 }

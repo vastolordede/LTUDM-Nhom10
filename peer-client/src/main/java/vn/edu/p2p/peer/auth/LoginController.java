@@ -272,7 +272,7 @@ public final class LoginController {
                 transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
                 transferDashboard.setOnLogoutRequested(this::onLogout);
             }
-            transferDashboard.show(trackerConnection, session.sessionId());
+            transferDashboard.show(trackerConnection, session.sessionId(), session.peerId());
         } catch (Exception e) {
             closeTransferDashboard();
             statusLabel.setText("Peer Center cannot start (check upload port): " + e.getMessage());

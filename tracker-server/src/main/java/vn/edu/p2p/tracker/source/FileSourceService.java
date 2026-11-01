@@ -3,6 +3,9 @@ package vn.edu.p2p.tracker.source;
 import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
+import vn.edu.p2p.common.security.PeerAccessTickets;
+import java.security.PrivateKey;
+import java.time.Instant;
 import vn.edu.p2p.tracker.domain.FileSourceRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.peer.PeerSessionService;
@@ -16,13 +19,20 @@ import java.util.List;
 public final class FileSourceService {
     private final FileSourceRepository repository;
     private final PeerSessionService sessionService;
+    private final PrivateKey signingKey;
 
     public FileSourceService(
             FileSourceRepository repository,
             PeerSessionService sessionService
     ) {
+        this(repository, sessionService, null);
+    }
+
+    public FileSourceService(FileSourceRepository repository, PeerSessionService sessionService,
+                             PrivateKey signingKey) {
         this.repository = repository;
         this.sessionService = sessionService;
+        this.signingKey = signingKey;
     }
 
     public FileSourcesResponse findSources(FileSourcesRequest request)
@@ -53,7 +63,7 @@ public final class FileSourceService {
                             requester.peerId()
                     )
                     .stream()
-                    .map(FileSourceService::toInfo)
+                    .map(source -> toInfo(source, request.fileId(), requester.peerId().toString()))
                     .toList();
 
             return new FileSourcesResponse(request.fileId(), sources);
@@ -66,7 +76,7 @@ public final class FileSourceService {
         }
     }
 
-    private static FileSourceInfo toInfo(FileSourceRecord source) {
+    private FileSourceInfo toInfo(FileSourceRecord source, long fileId, String requesterPeerId) {
         long lastSeen = source.lastSeen() == null
                 ? 0L
                 : source.lastSeen()
@@ -79,7 +89,9 @@ public final class FileSourceService {
                 source.availabilityStatus(),
                 source.ipAddress(),
                 source.listeningPort(),
-                lastSeen
+                lastSeen,
+                signingKey == null ? null : PeerAccessTickets.issue(signingKey, fileId,
+                        requesterPeerId, source.peerId().toString(), Instant.now())
         );
     }
 }

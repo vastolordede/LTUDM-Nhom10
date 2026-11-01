@@ -62,18 +62,29 @@ class MultiSourceTransferIntegrationTest {
         Files.copy(originalFile, f3);
         reg3.registerDownloadingFile(fileId, f3, metadata, bits3);
 
-        try (PeerUploadServer s1 = new PeerUploadServer(0, reg1, socketFactory);
-             PeerUploadServer s2 = new PeerUploadServer(0, reg2, socketFactory);
-             PeerUploadServer s3 = new PeerUploadServer(0, reg3, socketFactory)) {
+        var tickets = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        try (PeerUploadServer s1 = new PeerUploadServer(0, reg1, socketFactory, 8, tickets.getPublic(), false);
+             PeerUploadServer s2 = new PeerUploadServer(0, reg2, socketFactory, 8, tickets.getPublic(), false);
+             PeerUploadServer s3 = new PeerUploadServer(0, reg3, socketFactory, 8, tickets.getPublic(), false)) {
+
+            s1.setUploaderPeerId("peer-1");
+            s2.setUploaderPeerId("peer-2");
+            s3.setUploaderPeerId("peer-3");
 
             s1.start();
             s2.start();
             s3.start();
 
             List<FileSourceInfo> sources = List.of(
-                    new FileSourceInfo("peer-1", "PARTIAL", "127.0.0.1", s1.listeningPort(), System.currentTimeMillis()),
-                    new FileSourceInfo("peer-2", "PARTIAL", "127.0.0.1", s2.listeningPort(), System.currentTimeMillis()),
-                    new FileSourceInfo("peer-3", "PARTIAL", "127.0.0.1", s3.listeningPort(), System.currentTimeMillis())
+                    new FileSourceInfo("peer-1", "PARTIAL", "127.0.0.1", s1.listeningPort(), System.currentTimeMillis(),
+                            vn.edu.p2p.common.security.PeerAccessTickets.issue(tickets.getPrivate(),
+                                    fileId, "test-reader", "peer-1", java.time.Instant.now())),
+                    new FileSourceInfo("peer-2", "PARTIAL", "127.0.0.1", s2.listeningPort(), System.currentTimeMillis(),
+                            vn.edu.p2p.common.security.PeerAccessTickets.issue(tickets.getPrivate(),
+                                    fileId, "test-reader", "peer-2", java.time.Instant.now())),
+                    new FileSourceInfo("peer-3", "PARTIAL", "127.0.0.1", s3.listeningPort(), System.currentTimeMillis(),
+                            vn.edu.p2p.common.security.PeerAccessTickets.issue(tickets.getPrivate(),
+                                    fileId, "test-reader", "peer-3", java.time.Instant.now()))
             );
 
             LocalFileRegistry downloaderReg = new LocalFileRegistry();

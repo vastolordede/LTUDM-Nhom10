@@ -73,7 +73,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
     }
 
-    public void show(TrackerConnection connection, String sessionId) throws IOException {
+    public void show(TrackerConnection connection, String sessionId, String peerId) throws IOException {
         if (stage != null && !closed) {
             stage.show();
             stage.toFront();
@@ -82,6 +82,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("Dashboard was closed; create a new instance");
         }
+        uploadServer.setUploaderPeerId(peerId);
         uploadServer.start();
         try {
             FXMLLoader shareLoader = loader("share-view.fxml");

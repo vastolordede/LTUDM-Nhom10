@@ -5,8 +5,13 @@ package vn.edu.p2p.common.dto;
  */
 public record PieceRequest(
         long fileId,
-        int pieceIndex
+        int pieceIndex,
+        String accessTicket
 ) {
+    public PieceRequest(long fileId, int pieceIndex) {
+        this(fileId, pieceIndex, null);
+    }
+
     public PieceRequest {
         if (fileId <= 0) {
             throw new IllegalArgumentException("fileId must be > 0");

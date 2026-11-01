@@ -29,14 +29,18 @@ class MetadataPageIntegrationTest {
         LocalFileRegistry registry = new LocalFileRegistry();
         registry.registerCompleteFile(9, dummy, metadata);
         var sockets = new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
-        try (PeerUploadServer server = new PeerUploadServer(0, registry, sockets)) {
+        var keys = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        String token = vn.edu.p2p.common.security.PeerAccessTickets.issue(keys.getPrivate(), 9,
+                "test-client", "test-server", java.time.Instant.now());
+        try (PeerUploadServer server = new PeerUploadServer(0, registry, sockets, 8, keys.getPublic(), false)) {
+            server.setUploaderPeerId("test-server");
             server.start();
             PeerDownloadClient client = new PeerDownloadClient(sockets);
-            var header = client.fetchBitfield("127.0.0.1", server.listeningPort(), 9);
+            var header = client.fetchBitfield("127.0.0.1", server.listeningPort(), 9, token);
             assertTrue(header.metadata().pieces().isEmpty());
             int offset = 0;
             while (offset < pieces.size()) {
-                var page = client.fetchMetadataPage("127.0.0.1", server.listeningPort(), 9, offset, 400);
+                var page = client.fetchMetadataPage("127.0.0.1", server.listeningPort(), 9, offset, 400, token);
                 assertEquals(offset, page.startIndex());
                 assertEquals(offset, page.pieces().get(0).pieceIndex());
                 offset += page.pieces().size();
