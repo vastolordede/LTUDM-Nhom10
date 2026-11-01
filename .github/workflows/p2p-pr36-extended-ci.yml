@@ -26,6 +26,8 @@ jobs:
           gradle-version: '8.10.2'
       - name: Check FXML controller bindings
         run: python3 tools/check_fxml_bindings.py
+      - name: Check repository secret hygiene
+        run: python3 tools/check_release_hygiene.py
       - name: JVM tests and build
         run: gradle --no-daemon clean check build --stacktrace
       - uses: actions/upload-artifact@v4
