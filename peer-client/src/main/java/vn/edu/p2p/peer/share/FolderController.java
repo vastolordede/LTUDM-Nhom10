@@ -68,6 +68,7 @@ public final class FolderController {
     private Path outputDir = Path.of(System.getProperty("user.home"), "Downloads");
     private String currentGroupName;
     private long currentGroupId;
+    private List<String> currentDirectories = List.of();
     private volatile AtomicBoolean cancelSignal = new AtomicBoolean(false);
     private volatile ConnectionPlanner planner;
 
@@ -120,6 +121,7 @@ public final class FolderController {
         filesListView.getItems().clear();
         currentGroupName = null;
         currentGroupId = 0;
+        currentDirectories = List.of();
         groupsListView.getSelectionModel().select(item);
         statusLabel.setText("Đang tải chi tiết thư mục " + item.groupName() + "...");
     }
@@ -138,6 +140,9 @@ public final class FolderController {
                 Platform.runLater(() -> {
                     groupsListView.getItems().setAll(res.groups());
                     filesListView.getItems().clear();
+                    currentGroupId = 0;
+                    currentGroupName = null;
+                    currentDirectories = List.of();
                     downloadAllButton.setDisable(true);
                     statusLabel.setText(res.groups().isEmpty() ? "Không tìm thấy thư mục nào."
                             : "Tìm thấy " + res.groups().size() + " thư mục.");
@@ -163,7 +168,8 @@ public final class FolderController {
                     currentGroupName = d.groupName();
                     currentGroupId = d.groupId();
                     filesListView.getItems().setAll(d.files());
-                    downloadAllButton.setDisable(d.files().isEmpty());
+                    currentDirectories = d.directories();
+                    downloadAllButton.setDisable(false);
                 });
             } catch (Exception e) {
                 Platform.runLater(() -> statusLabel.setText("Lỗi lấy danh sách file: " + e.getMessage()));
@@ -197,7 +203,8 @@ public final class FolderController {
     }
 
     private void startDownload(List<FolderFileInfo> files, boolean fullFolder) {
-        if (files.isEmpty() || currentGroupName == null || currentGroupId <= 0 || sessionId == null) {
+        if ((files.isEmpty() && !fullFolder) || currentGroupName == null
+                || currentGroupId <= 0 || sessionId == null) {
             return;
         }
         String group = SafeFileName.validate(currentGroupName) == null
@@ -205,6 +212,7 @@ public final class FolderController {
         Path root = outputDir.resolve(group);
         final long targetGroupId = currentGroupId;
         final UUID groupTransferId = UUID.randomUUID();
+        final List<String> selectedDirectories = fullFolder ? List.copyOf(currentDirectories) : List.of();
         cancelSignal = new AtomicBoolean(false);
         AtomicBoolean cancel = cancelSignal;
         setBusy(true);
@@ -213,6 +221,19 @@ public final class FolderController {
             int ok = 0;
             int failed = 0;
             StringBuilder errors = new StringBuilder();
+            List<String> completedEvidence = new ArrayList<>();
+            try {
+                Files.createDirectories(root);
+                for (String dir : selectedDirectories) {
+                    Files.createDirectories(FolderPathResolver.resolve(root, dir));
+                }
+            } catch (Exception directoryFailure) {
+                Platform.runLater(() -> {
+                    statusLabel.setText("Cannot create folder structure: " + directoryFailure.getMessage());
+                    setBusy(false);
+                });
+                return;
+            }
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     fileRegistry, new PeerDownloadClient(socketFactory).withPlanner(planner),
                     MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED);
@@ -230,7 +251,22 @@ public final class FolderController {
 
                     if (Files.isRegularFile(target) && Files.size(target) == f.fileSize()
                             && FileHashUtil.sha256(target).equalsIgnoreCase(f.fileHash())) {
-                        ok++; // đã có đúng nội dung, bỏ qua
+                        // R67: even a resume hit needs a new, hash-verified COMPLETED history row.
+                        UUID cachedTransfer = UUID.randomUUID();
+                        java.time.Instant verifiedAt = java.time.Instant.now();
+                        try {
+                            historyClient.reportTransferStart(sessionId, cachedTransfer, f.fileId());
+                            historyClient.reportTransferResult(sessionId,
+                                    new DownloadSessionResult(cachedTransfer, f.fileId(), target,
+                                            "COMPLETED", f.fileSize(), verifiedAt, verifiedAt,
+                                            null, List.of()));
+                            completedEvidence.add(cachedTransfer.toString());
+                            ok++;
+                        } catch (Exception historyError) {
+                            failed++;
+                            errors.append("\n- History: ").append(f.relativePath())
+                                    .append(": ").append(historyError.getMessage());
+                        }
                         continue;
                     }
                     DownloadPreflight.check(target, f.fileSize());
@@ -246,12 +282,19 @@ public final class FolderController {
                     }
                     DownloadSessionResult r = engine.downloadFile(
                             f.fileId(), sources, target, null, cancel, transferId);
+                    boolean historySaved = false;
                     try {
                         historyClient.reportTransferResult(sessionId, r);
-                    } catch (Exception ignored) {
+                        historySaved = true;
+                    } catch (Exception historyError) {
+                        errors.append("\n- Tracker history not saved: ")
+                                .append(f.relativePath()).append(": ").append(historyError.getMessage());
                     }
-                    if ("COMPLETED".equals(r.status())) {
+                    if ("COMPLETED".equals(r.status()) && historySaved) {
                         ok++;
+                        completedEvidence.add(transferId.toString());
+                    } else if ("COMPLETED".equals(r.status())) {
+                        failed++;
                     } else if (!"CANCELLED".equals(r.status())) {
                         failed++;
                         errors.append("\n- ").append(f.relativePath()).append(": ").append(r.failureReason());
@@ -264,7 +307,8 @@ public final class FolderController {
 
             if (fullFolder && !cancel.get() && failed == 0 && ok == files.size()) {
                 try {
-                    folderClient.reportCompletedDownload(sessionId, groupTransferId, targetGroupId);
+                    folderClient.reportCompletedDownload(sessionId, groupTransferId,
+                            targetGroupId, completedEvidence);
                 } catch (Exception e) {
                     errors.append("\n- Không thể ghi lượt tải thư mục: ").append(e.getMessage());
                 }
@@ -282,7 +326,7 @@ public final class FolderController {
     }
 
     private void setBusy(boolean busy) {
-        downloadAllButton.setDisable(busy || filesListView.getItems().isEmpty());
+        downloadAllButton.setDisable(busy || currentGroupId <= 0);
         searchButton.setDisable(busy);
         cancelButton.setDisable(!busy);
     }

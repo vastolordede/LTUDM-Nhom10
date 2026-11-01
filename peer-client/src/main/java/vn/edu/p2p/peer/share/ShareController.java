@@ -240,12 +240,11 @@ public final class ShareController {
         ioExecutor.submit(() -> {
             try {
                 List<FolderScanner.Entry> entries = FolderScanner.scan(dir.toPath());
+                List<String> directories = FolderScanner.scanDirectories(dir.toPath());
                 List<FolderEntryDto> dto = new ArrayList<>();
                 int done = 0;
                 for (FolderScanner.Entry entry : entries) {
-                    if (entry.size() == 0) {
-                        continue; // bỏ qua file rỗng
-                    }
+                    // Zero-byte files are valid: 0 pieces and SHA-256(empty).
                     final int n = ++done;
                     Platform.runLater(() -> statusLabel.setText(
                             "Đang chia sẻ " + n + "/" + entries.size() + ": " + entry.relativePath()));
@@ -264,10 +263,7 @@ public final class ShareController {
                         sharedFiles.add(new SharedFileEntry(r.fileId(), entry.relativePath()));
                     });
                 }
-                if (dto.isEmpty()) {
-                    throw new IOException("Thư mục không có file hợp lệ để chia sẻ.");
-                }
-                var res = folderClientService.share(sessionId, dir.getName(), dto);
+                var res = folderClientService.share(sessionId, dir.getName(), dto, directories);
                 Platform.runLater(() -> {
                     statusLabel.setText("Đã chia sẻ thư mục \"" + dir.getName() + "\" (" + res.fileCount() + " file).");
                     chooseFolderButton.setDisable(false);

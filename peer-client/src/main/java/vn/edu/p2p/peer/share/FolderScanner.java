@@ -20,6 +20,7 @@ public final class FolderScanner {
     public static final int MAX_DEPTH = 32;
 
     public record Entry(Path absolutePath, String relativePath, long size) {}
+    public static final int MAX_DIRECTORIES = 4000;
 
     private FolderScanner() {}
 
@@ -33,9 +34,11 @@ public final class FolderScanner {
 
         Files.walkFileTree(base, new SimpleFileVisitor<>() {
             @Override
-            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
                 if (!dir.equals(base) && Files.isSymbolicLink(dir)) return FileVisitResult.SKIP_SUBTREE;
-                if (base.relativize(dir).getNameCount() > MAX_DEPTH) return FileVisitResult.SKIP_SUBTREE;
+                if (base.relativize(dir).getNameCount() > MAX_DEPTH) {
+                    throw new IOException("Folder depth exceeds " + MAX_DEPTH);
+                }
                 return FileVisitResult.CONTINUE;
             }
 
@@ -63,10 +66,49 @@ public final class FolderScanner {
             }
 
             @Override
-            public FileVisitResult visitFileFailed(Path file, IOException exc) {
-                return FileVisitResult.CONTINUE; // file khong doc duoc thi bo qua
+            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                throw exc; // Never advertise a silent, incomplete snapshot.
             }
         });
         return result;
+    }
+
+    /** Collect all nested directories, including empty ones. Never follow symlinks. */
+    public static List<String> scanDirectories(Path root) throws IOException {
+        if (!Files.isDirectory(root) || Files.isSymbolicLink(root)) {
+            throw new IOException("Invalid folder root: " + root);
+        }
+        Path base = root.toRealPath();
+        List<String> directories = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        Files.walkFileTree(base, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs)
+                    throws IOException {
+                if (Files.isSymbolicLink(dir)) return FileVisitResult.SKIP_SUBTREE;
+                if (dir.equals(base)) return FileVisitResult.CONTINUE;
+                String relative = base.relativize(dir).toString().replace('\\', '/');
+                if (base.relativize(dir).getNameCount() > MAX_DEPTH) {
+                    throw new IOException("Folder depth exceeds " + MAX_DEPTH);
+                }
+                for (Path segment : base.relativize(dir)) {
+                    String error = SafeFileName.validate(segment.toString());
+                    if (error != null) throw new IOException("Unsafe directory: " + relative);
+                }
+                if (!seen.add(relative.toLowerCase(Locale.ROOT))) {
+                    throw new IOException("Duplicate directory path: " + relative);
+                }
+                if (directories.size() >= MAX_DIRECTORIES) {
+                    throw new IOException("Too many directories (max " + MAX_DIRECTORIES + ")");
+                }
+                directories.add(relative);
+                return FileVisitResult.CONTINUE;
+            }
+            @Override
+            public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                throw exc;
+            }
+        });
+        return directories;
     }
 }

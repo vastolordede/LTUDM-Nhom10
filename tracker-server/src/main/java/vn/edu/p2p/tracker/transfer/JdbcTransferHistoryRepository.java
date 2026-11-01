@@ -49,6 +49,8 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
                     bytes_received = EXCLUDED.bytes_received,
                     completed_at = EXCLUDED.completed_at,
                     failure_reason = EXCLUDED.failure_reason
+                WHERE transfer_sessions.destination_peer_id = EXCLUDED.destination_peer_id
+                  AND transfer_sessions.file_id = EXCLUDED.file_id
                 """;
 
         Instant safeStart = startedAt != null ? startedAt : Instant.now();
@@ -67,7 +69,9 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
             statement.setTimestamp(6, Timestamp.from(safeStart));
             statement.setTimestamp(7, safeCompleted != null ? Timestamp.from(safeCompleted) : null);
             statement.setString(8, failureReason);
-            statement.executeUpdate();
+            if (statement.executeUpdate() != 1) {
+                throw new SQLException("Transfer UUID is owned by another peer or file");
+            }
         }
     }
 

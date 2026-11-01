@@ -38,7 +38,8 @@ public final class DatabaseConnectionFactory {
         String[] required = {
                 "users", "peers", "peer_sessions", "files", "file_pieces", "peer_files",
                 "share_events", "transfer_sessions", "transfer_sources", "file_aliases",
-                "file_groups", "group_files", "folder_download_sessions",
+                "file_groups", "group_files", "folder_download_sessions", "folder_download_evidence",
+                "folder_directories",
                 "v_online_peers", "v_file_sources"
         };
         try (Connection connection = open();
@@ -48,7 +49,7 @@ public final class DatabaseConnectionFactory {
                 try (ResultSet rs = query.executeQuery()) {
                     if (!rs.next() || rs.getString(1) == null) {
                         throw new SQLException("Database migration is missing: " + table
-                                + ". Apply schema.sql and migration_v2..v6 in order.\n"
+                                + ". Apply schema.sql and migration_v2..v8 in order.\n"
                                 + "Do NOT re-run non-idempotent migrations on populated DBs.");
                     }
                 }

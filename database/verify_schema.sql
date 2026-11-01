@@ -29,3 +29,9 @@ BEGIN
         RAISE EXCEPTION 'Missing migration_v6 index: idx_folder_download_group';
     END IF;
 END $$;
+
+-- R67 v7 - audit missing evidence table before using completed folder ranking.
+SELECT to_regclass('public.folder_download_evidence') AS v7_folder_download_evidence;
+
+-- R46: v8 nested empty directory metadata.
+SELECT to_regclass('public.folder_directories') AS v8_folder_directories;

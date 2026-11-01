@@ -30,8 +30,13 @@ public final class FolderClientService {
 
     public FolderShareResponse share(String sessionId, String groupName, List<FolderEntryDto> entries)
             throws ShareFileClientException {
+        return share(sessionId, groupName, entries, List.of());
+    }
+
+    public FolderShareResponse share(String sessionId, String groupName, List<FolderEntryDto> entries,
+                                     List<String> directories) throws ShareFileClientException {
         return call(MessageType.FOLDER_SHARE_REQUEST, MessageType.FOLDER_SHARE_RESPONSE,
-                ProtocolCodec.toPayload(new FolderShareRequest(sessionId, groupName, entries)),
+                ProtocolCodec.toPayload(new FolderShareRequest(sessionId, groupName, entries, directories)),
                 FolderShareResponse.class);
     }
 
@@ -52,11 +57,12 @@ public final class FolderClientService {
     }
 
     public RecordFolderDownloadResponse reportCompletedDownload(
-            String sessionId, UUID groupTransferId, long groupId) throws ShareFileClientException {
+            String sessionId, UUID groupTransferId, long groupId,
+            List<String> fileTransferIds) throws ShareFileClientException {
         return call(MessageType.FOLDER_DOWNLOAD_COMPLETED_REQUEST,
                 MessageType.FOLDER_DOWNLOAD_COMPLETED_RESPONSE,
                 ProtocolCodec.toPayload(new RecordFolderDownloadRequest(
-                        sessionId, groupTransferId.toString(), groupId)),
+                        sessionId, groupTransferId.toString(), groupId, fileTransferIds)),
                 RecordFolderDownloadResponse.class);
     }
 

@@ -40,11 +40,18 @@ public final class FolderCatalogService {
     public FolderShareResponse share(FolderShareRequest request) throws FileCatalogException, SQLException {
         if (request == null || request.groupName() == null || request.groupName().isBlank()
                 || request.groupName().length() > 255 || request.entries() == null
-                || request.entries().isEmpty() || request.entries().size() > MAX_FILES) {
+                || request.entries().size() > MAX_FILES
+                || request.directories().size() > 4000) {
             throw new FileCatalogException("Invalid folder share (1.." + MAX_FILES + " files)");
         }
         UUID peerId = sessionPeerResolver.resolvePeerId(parse(request.sessionId()));
         Set<String> seen = new HashSet<>();
+        for (String directory : request.directories()) {
+            if (!isSafeRelative(directory) || directory.length() > 1024
+                    || !seen.add("dir:" + directory.toLowerCase(Locale.ROOT))) {
+                throw new FileCatalogException("Invalid or duplicate folder directory: " + directory);
+            }
+        }
         for (FolderEntryDto e : request.entries()) {
             if (!isSafeRelative(e.relativePath()) || !seen.add(e.relativePath().toLowerCase(Locale.ROOT))) {
                 throw new FileCatalogException("Invalid or duplicate path: " + e.relativePath());
@@ -69,6 +76,19 @@ public final class FolderCatalogService {
                 try (PreparedStatement ps = c.prepareStatement("DELETE FROM group_files WHERE group_id = ?")) {
                     ps.setLong(1, groupId);
                     ps.executeUpdate();
+                }
+                try (PreparedStatement ps = c.prepareStatement("DELETE FROM folder_directories WHERE group_id = ?")) {
+                    ps.setLong(1, groupId);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = c.prepareStatement("""
+                        INSERT INTO folder_directories(group_id, relative_path) VALUES (?, ?)""")) {
+                    for (String directory : request.directories()) {
+                        ps.setLong(1, groupId);
+                        ps.setString(2, directory);
+                        ps.addBatch();
+                    }
+                    ps.executeBatch();
                 }
                 try (PreparedStatement own = c.prepareStatement(
                              "SELECT 1 FROM peer_files WHERE peer_id = ? AND file_id = ? AND is_sharing = TRUE");
@@ -149,44 +169,108 @@ public final class FolderCatalogService {
         }
     }
 
-    /** A successful whole-folder attempt is reported once by its UUID. */
+    /** R67: count a folder only after matching completed child transfers exist on Tracker. */
     public RecordFolderDownloadResponse recordCompletedDownload(RecordFolderDownloadRequest request)
             throws FileCatalogException, SQLException {
-        if (request == null || request.groupId() <= 0 || request.groupTransferId() == null) {
-            throw new FileCatalogException("Invalid folder completion request");
+        if (request == null || request.groupId() <= 0 || request.groupTransferId() == null
+                || request.fileTransferIds() == null
+                || request.fileTransferIds().size() > MAX_FILES) {
+            throw new FileCatalogException("Invalid completed folder evidence");
         }
-        UUID transferId;
+        UUID groupTransferId;
+        List<UUID> fileTransferIds = new ArrayList<>();
+        Set<UUID> unique = new HashSet<>();
         try {
-            transferId = UUID.fromString(request.groupTransferId());
+            groupTransferId = UUID.fromString(request.groupTransferId());
+            for (String value : request.fileTransferIds()) {
+                UUID parsedId = UUID.fromString(value);
+                if (!unique.add(parsedId)) throw new FileCatalogException("Duplicate transfer evidence");
+                fileTransferIds.add(parsedId);
+            }
         } catch (IllegalArgumentException e) {
-            throw new FileCatalogException("Invalid groupTransferId");
+            throw new FileCatalogException("Malformed transfer UUID");
         }
         UUID peerId = sessionPeerResolver.resolvePeerId(parse(request.sessionId()));
-        try (Connection c = connectionFactory.open();
-             PreparedStatement ps = c.prepareStatement("""
-                INSERT INTO folder_download_sessions(group_transfer_id, group_id, destination_peer_id)
-                SELECT ?, g.group_id, ? FROM file_groups g WHERE g.group_id = ?
-                    AND EXISTS (SELECT 1 FROM group_files gf WHERE gf.group_id = g.group_id)
-                ON CONFLICT (group_transfer_id) DO NOTHING
-                """)) {
-            ps.setObject(1, transferId);
-            ps.setObject(2, peerId);
-            ps.setLong(3, request.groupId());
-            int inserted = ps.executeUpdate();
-            if (inserted == 0) {
-                try (PreparedStatement check = c.prepareStatement("""
+        try (Connection c = connectionFactory.open()) {
+            c.setAutoCommit(false);
+            try {
+                // An identical successful retry is idempotent; a reused UUID may not switch owner/group.
+                try (PreparedStatement previous = c.prepareStatement("""
                         SELECT group_id, destination_peer_id FROM folder_download_sessions
                         WHERE group_transfer_id = ?""")) {
-                    check.setObject(1, transferId);
-                    try (ResultSet rs = check.executeQuery()) {
-                        if (!rs.next()) throw new FileCatalogException("Folder does not exist or is empty");
-                        if (rs.getLong(1) != request.groupId() || !peerId.equals(rs.getObject(2, UUID.class))) {
-                            throw new FileCatalogException("Transfer ID belongs to another folder/peer");
+                    previous.setObject(1, groupTransferId);
+                    try (ResultSet rs = previous.executeQuery()) {
+                        if (rs.next()) {
+                            if (rs.getLong(1) != request.groupId()
+                                    || !peerId.equals(rs.getObject(2, UUID.class))) {
+                                throw new FileCatalogException("Folder transfer UUID belongs to another peer/group");
+                            }
+                            c.commit();
+                            return new RecordFolderDownloadResponse(request.groupId(), false);
                         }
                     }
                 }
+                try (PreparedStatement present = c.prepareStatement(
+                        "SELECT 1 FROM file_groups WHERE group_id = ?")) {
+                    present.setLong(1, request.groupId());
+                    try (ResultSet rs = present.executeQuery()) {
+                        if (!rs.next()) throw new FileCatalogException("Folder not found");
+                    }
+                }
+                List<Long> expectedFiles = new ArrayList<>();
+                try (PreparedStatement files = c.prepareStatement("""
+                        SELECT file_id FROM group_files WHERE group_id = ? ORDER BY relative_path""")) {
+                    files.setLong(1, request.groupId());
+                    try (ResultSet rs = files.executeQuery()) {
+                        while (rs.next()) expectedFiles.add(rs.getLong(1));
+                    }
+                }
+                if (expectedFiles.size() != fileTransferIds.size()) {
+                    throw new FileCatalogException("Folder evidence must cover every file exactly once");
+                }
+                try (PreparedStatement verify = c.prepareStatement("""
+                        SELECT 1 FROM transfer_sessions ts JOIN files f ON f.file_id = ts.file_id
+                        WHERE ts.transfer_id = ? AND ts.file_id = ? AND ts.destination_peer_id = ?
+                          AND ts.status = 'COMPLETED' AND ts.completed_at IS NOT NULL
+                          AND ts.bytes_received >= f.file_size""")) {
+                    for (int i = 0; i < expectedFiles.size(); i++) {
+                        verify.setObject(1, fileTransferIds.get(i));
+                        verify.setLong(2, expectedFiles.get(i));
+                        verify.setObject(3, peerId);
+                        try (ResultSet rs = verify.executeQuery()) {
+                            if (!rs.next()) {
+                                throw new FileCatalogException("Missing verified child transfer for file "
+                                        + expectedFiles.get(i));
+                            }
+                        }
+                    }
+                }
+                try (PreparedStatement insert = c.prepareStatement("""
+                        INSERT INTO folder_download_sessions(group_transfer_id, group_id, destination_peer_id)
+                        VALUES (?, ?, ?)""")) {
+                    insert.setObject(1, groupTransferId);
+                    insert.setLong(2, request.groupId());
+                    insert.setObject(3, peerId);
+                    insert.executeUpdate();
+                }
+                try (PreparedStatement evidence = c.prepareStatement("""
+                        INSERT INTO folder_download_evidence(group_transfer_id, transfer_id)
+                        VALUES (?, ?)""")) {
+                    for (UUID transferId : fileTransferIds) {
+                        evidence.setObject(1, groupTransferId);
+                        evidence.setObject(2, transferId);
+                        evidence.addBatch();
+                    }
+                    evidence.executeBatch();
+                }
+                c.commit();
+                return new RecordFolderDownloadResponse(request.groupId(), true);
+            } catch (SQLException | RuntimeException | FileCatalogException e) {
+                c.rollback();
+                throw e;
+            } finally {
+                c.setAutoCommit(true);
             }
-            return new RecordFolderDownloadResponse(request.groupId(), inserted == 1);
         }
     }
 
@@ -214,7 +298,16 @@ public final class FolderCatalogService {
                     }
                 }
             }
-            return new FolderDetailResponse(request.groupId(), name, files);
+            List<String> directories = new ArrayList<>();
+            try (PreparedStatement ps = c.prepareStatement("""
+                    SELECT relative_path FROM folder_directories
+                    WHERE group_id = ? ORDER BY relative_path""")) {
+                ps.setLong(1, request.groupId());
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) directories.add(rs.getString(1));
+                }
+            }
+            return new FolderDetailResponse(request.groupId(), name, files, directories);
         }
     }
 
