@@ -58,6 +58,9 @@ public final class FileSourceService {
         }
 
         try {
+            String trustedHash = repository.findReadyCatalogHash(request.fileId())
+                    .orElseThrow(() -> new FileSourceException("FILE_NOT_READY",
+                            "File is not published or catalog hash is unavailable"));
             List<FileSourceInfo> sources = repository.findOnlineSources(
                             request.fileId(),
                             requester.peerId()
@@ -66,7 +69,7 @@ public final class FileSourceService {
                     .map(source -> toInfo(source, request.fileId(), requester.peerId().toString()))
                     .toList();
 
-            return new FileSourcesResponse(request.fileId(), sources);
+            return new FileSourcesResponse(request.fileId(), sources, trustedHash);
         } catch (SQLException e) {
             throw new FileSourceException(
                     "DATABASE_ERROR",

@@ -77,7 +77,8 @@ public final class MultiSourceDownloadEngine {
             DownloadProgressListener progressListener,
             AtomicBoolean cancelSignal
     ) {
-        return downloadFile(fileId, candidateSources, targetFilePath, progressListener, cancelSignal, UUID.randomUUID());
+        return downloadFile(fileId, candidateSources, targetFilePath, progressListener, cancelSignal,
+                UUID.randomUUID(), null);
     }
 
     /** Use the same ID for Tracker DOWNLOADING and the terminal transfer result. */
@@ -89,7 +90,20 @@ public final class MultiSourceDownloadEngine {
             AtomicBoolean cancelSignal,
             UUID transferId
     ) {
+        return downloadFile(fileId, candidateSources, targetFilePath, progressListener,
+                cancelSignal, transferId, null);
+    }
+
+    /** Strict entry point: expected SHA-256 is obtained from Tracker file catalog, not Peer. */
+    public DownloadSessionResult downloadFile(
+            long fileId, List<FileSourceInfo> candidateSources, Path targetFilePath,
+            DownloadProgressListener progressListener, AtomicBoolean cancelSignal,
+            UUID transferId, String expectedCatalogHash
+    ) {
         Objects.requireNonNull(transferId, "transferId");
+        if (expectedCatalogHash != null && !expectedCatalogHash.matches("[a-fA-F0-9]{64}")) {
+            throw new IllegalArgumentException("Invalid Tracker catalog SHA-256");
+        }
         Instant startedAt = Instant.now();
         long startNano = System.nanoTime();
         AtomicLong totalBytesReceived = new AtomicLong(0);
@@ -117,8 +131,16 @@ public final class MultiSourceDownloadEngine {
                         fileId,
                         source.accessTicket()
                 );
-                if (discoveredMetadata == null && bf.metadata() != null) {
+                if (bf.metadata() == null) throw new IOException("Peer did not provide file metadata");
+                if (expectedCatalogHash != null && !bf.metadata().fileHash().equalsIgnoreCase(expectedCatalogHash)) {
+                    throw new IOException("Peer metadata does not match Tracker catalog SHA-256");
+                }
+                if (discoveredMetadata == null) {
                     discoveredMetadata = bf.metadata();
+                } else if (!discoveredMetadata.fileHash().equalsIgnoreCase(bf.metadata().fileHash())
+                        || discoveredMetadata.fileSize() != bf.metadata().fileSize()
+                        || discoveredMetadata.pieceSize() != bf.metadata().pieceSize()) {
+                    throw new IOException("Conflicting peer file metadata");
                 }
                 discoveredBitfields.put(source.peerId(), bf.toBitSet());
                 reachableSources.add(source);
@@ -130,14 +152,6 @@ public final class MultiSourceDownloadEngine {
                     );
                 }
             }
-        }
-
-        if (discoveredMetadata == null || reachableSources.isEmpty()) {
-            return failedResult(
-                    transferId, fileId, targetFilePath, startedAt, 0L,
-                    "Could not fetch bitfield/metadata from any peer source",
-                    buildSourceStats(sourceStatsMap)
-            );
         }
 
         if (discoveredMetadata == null || reachableSources.isEmpty()) {
@@ -186,6 +200,10 @@ public final class MultiSourceDownloadEngine {
             }
         }
         final FileMetadata metadata = discoveredMetadata;
+        if (expectedCatalogHash != null && !metadata.fileHash().equalsIgnoreCase(expectedCatalogHash)) {
+            return failedResult(transferId, fileId, targetFilePath, startedAt, 0L,
+                    "Tracker catalog hash mismatch", buildSourceStats(sourceStatsMap));
+        }
 
         try {
             // Bước 2 (S41 - Resume): Kiểm tra nếu file đích đã tồn tại một phần trên đĩa,

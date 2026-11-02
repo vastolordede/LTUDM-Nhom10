@@ -58,6 +58,7 @@ class FileSourceServiceTest {
         );
 
         assertEquals(11L, response.fileId());
+        assertEquals("a".repeat(64), response.fileHash());
         assertEquals(1, response.sources().size());
         assertEquals(sourcePeer.toString(), response.sources().getFirst().peerId());
         assertEquals(requesterPeer, sources.excludedPeer);
@@ -70,6 +71,9 @@ class FileSourceServiceTest {
         private FakeSourceRepository(List<FileSourceRecord> result) {
             this.result = result;
         }
+
+        @Override
+        public Optional<String> findReadyCatalogHash(long fileId) { return Optional.of("a".repeat(64)); }
 
         @Override
         public List<FileSourceRecord> findOnlineSources(long fileId, UUID excludingPeerId) {
