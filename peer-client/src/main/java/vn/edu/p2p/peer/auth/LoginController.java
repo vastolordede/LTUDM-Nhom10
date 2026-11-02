@@ -5,6 +5,11 @@ import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.TextInputDialog;
+import javafx.stage.FileChooser;
+import java.io.File;
+import vn.edu.p2p.peer.network.TrackerPublicKeyInstaller;
+import vn.edu.p2p.common.security.PeerAccessTickets;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import vn.edu.p2p.common.dto.HeartbeatResponse;
@@ -58,6 +63,7 @@ public final class LoginController {
     @FXML private TextField trackerTrustStoreField;
     @FXML private Button saveTrackerButton;
     @FXML private Button diagnoseTrackerButton;
+    @FXML private Button importTrackerKeyButton;
 
     @FXML
     private Button loginButton;
@@ -129,6 +135,33 @@ public final class LoginController {
         } catch (Exception e) {
             statusLabel.setText("Tracker config error: " + TrackerConnectionDiagnostics.explain(e));
         }
+    }
+
+    @FXML
+    private void onImportTrackerPublicKey() {
+        if (authClientService != null && authClientService.currentSession() != null) {
+            statusLabel.setText("Please log out before switching Tracker trust settings.");
+            return;
+        }
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Select Tracker PUBLIC key (never private)");
+        File selected = chooser.showOpenDialog(importTrackerKeyButton.getScene().getWindow());
+        if (selected == null) return;
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Verify Tracker identity");
+        dialog.setHeaderText("Compare with fingerprint from Tracker administrator");
+        dialog.setContentText("Trusted SHA-256 fingerprint:");
+        dialog.showAndWait().ifPresent(expected -> {
+            try {
+                var installed = TrackerPublicKeyInstaller.install(selected.toPath(),
+                        TrackerPublicKeyInstaller.defaultDestination(), expected);
+                // Restart Peer app after key import so uploader reads the same trust material.
+                statusLabel.setText("Public key fingerprint OK: " + installed
+                        + ". Restart Peer Center/app before sharing.");
+            } catch (Exception e) {
+                statusLabel.setText("Key import rejected: " + e.getMessage());
+            }
+        });
     }
 
     @FXML
