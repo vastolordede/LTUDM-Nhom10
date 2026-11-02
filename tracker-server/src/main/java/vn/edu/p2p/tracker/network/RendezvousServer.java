@@ -290,6 +290,10 @@ public final class RendezvousServer implements AutoCloseable {
     }
 
     private void pingControls() {
+        // Probes are per-peer rate-limit markers, not persistent identity data.
+        // Discard stale markers to avoid unbounded growth across many short-lived peers.
+        long staleBefore = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(5);
+        lastProbe.entrySet().removeIf(entry -> entry.getValue() < staleBefore);
         for (Map.Entry<UUID, Control> e : controls.entrySet()) {
             Control c = e.getValue();
             try {

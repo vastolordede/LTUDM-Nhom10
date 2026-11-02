@@ -4,6 +4,7 @@ import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.peer.network.RendezvousClient;
 
 import java.io.IOException;
+import javax.net.ssl.SSLException;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.UnknownHostException;
@@ -55,6 +56,9 @@ public final class ConnectionPlanner {
                 report(key, isPrivateAddress(host) ? Mode.LAN : Mode.DIRECT);
                 return socket;
             } catch (IOException e) {
+                // TLS certificate/identity failure is NOT a connectivity failure;
+                // trying Relay must never hide a failed authenticated handshake.
+                if (!mayRetryViaRelay(e)) throw e;
                 failure = e;
             }
         }
@@ -83,6 +87,16 @@ public final class ConnectionPlanner {
             }
         }
         throw failure != null ? failure : new IOException("No route to " + key);
+    }
+
+    /** Only transport failures may use Relay. TLS identity failures are terminal. */
+    static boolean mayRetryViaRelay(IOException error) {
+        Throwable cause = error;
+        while (cause != null) {
+            if (cause instanceof SSLException) return false;
+            cause = cause.getCause();
+        }
+        return true;
     }
 
     private void report(String key, Mode mode) {
