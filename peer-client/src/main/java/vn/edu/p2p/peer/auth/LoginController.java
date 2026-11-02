@@ -8,6 +8,8 @@ import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import vn.edu.p2p.common.dto.HeartbeatResponse;
+import vn.edu.p2p.common.config.EnvConfig;
+import vn.edu.p2p.common.security.SecurityProfile;
 import vn.edu.p2p.common.auth.RegisterInputPolicy;
 import vn.edu.p2p.peer.network.PeerSettings;
 import vn.edu.p2p.peer.network.UserTrackerSettingsStore;
@@ -153,6 +155,10 @@ public final class LoginController {
 
     private void applyTrackerConfig(UserTrackerSettingsStore.Endpoint endpoint) throws Exception {
         TrackerConnectionConfig config = endpoint.toConnectionConfig(trackerDefaults);
+        if (SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development"))
+                == SecurityProfile.Mode.PRODUCTION && !config.tlsEnabled()) {
+            throw new IllegalStateException("Production Tracker connection requires TLS");
+        }
         if (trackerConnection != null) trackerConnection.close();
         activeTrackerConfig = config;
         PeerIdentityStore identityStore = PeerIdentityStore.defaultStore();

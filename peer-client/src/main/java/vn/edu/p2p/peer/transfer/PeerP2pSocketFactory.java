@@ -2,6 +2,8 @@ package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.security.TlsContextFactory;
 import vn.edu.p2p.common.config.EnvConfig;
+import vn.edu.p2p.common.security.SecurityProfile;
+import vn.edu.p2p.common.security.PeerAccessTickets;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -27,6 +29,14 @@ public final class PeerP2pSocketFactory {
     private final SSLContext clientSslContext;
 
     public PeerP2pSocketFactory(PeerP2pSocketConfig config) {
+        SecurityProfile.Mode mode = SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development"));
+        if (mode != SecurityProfile.Mode.DEVELOPMENT && PeerAccessTickets.localInsecureDemoEnabled()) {
+            throw new IllegalStateException("Insecure loopback demo is forbidden in LAN/PRODUCTION");
+        }
+        if (mode == SecurityProfile.Mode.PRODUCTION && (!config.tlsEnabled()
+                || !EnvConfig.flag("P2P_TLS_VERIFY_HOSTNAME", true))) {
+            throw new IllegalStateException("Production P2P requires TLS and verified peer certificate SANs");
+        }
         this.config = config;
         if (config.tlsEnabled()) {
             try {
@@ -121,9 +131,9 @@ public final class PeerP2pSocketFactory {
     }
 
     private static void configureHostnameVerification(SSLSocket socket) {
-        // Existing LAN/dev certificates may not include a SAN for each peer address.
-        // Require this option for a public Internet deployment with peer-specific certs.
-        if (EnvConfig.flag("P2P_TLS_VERIFY_HOSTNAME", false)) {
+        // Secure default: verify SAN/hostname for every outbound P2P TLS connection.
+        // Explicit false is supported only for controlled DEVELOPMENT/LAN certificate testing.
+        if (EnvConfig.flag("P2P_TLS_VERIFY_HOSTNAME", true)) {
             SSLParameters params = socket.getSSLParameters();
             params.setEndpointIdentificationAlgorithm("HTTPS");
             socket.setSSLParameters(params);
