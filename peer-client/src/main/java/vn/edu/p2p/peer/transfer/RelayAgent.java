@@ -62,7 +62,9 @@ public final class RelayAgent implements AutoCloseable {
                         try {
                             acceptors.execute(() -> accept(token));
                         } catch (RejectedExecutionException e) {
-                            return;
+                            // Saturated acceptor pool: reject this incoming request but keep
+                            // the control channel alive for future downloads.
+                            LOG.warning("Relay incoming connection rejected: acceptor workers busy");
                         }
                     }
                 }
