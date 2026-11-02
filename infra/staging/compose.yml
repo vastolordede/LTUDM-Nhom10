@@ -22,6 +22,12 @@ services:
       context: ../..
       dockerfile: infra/staging/Tracker.Dockerfile
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "java", "-cp", "/app/lib/*", "vn.edu.p2p.tracker.tools.TrackerTcpHealthcheck", "127.0.0.1", "9000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -31,6 +37,8 @@ services:
       DB_PASSWORD: ${P2P_STAGING_DB_PASSWORD:?set a strong staging database password}
       TRACKER_PORT: 9000
       TRACKER_TLS_ENABLED: 'true'
+      P2P_PROFILE: production
+      P2P_INSECURE_LOOPBACK_DEMO: 'false'
       TRACKER_TLS_KEYSTORE: /run/secrets/tracker_keystore
       TRACKER_TLS_KEYSTORE_PASSWORD: ${P2P_STAGING_TLS_PASSWORD:?set keystore password}
       P2P_TICKET_SIGNING_KEY_FILE: /run/secrets/tracker_signing_key

@@ -149,3 +149,12 @@ psql -U postgres -d fileshare_p2p -f database/verify_schema.sql
 - Before every PR: `python tools/check_repo_markers.py`, `python tools/check_db_migrations.py`, `python tools/check_fxml_bindings.py`, `python tools/check_release_hygiene.py`, `gradlew.bat clean test build` on Windows.
 - Database migration order is v2..v8; check `docs/database_bootstrap_v6.md`, back up populated databases and apply ONLY the missing migration scripts. `migration_checksums.json` checks source integrity, **not** whether migration ran in your DB.
 - Do not apply ZIPs or migrations to production without a backup and explicit approval.
+
+## Stabilization ZIP11-18: safety and release gates
+
+- One-time key generation: `gradlew.bat :tracker-server:generateTicketKeys`. Copy only the public `.b64` file to each Peer, or import it with fingerprint verification in the Login UI. Never ship private keys.
+- For LAN set `P2P_PROFILE=lan` for Tracker and Peers; demo bypass is forbidden outside localhost. For Internet set `P2P_PROFILE=production`, configure Tracker TLS, P2P TLS and certificate SAN/hostname verification.
+- File sources now include Tracker catalog SHA-256; upgrade Tracker and Peer clients together (ZIP14 wire format).
+- Static preflight: `python tools/check_repo_markers.py`, `python tools/check_db_migrations.py`, `python tools/check_docker_context.py`, `python tools/check_fxml_bindings.py`, `python tools/check_release_hygiene.py`.
+- See `docs/RELEASE_ACCEPTANCE_MATRIX.tsv` for external/manual tests explicitly not run during patch authoring.
+- Caution: Ed25519 bearer tickets do not provide immediate revocation or proof-of-possession requester identity. Use TLS and avoid claiming exhaustive anti-replay protection.

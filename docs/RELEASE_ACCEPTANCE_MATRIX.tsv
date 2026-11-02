@@ -1,0 +1,14 @@
+ID	Acceptance gate	Environment	Status	Evidence
+R06	>2GB and >2000 pieces SHA-256	3-peer LAN	NOT_RUN	NO_EVIDENCE
+R09_R10_R11	LAN/Direct/Relay mode and failover	2 networks + VPS	NOT_RUN	NO_EVIDENCE
+R13_R14_R47	Migrate staging DB copy v1-v8 and verify schema	PostgreSQL	NOT_RUN	NO_EVIDENCE
+R17_R18_R43	TLS hostname/cert + Ed25519 ticket positive/negative	LAN and production-like	NOT_RUN	NO_EVIDENCE
+R20_R23_R24	3 Peer multi-source with offline source and resume	LAN 3 devices/processes	NOT_RUN	NO_EVIDENCE
+R25_R26_R27_R28	Disk-full, symlink, selective folder and restore	Windows NTFS	NOT_RUN	NO_EVIDENCE
+R34_R35_R49_R50	Staging VPS DB private, TLS and Internet SHA-256	Ubuntu VPS + 2 external networks	NOT_RUN	NO_EVIDENCE
+R48	Windows app-image on clean Win10/Win11 without JDK	Windows	NOT_RUN	NO_EVIDENCE
+R51_R58	Repeatable automated/manual evidence for teacher 10+7	GitHub Actions + manual	NOT_RUN	NO_EVIDENCE
+R54	All CI checks green on PR, release artifacts	GitHub Actions	NOT_RUN	NO_EVIDENCE
+R55_R60	Backup restore, restart, upgrade, resume preservation	PostgreSQL + Windows	NOT_RUN	NO_EVIDENCE
+R61	Unshare/privacy/log inspection	LAN	NOT_RUN	NO_EVIDENCE
+R68	Complete UI navigation Register->Logout	Windows GUI	NOT_RUN	NO_EVIDENCE
