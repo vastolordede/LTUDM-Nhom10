@@ -39,6 +39,8 @@
         <Button fx:id="diagnoseTrackerButton" text="Test connection"
                 onAction="#onDiagnoseTracker"/>
     </HBox>
+    <Button fx:id="importTrackerKeyButton" text="Import Tracker PUBLIC key (verify fingerprint)"
+            onAction="#onImportTrackerPublicKey" maxWidth="320"/>
 
     <TextField fx:id="usernameField"
                promptText="Username"
