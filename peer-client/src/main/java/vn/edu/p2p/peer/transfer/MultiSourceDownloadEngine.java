@@ -206,6 +206,16 @@ public final class MultiSourceDownloadEngine {
         }
 
         try {
+            // Zero-byte shared files contain no pieces. Ensure a real empty file exists
+            // before final SHA-256 and history completion; reject symbolic-link targets.
+            if (metadata.fileSize() == 0L) {
+                if (Files.isSymbolicLink(targetFilePath)) {
+                    throw new IOException("Cannot download into a symlink");
+                }
+                Files.createDirectories(targetFilePath.toAbsolutePath().getParent());
+                Files.write(targetFilePath, new byte[0], java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+            }
             // Bước 2 (S41 - Resume): Kiểm tra nếu file đích đã tồn tại một phần trên đĩa,
             // quét và giữ lại các piece đã khớp SHA-256 để tải tiếp thay vì tải lại từ đầu.
             BitSet resumedPieces = inspectExistingPiecesForResume(targetFilePath, metadata);
