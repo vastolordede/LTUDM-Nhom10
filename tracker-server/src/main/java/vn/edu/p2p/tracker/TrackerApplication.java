@@ -3,6 +3,7 @@ package vn.edu.p2p.tracker;
 import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.tracker.auth.BCryptPasswordService;
 import vn.edu.p2p.common.security.PeerAccessTickets;
+import vn.edu.p2p.common.security.SecurityProfile;
 import vn.edu.p2p.tracker.auth.DefaultAuthService;
 import vn.edu.p2p.tracker.catalog.FileCatalogService;
 import vn.edu.p2p.tracker.catalog.FileRepository;
@@ -56,6 +57,9 @@ public final class TrackerApplication {
 
     public static void main(String[] args) throws Exception {
         TrackerSettings settings = TrackerSettings.load();
+        SecurityProfile.requireTracker(
+                SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development")),
+                settings.tls().enabled(), PeerAccessTickets.localInsecureDemoEnabled());
         TrackerLogging.configure(settings.logLevel());
 
         DatabaseConnectionFactory connectionFactory =
