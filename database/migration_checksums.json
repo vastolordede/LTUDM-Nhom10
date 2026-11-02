@@ -1,0 +1,37 @@
+{
+  "note": "Fingerprint only; do not assume a historical DB has run any migration.",
+  "migrations": [
+    {
+      "path": "database/schema.sql",
+      "sha256": "ee6a207552daad6d8edf1cb17e7df7b6440f60bbca569ee40aea31e833d1a9b2"
+    },
+    {
+      "path": "database/migration_v2.sql",
+      "sha256": "9a5ca882a9ca23004da3b1f3659ae96704fd5e44728a0d631499b36ac61c90c2"
+    },
+    {
+      "path": "database/migration_v3.sql",
+      "sha256": "f70e2bbd8647f8f3197d822c8ee6154ca7a3ef0a0e39d1a69b330a67ed85d562"
+    },
+    {
+      "path": "database/migration_v4.sql",
+      "sha256": "1d67c8144ddcef530b59dffeb8964161619526054ca09c1334dfa5c944e62832"
+    },
+    {
+      "path": "database/migration_v5.sql",
+      "sha256": "a97fced217eed82292118a89c86b9dc1282bd8749cc9e3c5cad2631346c5db37"
+    },
+    {
+      "path": "database/migration_v6.sql",
+      "sha256": "0d6cc01592b90ed2df5600f56c7dd84067f964a4a019e80bf69967e5e8dce755"
+    },
+    {
+      "path": "database/migration_v7.sql",
+      "sha256": "9c2ebff2b4c76efc6615841d69143dd7a68b0453a776293524a2bc28b96d1693"
+    },
+    {
+      "path": "database/migration_v8.sql",
+      "sha256": "ea6a5c7b9632079c6154b8bc8e2af5453b86fe0b87f772704ae6ae7bc1f3a850"
+    }
+  ]
+}
