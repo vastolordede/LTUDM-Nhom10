@@ -24,12 +24,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+      - name: Normalize Unix Gradle launcher permissions
+        run: chmod +x gradlew
+      - name: Reject unresolved Git conflict markers
+        run: python3 tools/check_repo_markers.py
+      - name: Verify SQL migration manifest
+        run: python3 tools/check_db_migrations.py
       - name: Check FXML controller bindings
         run: python3 tools/check_fxml_bindings.py
       - name: Check repository secret hygiene
         run: python3 tools/check_release_hygiene.py
       - name: JVM tests and build
-        run: gradle --no-daemon clean check build --stacktrace
+        run: ./gradlew --no-daemon clean check build --stacktrace
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -57,7 +63,7 @@ jobs:
         with:
           gradle-version: '8.10.2'
       - name: Build Windows Gradle application distribution
-        run: gradle --no-daemon clean :peer-client:installDist :peer-client:test --stacktrace
+        run: .\gradlew.bat --no-daemon clean :peer-client:installDist :peer-client:test --stacktrace
       - name: Create bundled app-image using JDK jpackage
         shell: pwsh
         run: ./scripts/build_windows.ps1

@@ -1,0 +1,13 @@
+# Canonical Linux / CI scripts and Java sources; Windows launchers use CRLF.
+* text=auto
+*.java text eol=lf
+*.gradle text eol=lf
+*.sh text eol=lf
+gradlew text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
