@@ -196,6 +196,7 @@ class TrackerEndToEndIntegrationTest {
                         FileSourcesResponse.class
                 );
                 assertEquals(101L, sourcesPayload.fileId());
+                assertEquals("a".repeat(64), sourcesPayload.fileHash());
                 assertEquals(1, sourcesPayload.sources().size());
 
                 FileSourceInfo source = sourcesPayload.sources().getFirst();
@@ -612,6 +613,11 @@ class TrackerEndToEndIntegrationTest {
 
         private FixedFileSourceRepository(FileSourceRecord source) {
             this.source = source;
+        }
+
+        @Override
+        public Optional<String> findReadyCatalogHash(long fileId) {
+            return fileId == source.fileId() ? Optional.of("a".repeat(64)) : Optional.empty();
         }
 
         @Override

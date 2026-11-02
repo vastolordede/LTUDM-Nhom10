@@ -13,6 +13,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public final class JdbcFileSourceRepository implements FileSourceRepository {
@@ -20,6 +21,18 @@ public final class JdbcFileSourceRepository implements FileSourceRepository {
 
     public JdbcFileSourceRepository(DatabaseConnectionFactory connectionFactory) {
         this.connectionFactory = connectionFactory;
+    }
+
+    @Override
+    public Optional<String> findReadyCatalogHash(long fileId) throws SQLException {
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement st = connection.prepareStatement(
+                     "SELECT file_hash FROM files WHERE file_id = ? AND publish_status = 'READY'")) {
+            st.setLong(1, fileId);
+            try (ResultSet rs = st.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+            }
+        }
     }
 
     @Override

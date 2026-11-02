@@ -271,7 +271,12 @@ public final class FolderController {
                     }
                     DownloadPreflight.check(target, f.fileSize());
 
-                    List<FileSourceInfo> sources = sourceClient.findSources(sessionId, f.fileId()).sources();
+                    var sourceResponse = sourceClient.findSources(sessionId, f.fileId());
+                    if (sourceResponse.fileHash() == null
+                            || !sourceResponse.fileHash().equalsIgnoreCase(f.fileHash())) {
+                        throw new IllegalStateException("Folder child hash differs from Tracker catalog");
+                    }
+                    List<FileSourceInfo> sources = sourceResponse.sources();
                     if (planner != null) {
                         planner.remember(sources);
                     }
@@ -281,7 +286,7 @@ public final class FolderController {
                     } catch (Exception ignored) {
                     }
                     DownloadSessionResult r = engine.downloadFile(
-                            f.fileId(), sources, target, null, cancel, transferId);
+                            f.fileId(), sources, target, null, cancel, transferId, f.fileHash());
                     boolean historySaved = false;
                     try {
                         historyClient.reportTransferResult(sessionId, r);

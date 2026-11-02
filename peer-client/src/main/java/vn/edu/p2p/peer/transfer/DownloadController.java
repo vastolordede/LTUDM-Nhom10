@@ -40,6 +40,7 @@ public final class DownloadController {
     /** Selected from Explore/Search, never entered as a raw ID. */
     private long selectedFileId;
     private long selectedFileSize = -1L;
+    private String selectedFileHash;
 
     @FXML
     private TextField fileNameField;
@@ -152,6 +153,7 @@ public final class DownloadController {
         selectedFileId = item.fileId();
         startDownloadButton.setDisable(false);
         selectedFileSize = item.fileSize();
+        selectedFileHash = item.fileHash();
         fileNameField.setText(item.fileName());
         statusLabel.setText("Đã chọn: " + item.fileName() + " (" + item.fileSize() + " bytes). Nhấn Bắt đầu tải.");
     }
@@ -183,6 +185,7 @@ public final class DownloadController {
             return;
         }
         final long fileId = selectedFileId;
+        final String trustedSearchHash = selectedFileHash;
 
         String targetFileName = fileNameField.getText() == null || fileNameField.getText().isBlank()
                 ? ("downloaded-file-" + fileId + ".bin")
@@ -228,7 +231,8 @@ public final class DownloadController {
         progressBar.setProgress(0.0);
         statusLabel.setText("Đang truy vấn danh sách Peer nguồn từ Tracker...");
 
-        downloadExecutor.submit(() -> executeDownloadTask(fileId, targetFilePath, strategy));
+        downloadExecutor.submit(() -> executeDownloadTask(fileId, targetFilePath, strategy,
+                trustedSearchHash));
     }
 
     @FXML
@@ -242,10 +246,18 @@ public final class DownloadController {
     private void executeDownloadTask(
             long fileId,
             Path targetFilePath,
-            PieceScheduler.Strategy strategy
+            PieceScheduler.Strategy strategy,
+            String trustedSearchHash
     ) {
         try {
             FileSourcesResponse sourcesResponse = fileSourceClientService.findSources(sessionId, fileId);
+            String catalogHash = sourcesResponse.fileHash();
+            if (catalogHash == null || catalogHash.isBlank()) {
+                throw new IllegalStateException("Tracker did not provide a trusted catalog file hash");
+            }
+            if (trustedSearchHash != null && !trustedSearchHash.equalsIgnoreCase(catalogHash)) {
+                throw new IllegalStateException("Selected file hash differs from Tracker catalog; retry Search");
+            }
             List<FileSourceInfo> sources = sourcesResponse.sources();
 
             Platform.runLater(() -> {
@@ -316,7 +328,8 @@ public final class DownloadController {
             };
 
             DownloadSessionResult current = engine.downloadFile(
-                    fileId, sources, targetFilePath, uiListener, activeCancelSignal, initialTransferId);
+                    fileId, sources, targetFilePath, uiListener, activeCancelSignal,
+                    initialTransferId, catalogHash);
 
             // D59: nguồn rớt giữa chừng -> hỏi lại Tracker lấy nguồn mới, tải tiếp phần còn thiếu (Resume)
             for (int attempt = 1; attempt <= 3
@@ -335,7 +348,8 @@ public final class DownloadController {
                     planner.remember(fresh);
                 }
                 current = engine.downloadFile(
-                        fileId, fresh, targetFilePath, uiListener, activeCancelSignal, initialTransferId);
+                        fileId, fresh, targetFilePath, uiListener, activeCancelSignal,
+                        initialTransferId, catalogHash);
             }
             final DownloadSessionResult result = current;
 
