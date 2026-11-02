@@ -96,6 +96,11 @@ public final class PeerUploadServer implements AutoCloseable {
         if (running.get()) {
             return;
         }
+        if (ticketVerificationKey == null && !allowInsecureLoopbackDemo) {
+            throw new IOException("Missing Tracker Ed25519 PUBLIC key for Peer upload server. "
+                    + "Copy tracker-public.key.b64 to ~/.fileshare-p2p or set "
+                    + "P2P_TICKET_PUBLIC_KEY_FILE; do not disable ticket checks on LAN.");
+        }
         serverSocket = socketFactory.openServerSocket(listeningPort);
         running.set(true);
 

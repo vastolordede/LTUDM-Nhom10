@@ -48,28 +48,56 @@ public final class PeerAccessTickets {
     /** Only use for Tracker boot; fail fast before opening any sockets. */
     public static PrivateKey requiredTrackerKey() {
         // Staging: prefer an externally mounted read-only secret rather than env vars.
-        String file = setting("P2P_TICKET_SIGNING_KEY_FILE");
-        String base64;
-        if (file != null) {
-            try {
-                base64 = java.nio.file.Files.readString(java.nio.file.Path.of(file),
-                        StandardCharsets.US_ASCII).trim();
-            } catch (java.io.IOException e) {
-                throw new IllegalStateException("Cannot read Tracker signing key file", e);
-            }
-        } else {
-            base64 = setting("P2P_TICKET_SIGNING_KEY_B64");
+        String explicitFile = setting("P2P_TICKET_SIGNING_KEY_FILE");
+        String base64 = explicitFile != null ? readKeyFile(explicitFile) : setting("P2P_TICKET_SIGNING_KEY_B64");
+        if (base64 == null) {
+            java.nio.file.Path fallback = defaultKeyDirectory().resolve("tracker-private.key.b64");
+            if (java.nio.file.Files.exists(fallback)) base64 = readKeyFile(fallback);
         }
         if (base64 == null || base64.isBlank()) {
-            throw new IllegalStateException("Tracker Ed25519 signing key file or env is required");
+            throw new IllegalStateException("Tracker Ed25519 signing key missing. Run "
+                    + ":tracker-server:generateTicketKeys once and keep the private key on Tracker only.");
         }
-        return decodePrivateKey(base64);
+        PrivateKey key = decodePrivateKey(base64);
+        // When a companion public key is present, detect accidental key-pair mismatch at startup
+        // rather than allowing peers to fail with ACCESS_DENIED after successful login.
+        PublicKey publicKey = optionalPeerKey();
+        if (publicKey != null && !verify(publicKey,
+                issue(key, 1L, "startup-check", "startup-check", Instant.now()),
+                1L, "startup-check", Instant.now())) {
+            throw new IllegalStateException("Tracker signing key does not match configured public key");
+        }
+        return key;
     }
 
     /** A missing key makes the upload server deny requests, not silently allow them. */
     public static PublicKey optionalPeerKey() {
-        String base64 = setting("P2P_TICKET_PUBLIC_KEY_B64");
+        String file = setting("P2P_TICKET_PUBLIC_KEY_FILE");
+        String base64 = file != null ? readKeyFile(file) : setting("P2P_TICKET_PUBLIC_KEY_B64");
+        if (base64 == null) {
+            java.nio.file.Path fallback = defaultKeyDirectory().resolve("tracker-public.key.b64");
+            if (java.nio.file.Files.exists(fallback)) base64 = readKeyFile(fallback);
+        }
         return base64 == null ? null : decodePublicKey(base64);
+    }
+
+    private static java.nio.file.Path defaultKeyDirectory() {
+        return java.nio.file.Path.of(System.getProperty("user.home"), ".fileshare-p2p");
+    }
+
+    private static String readKeyFile(String rawPath) {
+        return readKeyFile(LocalEnv.load().resolvePath(rawPath));
+    }
+
+    private static String readKeyFile(java.nio.file.Path path) {
+        try {
+            if (java.nio.file.Files.isSymbolicLink(path)) {
+                throw new IllegalStateException("Refusing symlinked key file: " + path);
+            }
+            return java.nio.file.Files.readString(path, StandardCharsets.US_ASCII).trim();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot read Ed25519 key file: " + path, e);
+        }
     }
 
     public static boolean localInsecureDemoEnabled() {

@@ -28,3 +28,12 @@ tasks.register('createUser', JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'vn.edu.p2p.tracker.tools.CreateUserTool'
 }
+
+// One-time local Ed25519 provisioning. Does NOT overwrite existing keys.
+tasks.register('generateTicketKeys', JavaExec) {
+    group = 'application'
+    description = 'Create local Ed25519 signing/public key pair (private is never printed)'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'vn.edu.p2p.tracker.tools.TicketKeySetupTool'
+    if (project.hasProperty('ticketKeysDir')) args project.property('ticketKeysDir').toString()
+}
