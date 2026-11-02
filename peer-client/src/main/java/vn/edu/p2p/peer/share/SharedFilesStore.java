@@ -34,12 +34,25 @@ public final class SharedFilesStore {
     }
 
     public synchronized List<Entry> load() {
-        if (!Files.isRegularFile(storeFile)) return new ArrayList<>();
+        try {
+            return readStoredEntries();
+        } catch (IOException e) {
+            // The UI can stay open, but writes must NOT overwrite a corrupt store.
+            return new ArrayList<>();
+        }
+    }
+
+    private List<Entry> readStoredEntries() throws IOException {
+        if (!Files.exists(storeFile)) return new ArrayList<>();
+        if (Files.isSymbolicLink(storeFile) || !Files.isRegularFile(storeFile)) {
+            throw new IOException("Unsafe shared files store: " + storeFile);
+        }
         try {
             Entry[] arr = MAPPER.readValue(storeFile.toFile(), Entry[].class);
+            if (arr == null) throw new IOException("Invalid shared files store: " + storeFile);
             return new ArrayList<>(List.of(arr));
-        } catch (IOException e) {
-            return new ArrayList<>(); // file hỏng: coi như chưa có gì
+        } catch (RuntimeException e) {
+            throw new IOException("Invalid shared files store: " + storeFile, e);
         }
     }
 
@@ -49,7 +62,8 @@ public final class SharedFilesStore {
         for (Entry e : load()) {
             Path p = Path.of(e.path());
             try {
-                if (Files.isRegularFile(p) && Files.size(p) == e.fileSize()) valid.add(e);
+                if (Files.isRegularFile(p) && !Files.isSymbolicLink(p)
+                        && Files.size(p) == e.fileSize() && smallFileHashMatches(e, p)) valid.add(e);
             } catch (IOException ignored) {
                 // bỏ qua entry lỗi
             }
@@ -57,20 +71,30 @@ public final class SharedFilesStore {
         return valid;
     }
 
+    /** Verify small files on restore; large files are validated piece-by-piece when uploaded. */
+    private static boolean smallFileHashMatches(Entry entry, Path file) throws IOException {
+        if (entry.fileSize() > 32L * 1024 * 1024 || entry.fileHash() == null
+                || !entry.fileHash().matches("[0-9a-fA-F]{64}")) return true;
+        return entry.fileHash().equalsIgnoreCase(FileHashUtil.sha256(file));
+    }
+
     public synchronized void add(Entry entry) throws IOException {
-        List<Entry> all = load();
+        List<Entry> all = readStoredEntries();
         all.removeIf(x -> x.fileHash().equalsIgnoreCase(entry.fileHash()));
         all.add(entry);
         save(all);
     }
 
     public synchronized void removeByHash(String fileHash) throws IOException {
-        List<Entry> all = load();
+        List<Entry> all = readStoredEntries();
         if (all.removeIf(x -> x.fileHash().equalsIgnoreCase(fileHash))) save(all);
     }
 
     private void save(List<Entry> entries) throws IOException {
         Path dir = storeFile.toAbsolutePath().getParent();
+        if (Files.isSymbolicLink(storeFile) || (dir != null && Files.isSymbolicLink(dir))) {
+            throw new IOException("Unsafe shared files store path: " + storeFile);
+        }
         if (dir != null) Files.createDirectories(dir);
         Path tmp = storeFile.resolveSibling(storeFile.getFileName() + ".tmp");
         MAPPER.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), entries);
