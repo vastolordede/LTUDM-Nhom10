@@ -1,37 +1,37 @@
 {
-  "note": "Fingerprint only; do not assume a historical DB has run any migration.",
+  "note": "SHA-256 of canonical LF SQL bytes (CRLF/LF checkout independent); historical DB migrations are NOT inferred from this manifest.",
   "migrations": [
     {
       "path": "database/schema.sql",
-      "sha256": "ee6a207552daad6d8edf1cb17e7df7b6440f60bbca569ee40aea31e833d1a9b2"
+      "sha256": "453f0d2d9de5b2daa77d758294309032e417a0b357c9cda001def75a85ab7994"
     },
     {
       "path": "database/migration_v2.sql",
-      "sha256": "9a5ca882a9ca23004da3b1f3659ae96704fd5e44728a0d631499b36ac61c90c2"
+      "sha256": "ab61991ee83828ccc502a8ffabc53d548275d47623ed25d4808ce30c57911f18"
     },
     {
       "path": "database/migration_v3.sql",
-      "sha256": "f70e2bbd8647f8f3197d822c8ee6154ca7a3ef0a0e39d1a69b330a67ed85d562"
+      "sha256": "1bb96f8118d93b1918a44503ad25b39a36a30428d9fc7ea87e8d3cb1ee5caffc"
     },
     {
       "path": "database/migration_v4.sql",
-      "sha256": "1d67c8144ddcef530b59dffeb8964161619526054ca09c1334dfa5c944e62832"
+      "sha256": "0c9fad7df0413125ec2b8b193784113acf6271cd8e96fe9314b10c30fd5de94e"
     },
     {
       "path": "database/migration_v5.sql",
-      "sha256": "a97fced217eed82292118a89c86b9dc1282bd8749cc9e3c5cad2631346c5db37"
+      "sha256": "a620d90db9f3ae6f51610f4ac51596e21ae99c3eb41ae4cdb26cd8b20caaa523"
     },
     {
       "path": "database/migration_v6.sql",
-      "sha256": "0d6cc01592b90ed2df5600f56c7dd84067f964a4a019e80bf69967e5e8dce755"
+      "sha256": "ebc189c8caf626ccfc897508b86ff48c345eeba67ac7dd554ee0847215bdb358"
     },
     {
       "path": "database/migration_v7.sql",
-      "sha256": "9c2ebff2b4c76efc6615841d69143dd7a68b0453a776293524a2bc28b96d1693"
+      "sha256": "63311cb700f7c894d82d4ac5e8b513bc322bd43b0b567909cf722daebb589a2c"
     },
     {
       "path": "database/migration_v8.sql",
-      "sha256": "ea6a5c7b9632079c6154b8bc8e2af5453b86fe0b87f772704ae6ae7bc1f3a850"
+      "sha256": "c13db98c028e9bc86915c9de33df206cee91aadb666f1c45ed7d2174ae9e3e2f"
     }
   ]
 }
