@@ -1,9 +1,11 @@
 package vn.edu.p2p.peer.transfer;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
+import vn.edu.p2p.common.dto.PieceInfo;
 import vn.edu.p2p.common.dto.PieceRequest;
 import vn.edu.p2p.common.dto.PieceResponseHeader;
 import vn.edu.p2p.common.dto.TicketRevocation;
@@ -22,8 +24,11 @@ import vn.edu.p2p.peer.share.FileMetadataBuilder;
 import java.net.Socket;
 import java.net.ServerSocket;
 import java.io.IOException;
+import java.io.DataOutputStream;
+import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.time.Clock;
@@ -106,6 +111,125 @@ class PeerUploadProofIntegrationTest {
             assertFalse(server.acceptThreadAlive());
             assertTrue(server.workersTerminated());
             server.close();
+        }
+    }
+
+    @Test
+    @Timeout(value = 5, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void malformedFramesCloseOnlyTheBadConnectionAndUploaderKeepsServing() throws Exception {
+        Fixture fixture = createFixture();
+        try (PeerUploadServer server = fixture.server()) {
+            assertMalformedFrameClosed(server.listeningPort(), -1, null);
+            assertMalformedFrameClosed(server.listeningPort(), 0, null);
+            assertMalformedFrameClosed(server.listeningPort(), ProtocolCodec.MAX_JSON_BYTES + 1, null);
+            assertMalformedFrameClosed(server.listeningPort(), 40,
+                    "{\"version\":3".getBytes(StandardCharsets.UTF_8));
+            assertMalformedFrameClosed(server.listeningPort(), 3,
+                    "not".getBytes(StandardCharsets.UTF_8));
+            byte[] unknownType = "{\"version\":3,\"type\":\"UNKNOWN_REQUEST\"}"
+                    .getBytes(StandardCharsets.UTF_8);
+            assertMalformedFrameClosed(server.listeningPort(), unknownType.length, unknownType);
+
+            PeerDownloadClient client = new PeerDownloadClient(fixture.socketFactory(),
+                    fixture.requesterKeys().getPrivate(), fixture.clock());
+            assertEquals(2, client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                    UPLOADER_ID, FILE_ID, fixture.ticket()).toBitSet().cardinality());
+        }
+    }
+
+    @Test
+    @Timeout(value = 5, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void invalidUploaderDtoReturnsGenericErrorWithoutLeakingDetails() throws Exception {
+        Fixture fixture = createFixture();
+        try (PeerUploadServer server = fixture.server()) {
+            MessageEnvelope nullPayload = MessageEnvelope.request(MessageType.GET_BITFIELD_REQUEST,
+                    UUID.randomUUID().toString(), null);
+            Exchange nullResult = exchange(fixture, nullPayload, false);
+            assertDenied(nullResult);
+
+            MessageEnvelope invalidPiece = ProtocolCodec.fromJson(
+                    "{\"version\":3,\"type\":\"REQUEST_PIECE\",\"requestId\":\"invalid-piece\","
+                            + "\"payload\":{\"fileId\":0,\"pieceIndex\":-1}}");
+            Exchange invalidResult = exchange(fixture, invalidPiece, false);
+            assertEquals(ResponseStatus.ERROR, invalidResult.response().status());
+            assertEquals("INVALID_P2P_REQUEST", invalidResult.response().errorCode());
+            assertEquals("Invalid P2P request", invalidResult.response().message());
+            assertFalse(invalidResult.response().message().contains("fileId"));
+            assertFalse(invalidResult.response().message().contains("proof"));
+
+            Exchange unavailablePiece = exchange(fixture,
+                    pieceRequest(fixture, fixture.requesterKeys().getPrivate(),
+                            UPLOADER_ID, FILE_ID, 2, fixture.ticket()), true);
+            assertEquals(ResponseStatus.ERROR, unavailablePiece.response().status());
+            assertEquals("PIECE_NOT_AVAILABLE", unavailablePiece.response().errorCode());
+        }
+    }
+
+    @Test
+    @Timeout(value = 5, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void zeroByteFileMetadataAndBitfieldRoundTripOverUploaderProtocol() throws Exception {
+        Path emptyFile = tempDir.resolve("empty-protocol.bin");
+        Files.write(emptyFile, new byte[0]);
+        Fixture fixture = createFixture(emptyFile, new FileMetadataBuilder(3).build(emptyFile), 0);
+        try (PeerUploadServer server = fixture.server()) {
+            PeerDownloadClient client = new PeerDownloadClient(fixture.socketFactory(),
+                    fixture.requesterKeys().getPrivate(), fixture.clock());
+            var bitfield = client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                    UPLOADER_ID, FILE_ID, fixture.ticket());
+            assertEquals(0L, bitfield.metadata().fileSize());
+            assertEquals(0, bitfield.metadata().pieceCount());
+            assertEquals(0, bitfield.toBitSet().cardinality());
+        }
+    }
+
+    @Test
+    @Timeout(value = 10, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void sparseFilePieceAtOffsetBeyondTwoGiBTransfersWithoutIntOverflow() throws Exception {
+        int pieceSize = 1024 * 1024;
+        int pieceIndex = 2048;
+        long offset = (long) pieceIndex * pieceSize;
+        long fileSize = offset + pieceSize;
+        Path sparseFile = tempDir.resolve("sparse-over-2g.bin");
+        byte[] expected = new byte[pieceSize];
+        for (int i = 0; i < expected.length; i++) expected[i] = (byte) (i * 31);
+        try (RandomAccessFile file = new RandomAccessFile(sparseFile.toFile(), "rw")) {
+            file.setLength(fileSize);
+            file.seek(offset);
+            file.write(expected);
+        }
+        String lastPieceHash = FileHashUtil.sha256(expected, 0, expected.length);
+        java.util.List<PieceInfo> pieces = new java.util.ArrayList<>(pieceIndex + 1);
+        for (int i = 0; i <= pieceIndex; i++) {
+            pieces.add(new PieceInfo(i, pieceSize,
+                    i == pieceIndex ? lastPieceHash : "a".repeat(64)));
+        }
+        FileMetadata metadata = new FileMetadata("sparse-over-2g.bin", fileSize,
+                "b".repeat(64), pieceSize, pieces.size(), pieces);
+        Fixture fixture = createFixture(sparseFile, metadata, 0);
+        try (PeerUploadServer server = fixture.server()) {
+            PeerDownloadClient client = new PeerDownloadClient(fixture.socketFactory(),
+                    fixture.requesterKeys().getPrivate(), fixture.clock());
+            var result = client.downloadPiece("127.0.0.1", server.listeningPort(),
+                    UPLOADER_ID, FILE_ID, pieceIndex, fixture.ticket());
+            assertEquals(pieceIndex, result.header().pieceIndex());
+            assertEquals(pieceSize, result.header().pieceLength());
+            assertArrayEquals(expected, result.data());
+            assertEquals(offset, LocalFileRegistry.pieceOffset(pieceIndex, pieceSize));
+            assertEquals(pieceSize, server.totalBytesUploaded());
+
+            Path partialDownload = tempDir.resolve("sparse-download-over-2g.bin");
+            LocalFileRegistry destination = new LocalFileRegistry();
+            destination.registerDownloadingFile(FILE_ID + 100, partialDownload, metadata,
+                    new java.util.BitSet());
+            destination.writePieceBytes(FILE_ID + 100, pieceIndex, result.data());
+            assertTrue(destination.find(FILE_ID + 100).orElseThrow().hasPiece(pieceIndex));
+            try (RandomAccessFile file = new RandomAccessFile(partialDownload.toFile(), "r")) {
+                file.seek(offset);
+                byte[] written = new byte[pieceSize];
+                file.readFully(written);
+                assertArrayEquals(expected, written);
+            }
+            assertEquals(fileSize, Files.size(partialDownload));
         }
     }
 
@@ -325,6 +449,11 @@ class PeerUploadProofIntegrationTest {
         Path file = tempDir.resolve("proof-content.bin");
         Files.write(file, new byte[]{1, 2, 3, 4, 5, 6});
         FileMetadata metadata = new FileMetadataBuilder(3).build(file);
+        return createFixture(file, metadata, listeningPort);
+    }
+
+    private Fixture createFixture(Path file, FileMetadata metadata, int listeningPort)
+            throws Exception {
         LocalFileRegistry registry = new LocalFileRegistry();
         registry.registerCompleteFile(FILE_ID, file, metadata);
         registry.registerCompleteFile(FILE_ID + 1, file, metadata);
@@ -343,6 +472,19 @@ class PeerUploadProofIntegrationTest {
                 UPLOADER_ID, requesterKeys.getPublic(), NOW);
         return new Fixture(file, metadata, trackerKeys, requesterKeys, ticket, clock, guard,
                 ticketRevocations, socketFactory, server);
+    }
+
+    private static void assertMalformedFrameClosed(int port, int declaredLength, byte[] partial)
+            throws Exception {
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(1_000);
+            DataOutputStream output = new DataOutputStream(socket.getOutputStream());
+            output.writeInt(declaredLength);
+            if (partial != null) output.write(partial);
+            output.flush();
+            if (partial != null) socket.shutdownOutput();
+            assertEquals(-1, socket.getInputStream().read());
+        }
     }
 
     private static int freePort() throws IOException {

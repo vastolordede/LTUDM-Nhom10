@@ -36,8 +36,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class LoginController {
+    private static final Logger LOG = Logger.getLogger(LoginController.class.getName());
     private static final Duration TRACKER_LOGOUT_TIMEOUT = Duration.ofSeconds(3);
     private static final Duration APP_SHUTDOWN_TIMEOUT = Duration.ofSeconds(4);
 
@@ -114,10 +117,10 @@ public final class LoginController {
             applyTrackerConfig(saved);
             statusLabel.setText("Tracker: " + saved.host() + ":" + saved.port());
         } catch (Exception e) {
-            initializationError = e.getMessage();
+            initializationError = TrackerConnectionDiagnostics.explain(e, activeTrackerConfig);
             loginButton.setDisable(true);
             registerButton.setDisable(true);
-            statusLabel.setText("Không thể khởi tạo Peer: " + e.getMessage());
+            statusLabel.setText("Không thể khởi tạo Peer: " + initializationError);
         }
     }
 
@@ -138,7 +141,8 @@ public final class LoginController {
             applyTrackerConfig(endpoint);
             statusLabel.setText("Tracker settings saved: " + endpoint.host() + ":" + endpoint.port());
         } catch (Exception e) {
-            statusLabel.setText("Tracker config error: " + TrackerConnectionDiagnostics.explain(e));
+            statusLabel.setText("Cấu hình Tracker lỗi: "
+                    + TrackerConnectionDiagnostics.explain(e, activeTrackerConfig));
         }
     }
 
@@ -179,18 +183,19 @@ public final class LoginController {
                     trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText())
                     .toConnectionConfig(trackerDefaults);
         } catch (Exception e) {
-            statusLabel.setText("Invalid Tracker config: " + e.getMessage());
+            statusLabel.setText("Cấu hình Tracker lỗi: "
+                    + TrackerConnectionDiagnostics.explain(e, activeTrackerConfig));
             return;
         }
         diagnoseTrackerButton.setDisable(true);
-        statusLabel.setText("Testing Tracker TCP/TLS connection...");
+        statusLabel.setText("Đang kiểm tra kết nối TCP/TLS tới Tracker...");
+        long generation = AuthClientService.sessionGeneration();
         CompletableFuture.supplyAsync(() -> TrackerConnectionDiagnostics.probe(target), ioExecutor)
                 .whenComplete((message, error) -> {
-                    long generation = AuthClientService.sessionGeneration();
                     postToCurrentUi(generation, () -> {
                         diagnoseTrackerButton.setDisable(false);
                         statusLabel.setText(error == null ? message
-                                : TrackerConnectionDiagnostics.explain(error));
+                                : TrackerConnectionDiagnostics.explain(error, target));
                     });
                 });
     }
@@ -201,14 +206,17 @@ public final class LoginController {
                 == SecurityProfile.Mode.PRODUCTION && !config.tlsEnabled()) {
             throw new IllegalStateException("Production Tracker connection requires TLS");
         }
-        if (trackerConnection != null) trackerConnection.close();
         activeTrackerConfig = config;
-        PeerIdentityStore identityStore = PeerIdentityStore.defaultStore();
-        PeerIdentity identity = identityStore.loadOrCreate();
-        trackerConnection = new TrackerConnection(config);
-        authClientService = new AuthClientService(trackerConnection, identityStore, identity);
-        heartbeatCoordinator = new HeartbeatCoordinator(authClientService::heartbeat,
-                new UiHeartbeatListener(), authClientService.ticketRevocations());
+        if (trackerConnection == null) {
+            PeerIdentityStore identityStore = PeerIdentityStore.defaultStore();
+            PeerIdentity identity = identityStore.loadOrCreate();
+            trackerConnection = new TrackerConnection(config);
+            authClientService = new AuthClientService(trackerConnection, identityStore, identity);
+            heartbeatCoordinator = new HeartbeatCoordinator(authClientService::heartbeat,
+                    new UiHeartbeatListener(), authClientService.ticketRevocations());
+        } else {
+            trackerConnection.reconfigure(config);
+        }
         initializationError = null;
         loginButton.setDisable(false);
         registerButton.setDisable(false);
@@ -234,15 +242,18 @@ public final class LoginController {
         int listeningPort = Integer.parseInt(listeningPortField.getText().trim());
         String username = usernameField.getText().trim();
         String password = passwordField.getText();
+        AuthClientService authService = authClientService;
+        TrackerConnectionConfig attemptConfig = activeTrackerConfig;
 
         setBusy(true);
         statusLabel.setText("Đang kết nối Tracker...");
         connectionStatusLabel.setText("Tracker: CONNECTING");
+        long attemptGeneration = AuthClientService.sessionGeneration();
 
         CompletableFuture
                 .supplyAsync(() -> {
                     try {
-                        return authClientService.login(
+                        return authService.login(
                                 username,
                                 password,
                                 listeningPort
@@ -252,14 +263,22 @@ public final class LoginController {
                     }
                 }, ioExecutor)
                 .whenComplete((session, throwable) -> {
-                    long generation = AuthClientService.sessionGeneration();
-                    postToCurrentUi(generation, () -> {
+                    long resultGeneration = AuthClientService.sessionGeneration();
+                    if (throwable == null) {
+                        if (resultGeneration != attemptGeneration + 1
+                                || authService.currentSession() != session) return;
+                    } else if (resultGeneration != attemptGeneration) {
+                        return;
+                    }
+                    postToCurrentUi(resultGeneration, () -> {
                         setBusy(false);
 
                         if (throwable != null) {
                             Throwable cause = unwrap(throwable);
+                            LOG.log(Level.WARNING, "Tracker login failed: "
+                                    + TrackerConnectionDiagnostics.classify(cause, attemptConfig), cause);
                             statusLabel.setText("Đăng nhập thất bại: "
-                                    + TrackerConnectionDiagnostics.explain(cause));
+                                    + safeAuthFailure(cause, attemptConfig, true));
                             connectionStatusLabel.setText("Tracker: OFFLINE");
                             return;
                         }
@@ -287,18 +306,24 @@ public final class LoginController {
         }
         setBusy(true);
         statusLabel.setText("Đang đăng ký tài khoản...");
+        long attemptGeneration = AuthClientService.sessionGeneration();
+        AuthClientService authService = authClientService;
+        TrackerConnectionConfig attemptConfig = activeTrackerConfig;
         CompletableFuture.supplyAsync(() -> {
             try {
-                return authClientService.register(username, password);
+                return authService.register(username, password);
             } catch (AuthClientException e) {
                 throw new AuthOperationRuntimeException(e);
             }
         }, ioExecutor).whenComplete((registered, throwable) -> {
-            long generation = AuthClientService.sessionGeneration();
-            postToCurrentUi(generation, () -> {
+            postToCurrentUi(attemptGeneration, () -> {
                 setBusy(false);
                 if (throwable != null) {
-                    statusLabel.setText("Đăng ký thất bại: " + unwrap(throwable).getMessage());
+                    Throwable cause = unwrap(throwable);
+                    LOG.log(Level.WARNING, "Tracker registration failed: "
+                            + TrackerConnectionDiagnostics.classify(cause, attemptConfig), cause);
+                    statusLabel.setText("Đăng ký thất bại: "
+                            + safeAuthFailure(cause, attemptConfig, false));
                     return;
                 }
                 passwordField.clear();
@@ -474,6 +499,34 @@ public final class LoginController {
             current = current.getCause();
         }
         return current;
+    }
+
+    private static String safeAuthFailure(Throwable failure, TrackerConnectionConfig config,
+                                          boolean login) {
+        AuthClientException authFailure = null;
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof AuthClientException authException) {
+                authFailure = authException;
+                break;
+            }
+        }
+        if (authFailure == null || "NETWORK_ERROR".equals(authFailure.errorCode())) {
+            return TrackerConnectionDiagnostics.explain(failure, config);
+        }
+        return switch (authFailure.errorCode()) {
+            case "INVALID_CREDENTIALS" -> "Tên đăng nhập hoặc mật khẩu không đúng.";
+            case "USERNAME_TAKEN" -> "Tên đăng nhập đã tồn tại.";
+            case "FEATURE_UNAVAILABLE" -> "Tracker hiện chưa bật chức năng đăng ký.";
+            case "LOCAL_KEY_ERROR", "LOCAL_IDENTITY_ERROR" ->
+                    "Không thể đọc khóa hoặc danh tính Peer cục bộ. Kiểm tra quyền truy cập.";
+            case "INVALID_RESPONSE" ->
+                    "Tracker trả về phản hồi không hợp lệ. Kiểm tra phiên bản Peer và Tracker.";
+            case "PEER_OWNERSHIP_MISMATCH" ->
+                    "Danh tính Peer đang gắn với tài khoản khác. Kiểm tra tài khoản và cấu hình Peer.";
+            default -> login
+                    ? "Tracker không chấp nhận đăng nhập. Kiểm tra thông tin và thử lại."
+                    : "Tracker không chấp nhận đăng ký. Kiểm tra thông tin và thử lại.";
+        };
     }
 
     private static String shortId(String id) {
