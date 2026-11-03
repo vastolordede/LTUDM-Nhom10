@@ -141,6 +141,23 @@ class TrackerEndToEndIntegrationTest {
         try {
             awaitServer(port, serverFailure);
 
+            try (Socket incompatibleClient = connect(port)) {
+                MessageEnvelope incompatibleResponse = roundTrip(
+                        incompatibleClient,
+                        new MessageEnvelope(
+                                MessageEnvelope.CURRENT_VERSION + 1,
+                                MessageType.HEARTBEAT,
+                                "unsupported-version",
+                                null,
+                                null,
+                                null,
+                                null
+                        )
+                );
+                assertEquals(ResponseStatus.ERROR, incompatibleResponse.status());
+                assertEquals("UNSUPPORTED_PROTOCOL_VERSION", incompatibleResponse.errorCode());
+            }
+
             UUID peerId = UUID.randomUUID();
 
             try (Socket firstClient = connect(port)) {

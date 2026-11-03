@@ -36,6 +36,26 @@ class RequestValidatorTest {
     }
 
     @Test
+    void shouldRejectUnsupportedProtocolVersion() {
+        MessageEnvelope request = new MessageEnvelope(
+                MessageEnvelope.CURRENT_VERSION + 1,
+                MessageType.HEARTBEAT,
+                "unsupported-version",
+                null,
+                null,
+                null,
+                ProtocolCodec.toPayload(new HeartbeatRequest(UUID.randomUUID().toString()))
+        );
+
+        RequestValidationException error = assertThrows(
+                RequestValidationException.class,
+                () -> validator.validateEnvelope(request)
+        );
+
+        assertEquals("UNSUPPORTED_PROTOCOL_VERSION", error.errorCode());
+    }
+
+    @Test
     void shouldRejectInvalidLoginPort() {
         RequestValidationException error = assertThrows(
                 RequestValidationException.class,

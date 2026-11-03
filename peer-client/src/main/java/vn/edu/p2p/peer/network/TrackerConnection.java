@@ -4,6 +4,7 @@ import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolException;
+import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -48,6 +49,7 @@ public final class TrackerConnection implements AutoCloseable {
         ensureConnected();
         ProtocolCodec.write(socket.getOutputStream(), request);
         MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+        ProtocolCompatibilityException.validateResponse(response, "Tracker");
         if (!request.requestId().equals(response.requestId())) {
             throw new ProtocolException("Tracker response requestId mismatch");
         }

@@ -1,5 +1,7 @@
 package vn.edu.p2p.peer.network;
 
+import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
+
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
@@ -34,6 +36,10 @@ public final class TrackerConnectionDiagnostics {
         if (error == null) return "Unknown network error";
         Throwable current = error;
         while (current != null) {
+            if (current instanceof ProtocolCompatibilityException compatibility) {
+                return "Phiên bản ứng dụng và " + compatibility.endpoint()
+                        + " không tương thích, hãy cập nhật cùng lúc.";
+            }
             if (current instanceof SSLException) return "TLS handshake failed: check TCP/TLS mode, hostname and trusted certificate.";
             if (current instanceof UnknownHostException) return "Tracker hostname cannot be resolved. Check IP/domain and DNS.";
             if (current instanceof ConnectException) return "Connection refused. Check Tracker port, service and firewall.";
