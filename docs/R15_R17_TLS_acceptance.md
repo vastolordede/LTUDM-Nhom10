@@ -1,18 +1,32 @@
-# R15-R17 / R44: TLS acceptance plan (manual, not completed)
+# R15-R17 / R44 / R73: TLS acceptance
 
-The application includes TLS socket provider factories for Peer-Tracker and
-Peer-Peer. Set a trusted Tracker DNS certificate and Peer truststore, plus
-P2P TLS key/truststores, using the *existing project configuration*.
+## Automated coverage
 
-Test cases to record with date, hostnames, certificate fingerprints and logs:
-1. Tracker TLS truststore valid -> login, heartbeat, catalog operations succeed.
-2. Wrong truststore -> handshake must fail closed with actionable UI message.
-3. Certificate expired -> deny connection; record TLS exception and client clock.
-4. Wrong DNS/SAN -> deny hostname verification (do not disable verification).
-5. Peer TLS CA mismatch -> downloader cannot request pieces; fail closed.
-6. Plain TCP client to TLS server and TLS client to TCP server -> fail quickly.
-7. Change settings while logged out -> retry connection without restarting app.
-8. Register/Load test 3+ Peers across Windows + Linux; no secret in debug logs.
+Tests create ephemeral PKCS12 keys and truststores with `keytool` under the JUnit
+temporary directory; no certificate, private key, or keystore is committed.
 
-Never commit private key, certificate password, P12/JKS or `.env`. No certs
-were generated or validated in this offline patch set.
+| Channel | Automated cases |
+|---|---|
+| Peer-Tracker | Trusted certificate with matching IP SAN succeeds; unrelated truststore, expired certificate, and mismatched hostname fail the TLS handshake; connection closed after failure; server closing after ClientHello fails within the configured timeout. |
+| Peer-Peer | Trusted certificate with matching IP SAN succeeds; unrelated truststore, expired certificate, and mismatched hostname fail the TLS handshake. |
+| TLS/plaintext and recovery | Existing Tracker mismatch and reconnect tests cover TCP/TLS mismatch and using corrected Tracker settings without restarting. |
+| Relay fallback | TLS handshake, certificate, and hostname failures are terminal; connection-refused transport failures remain eligible for Relay. |
+
+These are automated local-endpoint tests, not a substitute for staging/production
+acceptance on real machines.
+
+## Manual acceptance — not run
+
+The following checks require configured real Tracker/Peer hosts and have **not
+been run on real machines**:
+
+1. Tracker TLS with the production truststore: login, heartbeat, and catalog operations.
+2. Replace the Tracker truststore with an unrelated one; verify fail-closed behavior and UI guidance.
+3. Use an expired Tracker certificate on a staging VPS; verify rejection.
+4. Connect to Tracker using a hostname/IP absent from the certificate SAN; verify hostname rejection.
+5. Configure a Peer truststore with the wrong CA and a peer endpoint with a mismatched SAN; verify fail-closed behavior.
+6. Confirm TLS failures do not route through Relay, while a pure network outage still permits Relay.
+7. Change Tracker settings while logged out and reconnect without restarting the application.
+8. Test multiple Peers on Windows and Linux; confirm logs contain no secrets.
+
+Never commit private keys, certificate passwords, P12/JKS files, or `.env` files.

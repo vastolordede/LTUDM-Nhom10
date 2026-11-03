@@ -9,6 +9,8 @@ import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ResponseStatus;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.peer.security.TlsTestCertificates;
+import vn.edu.p2p.peer.security.TlsTestCertificates.Material;
 
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
@@ -110,6 +112,112 @@ class TrackerConnectionReconnectTest {
             }
             backend.get(2, TimeUnit.SECONDS);
         }
+    }
+
+    @Test
+    void trackerRejectsCertificateFromUntrustedTrustStore() throws Exception {
+        Material serverMaterial = TlsTestCertificates.create(
+                tempDir, "IP:127.0.0.1", null);
+        Material unrelatedTrust = TlsTestCertificates.createUnrelatedTrustStore(tempDir);
+        assertTrackerHandshakeRejected(serverMaterial, unrelatedTrust, "127.0.0.1",
+                TrackerConnectionDiagnostics.FailureKind.CERTIFICATE_INVALID);
+    }
+
+    @Test
+    void trackerRejectsExpiredCertificate() throws Exception {
+        Material expired = TlsTestCertificates.create(
+                tempDir, "IP:127.0.0.1", "2020/01/01 00:00:00");
+        assertTrackerHandshakeRejected(expired, expired, "127.0.0.1",
+                TrackerConnectionDiagnostics.FailureKind.CERTIFICATE_INVALID);
+    }
+
+    @Test
+    void trackerRejectsCertificateWithMismatchedHostname() throws Exception {
+        Material material = TlsTestCertificates.create(
+                tempDir, "DNS:localhost", null);
+        assertTrackerHandshakeRejected(material, material, "127.0.0.1",
+                TrackerConnectionDiagnostics.FailureKind.CERTIFICATE_INVALID);
+    }
+
+    @Test
+    void trackerAcceptsTrustedCertificateWithMatchingSan() throws Exception {
+        Material material = TlsTestCertificates.create(
+                tempDir, "IP:127.0.0.1", null);
+        try (SSLServerSocket server = (SSLServerSocket) TlsTestCertificates.serverContext(material)
+                .getServerSocketFactory().createServerSocket(0)) {
+            CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                try (SSLSocket socket = (SSLSocket) server.accept()) {
+                    MessageEnvelope request = ProtocolCodec.read(socket.getInputStream());
+                    ProtocolCodec.write(socket.getOutputStream(), MessageEnvelope.success(
+                            MessageType.LOGIN_RESPONSE, request.requestId(),
+                            ProtocolCodec.toPayload(java.util.Map.of("accepted", true))));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            TrackerConnectionConfig config = tlsConfig("127.0.0.1", server.getLocalPort(), material);
+            try (TrackerConnection client = new TrackerConnection(config, 500, 700)) {
+                assertEquals(ResponseStatus.SUCCESS, client.request(login()).status());
+            }
+            backend.get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void trackerHandshakeClosedMidwayFailsWithinDeadline() throws Exception {
+        Material trustMaterial = TlsTestCertificates.create(
+                tempDir, "IP:127.0.0.1", null);
+        try (ServerSocket server = new ServerSocket(0)) {
+            CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                try (Socket socket = server.accept()) {
+                    assertTrue(socket.getInputStream().read() >= 0);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            TrackerConnectionConfig config = new TrackerConnectionConfig("127.0.0.1",
+                    server.getLocalPort(), true, trustMaterial.trustStore(),
+                    trustMaterial.password(), "PKCS12");
+            try (TrackerConnection client = new TrackerConnection(config, 500, 700)) {
+                long started = System.nanoTime();
+                assertThrows(IOException.class, () -> client.request(login()));
+                assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 1_500,
+                        "TLS handshake failure exceeded its deadline");
+            }
+            backend.get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    private void assertTrackerHandshakeRejected(Material serverMaterial, Material trustMaterial,
+                                                String host,
+                                                TrackerConnectionDiagnostics.FailureKind expected)
+            throws Exception {
+        try (SSLServerSocket server = (SSLServerSocket) TlsTestCertificates.serverContext(serverMaterial)
+                .getServerSocketFactory().createServerSocket(0)) {
+            CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                try (SSLSocket socket = (SSLSocket) server.accept()) {
+                    socket.setSoTimeout(1_000);
+                    socket.startHandshake();
+                } catch (javax.net.ssl.SSLException expectedOnRejectedClientCertificate) {
+                    // The client rejects the certificate and terminates the TLS handshake.
+                } catch (java.net.SocketException expectedOnClosedClientSocket) {
+                    // Some platforms report an aborted socket instead of a TLS alert.
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            TrackerConnectionConfig config = tlsConfig(host, server.getLocalPort(), trustMaterial);
+            try (TrackerConnection client = new TrackerConnection(config, 500, 700)) {
+                IOException error = assertThrows(IOException.class, () -> client.request(login()));
+                assertEquals(expected, TrackerConnectionDiagnostics.classify(error, config), error.toString());
+            }
+            backend.get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    private static TrackerConnectionConfig tlsConfig(String host, int port, Material trustMaterial) {
+        return new TrackerConnectionConfig(host, port, true, trustMaterial.trustStore(),
+                trustMaterial.password(), "PKCS12");
     }
 
     @Test

@@ -90,13 +90,25 @@ public final class PeerP2pSocketFactory {
         }
 
         SSLSocket sslSocket = (SSLSocket) clientSslContext.getSocketFactory().createSocket();
-        sslSocket.connect(new InetSocketAddress(host, port), config.connectTimeoutMillis());
-        sslSocket.setEnabledProtocols(supportedProtocols(sslSocket.getSupportedProtocols()));
-        sslSocket.setSoTimeout(config.readTimeoutMillis());
-        sslSocket.setTcpNoDelay(true);
-        configureHostnameVerification(sslSocket);
-        sslSocket.startHandshake();
-        return sslSocket;
+        boolean connected = false;
+        try {
+            sslSocket.connect(new InetSocketAddress(host, port), config.connectTimeoutMillis());
+            sslSocket.setEnabledProtocols(supportedProtocols(sslSocket.getSupportedProtocols()));
+            sslSocket.setSoTimeout(config.readTimeoutMillis());
+            sslSocket.setTcpNoDelay(true);
+            configureHostnameVerification(sslSocket);
+            sslSocket.startHandshake();
+            connected = true;
+            return sslSocket;
+        } finally {
+            if (!connected) {
+                try {
+                    sslSocket.close();
+                } catch (IOException ignored) {
+                    // Preserve the connection or handshake failure.
+                }
+            }
+        }
     }
 
         /** D81: bọc TLS lên socket relay đã nối sẵn (phía downloader). Tracker chỉ thấy dữ liệu mã hóa. */
@@ -106,11 +118,23 @@ public final class PeerP2pSocketFactory {
         }
         SSLSocket ssl = (SSLSocket) clientSslContext.getSocketFactory()
                 .createSocket(plain, host, port, true);
-        ssl.setEnabledProtocols(supportedProtocols(ssl.getSupportedProtocols()));
-        ssl.setSoTimeout(config.readTimeoutMillis());
-        configureHostnameVerification(ssl);
-        ssl.startHandshake();
-        return ssl;
+        boolean connected = false;
+        try {
+            ssl.setEnabledProtocols(supportedProtocols(ssl.getSupportedProtocols()));
+            ssl.setSoTimeout(config.readTimeoutMillis());
+            configureHostnameVerification(ssl);
+            ssl.startHandshake();
+            connected = true;
+            return ssl;
+        } finally {
+            if (!connected) {
+                try {
+                    ssl.close();
+                } catch (IOException ignored) {
+                    // Preserve the connection or handshake failure.
+                }
+            }
+        }
     }
 
     /** D81: bọc TLS phía peer nguồn cho socket do relay nối. */
