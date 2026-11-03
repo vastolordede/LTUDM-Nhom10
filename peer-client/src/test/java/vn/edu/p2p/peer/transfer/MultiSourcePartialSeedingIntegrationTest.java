@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -119,6 +120,9 @@ class MultiSourcePartialSeedingIntegrationTest {
                             registryB.find(FILE_ID).orElseThrow();
                     assertEquals(VERIFIED_PIECES_WHILE_PAUSED,
                             bRegistered.completedPieceCount());
+                    Path registeredTargetPath = bRegistered.filePath();
+                    assertNotEquals(targetPath, registeredTargetPath,
+                            "An unrelated existing file must not be used as the partial download");
 
                     String ticketForC = issueTicket(trackerKeys, FILE_ID, "partial-reader-c",
                             PEER_B_ID, requesterC);
@@ -143,14 +147,20 @@ class MultiSourcePartialSeedingIntegrationTest {
                             VERIFIED_PIECES_WHILE_PAUSED, ticketForC));
                     assertEquals(bytesBeforeUnavailableRequest, serverB.totalBytesUploaded(),
                             "An unverified piece must not send any binary bytes");
-                    assertArrayEquals(piece(sentinel, VERIFIED_PIECES_WHILE_PAUSED),
-                            piece(Files.readAllBytes(targetPath), VERIFIED_PIECES_WHILE_PAUSED),
+                    assertArrayEquals(new byte[PIECE_SIZE],
+                            piece(Files.readAllBytes(registeredTargetPath),
+                                    VERIFIED_PIECES_WHILE_PAUSED),
                             "The unavailable piece region must remain unchanged");
+                    assertArrayEquals(sentinel, Files.readAllBytes(targetPath),
+                            "The original same-name file must remain untouched");
 
                     resumeB.countDown();
                     DownloadSessionResult resultB = downloadB.get(10, TimeUnit.SECONDS);
                     assertEquals("COMPLETED", resultB.status(), resultB.failureReason());
-                    assertEquals(FileHashUtil.sha256(sourcePath), FileHashUtil.sha256(targetPath));
+                    Path completedTargetPath = resultB.outputFile();
+                    assertEquals(registeredTargetPath, completedTargetPath);
+                    assertEquals(FileHashUtil.sha256(sourcePath),
+                            FileHashUtil.sha256(completedTargetPath));
 
                     var completeBitfield = clientC.fetchBitfield("127.0.0.1",
                             serverB.listeningPort(), PEER_B_ID, FILE_ID, ticketForC);
@@ -165,7 +175,8 @@ class MultiSourcePartialSeedingIntegrationTest {
                     }
 
                     int corruptedPieceIndex = PIECE_COUNT - 1;
-                    try (RandomAccessFile file = new RandomAccessFile(targetPath.toFile(), "rw")) {
+                    try (RandomAccessFile file = new RandomAccessFile(
+                            completedTargetPath.toFile(), "rw")) {
                         long offset = (long) corruptedPieceIndex * PIECE_SIZE;
                         file.seek(offset);
                         file.writeByte(content[(int) offset] ^ 0xff);

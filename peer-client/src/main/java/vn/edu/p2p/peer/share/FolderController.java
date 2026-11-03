@@ -226,6 +226,7 @@ public final class FolderController {
             int failed = 0;
             StringBuilder errors = new StringBuilder();
             List<String> completedEvidence = new ArrayList<>();
+            List<String> renamedFiles = new ArrayList<>();
             try {
                 Files.createDirectories(root);
                 for (String dir : selectedDirectories) {
@@ -276,7 +277,9 @@ public final class FolderController {
                         }
                         continue;
                     }
-                    DownloadPreflight.check(target, f.fileSize());
+                    if (!Files.exists(target)) {
+                        DownloadPreflight.check(target, f.fileSize());
+                    }
 
                     var sourceResponse = sourceClient.findSources(sessionId, f.fileId());
                     if (sourceResponse.fileHash() == null
@@ -294,6 +297,10 @@ public final class FolderController {
                     }
                     DownloadSessionResult r = engine.downloadFile(
                             f.fileId(), sources, target, null, cancel, transferId, f.fileHash());
+                    if (!r.outputFile().equals(target)) {
+                        renamedFiles.add(f.relativePath() + " -> "
+                                + r.outputFile().getFileName());
+                    }
                     boolean historySaved = false;
                     try {
                         historyClient.reportTransferResult(sessionId, r);
@@ -328,10 +335,12 @@ public final class FolderController {
             final int okCount = ok;
             final int failCount = failed;
             final String detail = errors.toString();
+            final String renameNotice = renamedFiles.isEmpty() ? ""
+                    : "\nĐã đổi tên file trùng: " + String.join(", ", renamedFiles);
             Platform.runLater(() -> {
                 progressBar.setProgress(cancel.get() ? progressBar.getProgress() : 1.0);
                 statusLabel.setText((cancel.get() ? "Đã hủy. " : "Xong. ") + okCount + " file thành công, "
-                        + failCount + " lỗi. Lưu tại: " + root + detail);
+                        + failCount + " lỗi. Lưu tại: " + root + detail + renameNotice);
                 setBusy(false);
             });
         });

@@ -202,11 +202,6 @@ public final class DownloadController {
         if (!targetFilePath.startsWith(selectedOutputDir.toAbsolutePath().normalize())) {
             statusLabel.setText("Duong dan dich nam ngoai thu muc da chon."); return;
         }
-        try {
-            DownloadPreflight.check(targetFilePath, selectedFileSize);
-        } catch (DownloadPreflight.PreflightException ex) {
-            statusLabel.setText(ex.getMessage()); return;
-        }
         if (!targetFilePath.getParent().equals(selectedOutputDir.toAbsolutePath().normalize())
                 && !targetFilePath.getParent().toAbsolutePath().normalize()
                         .equals(selectedOutputDir.toAbsolutePath().normalize())) {
@@ -217,9 +212,16 @@ public final class DownloadController {
             statusLabel.setText("Duong dan dich la thu muc, khong phai file.");
             return;
         }
+        if (!Files.exists(targetFilePath)) {
+            try {
+                DownloadPreflight.check(targetFilePath, selectedFileSize);
+            } catch (DownloadPreflight.PreflightException ex) {
+                statusLabel.setText(ex.getMessage()); return;
+            }
+        }
         if (Files.exists(targetFilePath)) {
             Alert alert = new Alert(Alert.AlertType.CONFIRMATION,
-                    "File da ton tai. Tiep tuc se kiem tra piece de Resume, nhung piece sai hash co the bi ghi de. Tiep tuc?",
+                    "File da ton tai. Tiep tuc se resume cac piece khop SHA-256; neu khong phai ban tai do dang hop le, file moi se duoc luu bang ten khac. Tiep tuc?",
                     ButtonType.YES, ButtonType.NO);
             alert.setHeaderText("Xac nhan file da ton tai");
             if (alert.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) return;
@@ -337,6 +339,7 @@ public final class DownloadController {
             DownloadSessionResult current = engine.downloadFile(
                     fileId, sources, targetFilePath, uiListener, activeCancelSignal,
                     initialTransferId, catalogHash);
+            targetFilePath = current.outputFile();
 
             // D59: nguồn rớt giữa chừng -> hỏi lại Tracker lấy nguồn mới, tải tiếp phần còn thiếu (Resume)
             for (int attempt = 1; attempt <= 3
@@ -359,8 +362,10 @@ public final class DownloadController {
                 current = engine.downloadFile(
                         fileId, fresh, targetFilePath, uiListener, activeCancelSignal,
                         initialTransferId, catalogHash);
+                targetFilePath = current.outputFile();
             }
             final DownloadSessionResult result = current;
+            final Path finalTargetFilePath = result.outputFile();
 
             // S36-S37: Lưu kết quả phiên tải (COMPLETED / FAILED / CANCELLED) và danh sách nguồn lên Tracker DB
             try {
@@ -372,10 +377,12 @@ public final class DownloadController {
             Platform.runLater(() -> {
                 if ("COMPLETED".equals(result.status())) {
                     progressBar.setProgress(1.0);
-                    statusLabel.setText("Tải thành công & khớp SHA-256! File lưu tại: " + targetFilePath);
+                    statusLabel.setText("Tải thành công & khớp SHA-256! File lưu tại: "
+                            + finalTargetFilePath);
                 } else {
                     statusLabel.setText("Phiên tải kết thúc (" + result.status() + "): "
-                            + (result.failureReason() != null ? result.failureReason() : ""));
+                            + (result.failureReason() != null ? result.failureReason() : "")
+                            + " File dở dang (nếu có) được giữ tại: " + finalTargetFilePath);
                 }
                 downloadSpeedLabel.setText("Tốc độ tải (DL): 0.0 KB/s");
                 resetButtons();
