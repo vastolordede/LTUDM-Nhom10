@@ -30,6 +30,7 @@ import vn.edu.p2p.peer.transfer.TransferDashboardWindow;
 import vn.edu.p2p.peer.share.SharedFilesStore;
 
 import java.time.Instant;
+import java.time.Duration;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
@@ -37,6 +38,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class LoginController {
+    private static final Duration TRACKER_LOGOUT_TIMEOUT = Duration.ofSeconds(3);
+    private static final Duration APP_SHUTDOWN_TIMEOUT = Duration.ofSeconds(4);
 
     private static final DateTimeFormatter TIME_FORMAT =
             DateTimeFormatter.ofPattern("HH:mm:ss")
@@ -89,6 +92,8 @@ public final class LoginController {
     private TrackerConnection trackerConnection;
     private TransferDashboardWindow transferDashboard;
     private boolean logoutInProgress;
+    private boolean shuttingDown;
+    private volatile long loggedInGeneration;
     private final UserTrackerSettingsStore trackerSettingsStore = UserTrackerSettingsStore.defaultStore();
     private PeerSettings trackerDefaults;
     private TrackerConnectionConfig activeTrackerConfig;
@@ -180,10 +185,14 @@ public final class LoginController {
         diagnoseTrackerButton.setDisable(true);
         statusLabel.setText("Testing Tracker TCP/TLS connection...");
         CompletableFuture.supplyAsync(() -> TrackerConnectionDiagnostics.probe(target), ioExecutor)
-                .whenComplete((message, error) -> Platform.runLater(() -> {
-                    diagnoseTrackerButton.setDisable(false);
-                    statusLabel.setText(error == null ? message : TrackerConnectionDiagnostics.explain(error));
-                }));
+                .whenComplete((message, error) -> {
+                    long generation = AuthClientService.sessionGeneration();
+                    postToCurrentUi(generation, () -> {
+                        diagnoseTrackerButton.setDisable(false);
+                        statusLabel.setText(error == null ? message
+                                : TrackerConnectionDiagnostics.explain(error));
+                    });
+                });
     }
 
     private void applyTrackerConfig(UserTrackerSettingsStore.Endpoint endpoint) throws Exception {
@@ -242,19 +251,22 @@ public final class LoginController {
                         throw new AuthOperationRuntimeException(e);
                     }
                 }, ioExecutor)
-                .whenComplete((session, throwable) -> Platform.runLater(() -> {
-                    setBusy(false);
+                .whenComplete((session, throwable) -> {
+                    long generation = AuthClientService.sessionGeneration();
+                    postToCurrentUi(generation, () -> {
+                        setBusy(false);
 
-                    if (throwable != null) {
-                        Throwable cause = unwrap(throwable);
-                        statusLabel.setText("Đăng nhập thất bại: "
-                                + TrackerConnectionDiagnostics.explain(cause));
-                        connectionStatusLabel.setText("Tracker: OFFLINE");
-                        return;
-                    }
+                        if (throwable != null) {
+                            Throwable cause = unwrap(throwable);
+                            statusLabel.setText("Đăng nhập thất bại: "
+                                    + TrackerConnectionDiagnostics.explain(cause));
+                            connectionStatusLabel.setText("Tracker: OFFLINE");
+                            return;
+                        }
 
-                    onLoginSuccess(session);
-                }));
+                        onLoginSuccess(session);
+                    });
+                });
     }
 
     @FXML
@@ -281,65 +293,47 @@ public final class LoginController {
             } catch (AuthClientException e) {
                 throw new AuthOperationRuntimeException(e);
             }
-        }, ioExecutor).whenComplete((registered, throwable) -> Platform.runLater(() -> {
-            setBusy(false);
-            if (throwable != null) {
-                statusLabel.setText("Đăng ký thất bại: " + unwrap(throwable).getMessage());
-                return;
-            }
-            passwordField.clear();
-            confirmPasswordField.clear();
-            statusLabel.setText("Đã tạo tài khoản " + registered.username()
-                    + ". Nhập mật khẩu để đăng nhập.");
-        }));
+        }, ioExecutor).whenComplete((registered, throwable) -> {
+            long generation = AuthClientService.sessionGeneration();
+            postToCurrentUi(generation, () -> {
+                setBusy(false);
+                if (throwable != null) {
+                    statusLabel.setText("Đăng ký thất bại: " + unwrap(throwable).getMessage());
+                    return;
+                }
+                passwordField.clear();
+                confirmPasswordField.clear();
+                statusLabel.setText("Đã tạo tài khoản " + registered.username()
+                        + ". Nhập mật khẩu để đăng nhập.");
+            });
+        });
     }
 
     private void onLogout() {
-        if (logoutInProgress || authClientService == null || authClientService.currentSession() == null) {
+        if (shuttingDown || logoutInProgress || authClientService == null
+                || authClientService.currentSession() == null) {
             return;
         }
         logoutInProgress = true;
-        if (transferDashboard != null) transferDashboard.setLogoutPending(true);
-
-        ClientSession currentSession = authClientService.currentSession();
-        if (heartbeatCoordinator != null) {
-            heartbeatCoordinator.stop();
-        }
-
+        ClientSession currentSession = beginLocalLogout();
         setBusy(true);
         statusLabel.setText("Đang đăng xuất...");
 
-        CompletableFuture
-                .runAsync(() -> {
-                    try {
-                        authClientService.logout();
-                    } catch (AuthClientException e) {
-                        throw new AuthOperationRuntimeException(e);
-                    }
-                }, ioExecutor)
-                .whenComplete((ignored, throwable) -> Platform.runLater(() -> {
-                    logoutInProgress = false;
-                    if (transferDashboard != null) transferDashboard.setLogoutPending(false);
-                    setBusy(false);
-
-                    if (throwable != null) {
-                        Throwable cause = unwrap(throwable);
-                        statusLabel.setText("Đăng xuất thất bại: " + cause.getMessage());
-                        if (transferDashboard != null) {
-                            transferDashboard.showMessage("Không thể đăng xuất: " + cause.getMessage());
-                        }
-                        if (heartbeatCoordinator != null
-                                && authClientService.currentSession() != null) {
-                            heartbeatCoordinator.start(currentSession);
-                        }
-                        return;
-                    }
-
-                    resetLoggedOutUi("Đã đăng xuất khỏi Tracker.");
-                }));
+        CompletableFuture.supplyAsync(
+                () -> authClientService.logoutBestEffort(currentSession, TRACKER_LOGOUT_TIMEOUT))
+                .whenComplete((confirmed, error) -> {
+                    long generation = AuthClientService.sessionGeneration();
+                    postToCurrentUi(generation, () -> {
+                        logoutInProgress = false;
+                        resetLoggedOutUi(error == null && Boolean.TRUE.equals(confirmed)
+                                ? "Đã đăng xuất khỏi Tracker."
+                                : "Đã rời phiên; Tracker chưa xác nhận logout, phiên sẽ tự hết hạn.");
+                    });
+                });
     }
 
     private void onLoginSuccess(ClientSession session) {
+        loggedInGeneration = AuthClientService.sessionGeneration();
         passwordField.clear();
         confirmPasswordField.clear();
         registerButton.setDisable(true);
@@ -431,14 +425,45 @@ public final class LoginController {
     }
 
     public void shutdown() {
-        closeTransferDashboard();
+        if (shuttingDown) return;
+        shuttingDown = true;
+        long deadline = System.nanoTime() + APP_SHUTDOWN_TIMEOUT.toNanos();
+        ClientSession session = beginLocalLogout();
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.close();
         }
         if (authClientService != null) {
-            authClientService.closeGracefully();
+            long remaining = Math.max(0L, deadline - System.nanoTime());
+            if (session != null && remaining > 0) {
+                authClientService.logoutBestEffort(session,
+                        Duration.ofNanos(Math.min(TRACKER_LOGOUT_TIMEOUT.toNanos(), remaining)));
+            }
+            authClientService.close();
         }
         ioExecutor.shutdownNow();
+    }
+
+    private ClientSession beginLocalLogout() {
+        ClientSession session = authClientService == null ? null : authClientService.currentSession();
+        if (authClientService != null) {
+            authClientService.invalidateLocalSession();
+        }
+        closeTransferDashboard();
+        if (heartbeatCoordinator != null) {
+            heartbeatCoordinator.stop();
+        }
+        return session;
+    }
+
+    private boolean isCurrentUiGeneration(long generation) {
+        return !shuttingDown && AuthClientService.isCurrentGeneration(generation);
+    }
+
+    private void postToCurrentUi(long generation, Runnable action) {
+        if (!isCurrentUiGeneration(generation)) return;
+        Platform.runLater(() -> {
+            if (isCurrentUiGeneration(generation)) action.run();
+        });
     }
 
     private static Throwable unwrap(Throwable throwable) {
@@ -458,17 +483,17 @@ public final class LoginController {
     private final class UiHeartbeatListener implements HeartbeatListener {
         @Override
         public void onHeartbeat(HeartbeatResponse response) {
-            Platform.runLater(() -> connectionStatusLabel.setText(
-                    "Tracker: ONLINE • heartbeat "
-                            + TIME_FORMAT.format(
-                                    Instant.ofEpochMilli(response.serverTimeEpochMillis())
-                            )
-            ));
+            long generation = loggedInGeneration;
+            postToCurrentUi(generation, () -> {
+                connectionStatusLabel.setText("Tracker: ONLINE • heartbeat "
+                        + TIME_FORMAT.format(Instant.ofEpochMilli(response.serverTimeEpochMillis())));
+            });
         }
 
         @Override
         public void onStateChanged(PeerConnectionState state, String message) {
-            Platform.runLater(() -> {
+            long generation = loggedInGeneration;
+            postToCurrentUi(generation, () -> {
                 switch (state) {
                     case ONLINE -> {
                         if (!connectionStatusLabel.getText().startsWith("Tracker: ONLINE •")) {

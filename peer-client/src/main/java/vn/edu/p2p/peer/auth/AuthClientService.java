@@ -18,15 +18,33 @@ import vn.edu.p2p.peer.session.ClientSession;
 
 import java.io.IOException;
 import java.security.KeyPair;
+import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class AuthClientService implements AutoCloseable {
+    private static final AtomicLong SESSION_GENERATION = new AtomicLong();
+
     private final TrackerConnection connection;
     private final PeerIdentity peerIdentity;
     private final PeerIdentityStore identityStore;
     private final PeerKeyStore peerKeyStore;
     private final TicketRevocationList ticketRevocations;
-    private ClientSession currentSession;
+    private final Object sessionStateLock = new Object();
+    private volatile ClientSession currentSession;
+    private volatile boolean closed;
+
+    public static long sessionGeneration() {
+        return SESSION_GENERATION.get();
+    }
+
+    public static boolean isCurrentGeneration(long generation) {
+        return SESSION_GENERATION.get() == generation;
+    }
 
     public AuthClientService(
             TrackerConnection connection,
@@ -66,6 +84,9 @@ public final class AuthClientService implements AutoCloseable {
             String password,
             int listeningPort
     ) throws AuthClientException {
+        if (closed) {
+            throw new AuthClientException("CLIENT_CLOSED", "Peer authentication service is closed.");
+        }
         PeerIdentity currentIdentity = peerIdentity;
         if (identityStore != null) {
             try {
@@ -104,11 +125,17 @@ public final class AuthClientService implements AutoCloseable {
                 );
             }
 
-            currentSession = new ClientSession(
-                    loginResponse.peerId(),
-                    loginResponse.sessionId(),
-                    loginResponse.heartbeatIntervalSeconds()
-            );
+            ClientSession session = new ClientSession(loginResponse.peerId(),
+                    loginResponse.sessionId(), loginResponse.heartbeatIntervalSeconds());
+            synchronized (sessionStateLock) {
+                if (closed) {
+                    throw new AuthClientException("CLIENT_CLOSED",
+                            "Peer authentication service closed while login was in progress.");
+                }
+                ticketRevocations.reset();
+                currentSession = session;
+                SESSION_GENERATION.incrementAndGet();
+            }
             return currentSession;
         } catch (IOException e) {
             throw new AuthClientException(
@@ -153,27 +180,79 @@ public final class AuthClientService implements AutoCloseable {
         }
     }
 
-    public synchronized void logout() throws AuthClientException {
-        if (currentSession == null) {
+    public void logout() throws AuthClientException {
+        ClientSession session = currentSession;
+        if (session == null) {
             return;
         }
 
+        MessageEnvelope response = send(logoutRequest(session));
+        requireType(response, MessageType.LOGOUT_RESPONSE);
+        requireSuccess(response);
+        clearSessionIfCurrent(session);
+    }
+
+    public boolean logoutBestEffort(Duration timeout) {
+        ClientSession session = currentSession;
+        invalidateLocalSession();
+        return logoutBestEffort(session, timeout);
+    }
+
+    public boolean logoutBestEffort(ClientSession session, Duration timeout) {
+        if (session == null) {
+            return true;
+        }
+        if (timeout == null || timeout.isNegative() || timeout.isZero()) {
+            throw new IllegalArgumentException("timeout must be positive");
+        }
+
+        FutureTask<Boolean> task = new FutureTask<>(() -> {
+            MessageEnvelope response = connection.request(logoutRequest(session));
+            requireType(response, MessageType.LOGOUT_RESPONSE);
+            requireSuccess(response);
+            return true;
+        });
+        Thread worker = new Thread(task, "peer-best-effort-logout");
+        worker.setDaemon(true);
+        worker.start();
+        try {
+            return task.get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException e) {
+            connection.abortCurrentRequest();
+            task.cancel(true);
+            return false;
+        } catch (InterruptedException e) {
+            connection.abortCurrentRequest();
+            task.cancel(true);
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (ExecutionException e) {
+            return false;
+        }
+    }
+
+    private static MessageEnvelope logoutRequest(ClientSession session) {
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.LOGOUT_REQUEST,
                 UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(
-                        new LogoutRequest(currentSession.sessionId())
+                        new LogoutRequest(session.sessionId())
                 )
         );
-
-        MessageEnvelope response = send(request);
-        requireType(response, MessageType.LOGOUT_RESPONSE);
-        requireSuccess(response);
-        currentSession = null;
+        return request;
     }
 
-    public synchronized HeartbeatResponse heartbeat() throws AuthClientException {
-        if (currentSession == null) {
+    private void clearSessionIfCurrent(ClientSession session) {
+        if (currentSession == session
+                || currentSession != null && currentSession.sessionId().equals(session.sessionId())) {
+            invalidateLocalSession();
+        }
+    }
+
+    public HeartbeatResponse heartbeat() throws AuthClientException {
+        ClientSession session = currentSession;
+        long generation = SESSION_GENERATION.get();
+        if (session == null) {
             throw new AuthClientException(
                     "INVALID_SESSION",
                     "Peer is not logged in."
@@ -184,7 +263,7 @@ public final class AuthClientService implements AutoCloseable {
                 MessageType.HEARTBEAT,
                 UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(
-                        new HeartbeatRequest(currentSession.sessionId(),
+                        new HeartbeatRequest(session.sessionId(),
                                 ticketRevocations.latestSequence(),
                                 ticketRevocations.trackerInstanceId())
                 )
@@ -205,7 +284,12 @@ public final class AuthClientService implements AutoCloseable {
                         "Tracker returned an empty heartbeat response."
                 );
             }
-            ticketRevocations.apply(heartbeatResponse);
+            synchronized (sessionStateLock) {
+                if (currentSession != session || SESSION_GENERATION.get() != generation) {
+                    throw new AuthClientException("INVALID_SESSION", "Peer session has ended.");
+                }
+                ticketRevocations.apply(heartbeatResponse);
+            }
             return heartbeatResponse;
         } catch (IOException e) {
             throw new AuthClientException(
@@ -216,7 +300,7 @@ public final class AuthClientService implements AutoCloseable {
         }
     }
 
-    public synchronized ClientSession currentSession() {
+    public ClientSession currentSession() {
         return currentSession;
     }
 
@@ -224,8 +308,12 @@ public final class AuthClientService implements AutoCloseable {
         return ticketRevocations;
     }
 
-    public synchronized void invalidateLocalSession() {
-        currentSession = null;
+    public void invalidateLocalSession() {
+        synchronized (sessionStateLock) {
+            currentSession = null;
+            ticketRevocations.reset();
+            SESSION_GENERATION.incrementAndGet();
+        }
     }
 
     private MessageEnvelope send(MessageEnvelope request) throws AuthClientException {
@@ -266,24 +354,19 @@ public final class AuthClientService implements AutoCloseable {
      * Best-effort graceful shutdown used when the JavaFX application exits.
      * A network failure must never prevent the local process from closing.
      */
-    public synchronized void closeGracefully() {
-        try {
-            if (currentSession != null) {
-                logout();
-            }
-        } catch (AuthClientException e) {
-            System.err.println(
-                    "Cannot notify Tracker about logout during shutdown: "
-                            + e.getMessage()
-            );
-        } finally {
-            close();
-        }
+    public void closeGracefully() {
+        logoutBestEffort(Duration.ofSeconds(3));
+        close();
     }
 
     @Override
-    public synchronized void close() {
+    public void close() {
+        synchronized (sessionStateLock) {
+            closed = true;
+            currentSession = null;
+            ticketRevocations.reset();
+            SESSION_GENERATION.incrementAndGet();
+        }
         connection.close();
-        currentSession = null;
     }
 }

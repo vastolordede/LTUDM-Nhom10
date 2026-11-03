@@ -17,6 +17,7 @@ import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
 import vn.edu.p2p.common.dto.SearchResultItem;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.share.FileSourceClientService;
 
 import java.io.File;
@@ -105,6 +106,8 @@ public final class DownloadController {
 
     private Path selectedOutputDir;
     private AtomicBoolean activeCancelSignal;
+    private volatile PeerDownloadClient activeDownloadClient;
+    private final AtomicBoolean closed = new AtomicBoolean();
     private long lastUploadedBytes = 0L;
     private long lastUploadCheckNano = System.nanoTime();
 
@@ -179,6 +182,7 @@ public final class DownloadController {
 
     @FXML
     private void onStartDownload() {
+        if (closed.get()) return;
         if (fileSourceClientService == null || sessionId == null) {
             statusLabel.setText("Chưa cấu hình phiên đăng nhập cho màn hình Download.");
             return;
@@ -231,6 +235,7 @@ public final class DownloadController {
                 : PieceScheduler.Strategy.ROUND_ROBIN;
 
         activeCancelSignal = new AtomicBoolean(false);
+        long generation = AuthClientService.sessionGeneration();
         startDownloadButton.setDisable(true);
         cancelDownloadButton.setDisable(false);
         sourceLogs.clear();
@@ -238,13 +243,15 @@ public final class DownloadController {
         statusLabel.setText("Đang truy vấn danh sách Peer nguồn từ Tracker...");
 
         downloadExecutor.submit(() -> executeDownloadTask(fileId, targetFilePath, strategy,
-                trustedSearchHash));
+                trustedSearchHash, generation));
     }
 
     @FXML
     private void onCancelDownload() {
         if (activeCancelSignal != null) {
             activeCancelSignal.set(true);
+            PeerDownloadClient client = activeDownloadClient;
+            if (client != null) client.cancelActiveRequests();
             statusLabel.setText("Đang tạm dừng phiên tải (có thể bấm Bắt đầu tải để Resume sau)...");
         }
     }
@@ -253,7 +260,8 @@ public final class DownloadController {
             long fileId,
             Path targetFilePath,
             PieceScheduler.Strategy strategy,
-            String trustedSearchHash
+            String trustedSearchHash,
+            long generation
     ) {
         try {
             FileSourcesResponse sourcesResponse = fileSourceClientService.findSources(sessionId, fileId);
@@ -266,7 +274,7 @@ public final class DownloadController {
             }
             List<FileSourceInfo> sources = sourcesResponse.sources();
 
-            Platform.runLater(() -> {
+            postToUi(generation, () -> {
                 for (FileSourceInfo src : sources) {
                     sourceLogs.add("Nguồn: " + src.ipAddress() + ":" + src.listeningPort()
                             + " [" + src.availabilityStatus() + "] (Peer=" + shortPeer(src.peerId()) + ")");
@@ -274,7 +282,7 @@ public final class DownloadController {
             });
 
             if (sources.isEmpty()) {
-                Platform.runLater(() -> {
+                postToUi(generation, () -> {
                     statusLabel.setText("Không có Peer nào đang online giữ file này.");
                     resetButtons();
                 });
@@ -291,10 +299,11 @@ public final class DownloadController {
 
             PeerDownloadClient downloadClient = new PeerDownloadClient(
                     p2pSocketFactory, requesterPrivateKey);
-                        if (planner != null) {
+            activeDownloadClient = downloadClient;
+            if (planner != null) {
                 planner.remember(sources);
-                planner.setListener((peerId, mode) -> Platform.runLater(() ->
-                        sourceLogs.add("Peer " + shortPeer(peerId) + " -> kết nối " + mode)));
+                planner.setListener((peerId, mode) -> postToUi(generation,
+                        () -> sourceLogs.add("Peer " + shortPeer(peerId) + " -> kết nối " + mode)));
                 downloadClient.withPlanner(planner);
             }
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
@@ -318,7 +327,7 @@ public final class DownloadController {
                 ) {
                     double fraction = totalPieces == 0 ? 1.0 : (double) completedPieces / (double) totalPieces;
                     double percent = fraction * 100.0;
-                    Platform.runLater(() -> {
+                    postToUi(generation, () -> {
                         progressBar.setProgress(fraction);
                         progressPercentLabel.setText(String.format(
                                 "Tiến độ: %.1f%% (%d / %d pieces)",
@@ -330,7 +339,7 @@ public final class DownloadController {
 
                 @Override
                 public void onSourceStatusChanged(String peerId, String status, String message) {
-                    Platform.runLater(() -> sourceLogs.add(
+                    postToUi(generation, () -> sourceLogs.add(
                             "Peer " + shortPeer(peerId) + " -> " + status + ": " + message
                     ));
                 }
@@ -351,7 +360,8 @@ public final class DownloadController {
                     && !activeCancelSignal.get(); attempt++) {
                 final int n = attempt;
                 Thread.sleep(2000);
-                Platform.runLater(() -> sourceLogs.add("Nguon bi roi, hoi lai Tracker (lan " + n + "/3)..."));
+                postToUi(generation,
+                        () -> sourceLogs.add("Nguon bi roi, hoi lai Tracker (lan " + n + "/3)..."));
                 List<FileSourceInfo> fresh = fileSourceClientService.findSources(sessionId, fileId).sources();
                 if (fresh.isEmpty()) {
                     break;
@@ -371,10 +381,11 @@ public final class DownloadController {
             try {
                 transferHistoryClientService.reportTransferResult(sessionId, result);
             } catch (Exception e) {
-                Platform.runLater(() -> sourceLogs.add("Lưu lịch sử cảnh báo: " + e.getMessage()));
+                postToUi(generation,
+                        () -> sourceLogs.add("Lưu lịch sử cảnh báo: " + e.getMessage()));
             }
 
-            Platform.runLater(() -> {
+            postToUi(generation, () -> {
                 if ("COMPLETED".equals(result.status())) {
                     progressBar.setProgress(1.0);
                     statusLabel.setText("Tải thành công & khớp SHA-256! File lưu tại: "
@@ -388,11 +399,12 @@ public final class DownloadController {
                 resetButtons();
             });
         } catch (Exception e) {
-            Platform.runLater(() -> {
+            postToUi(generation, () -> {
                 statusLabel.setText("Lỗi khi tải file: " + e.getMessage());
                 resetButtons();
             });
         }
+        activeDownloadClient = null;
     }
 
     /** S40: Tính toán tốc độ Upload hiện tại dựa trên số byte PeerUploadServer đã gửi. */
@@ -409,7 +421,8 @@ public final class DownloadController {
         lastUploadedBytes = currentUploaded;
         lastUploadCheckNano = nowNano;
 
-        Platform.runLater(() -> {
+        long generation = AuthClientService.sessionGeneration();
+        postToUi(generation, () -> {
             if (uploadSpeedLabel != null) {
                 uploadSpeedLabel.setText("Tốc độ phát (UL): " + formatSpeed(speed));
             }
@@ -433,10 +446,40 @@ public final class DownloadController {
     }
 
     public void shutdown() {
+        if (!closed.compareAndSet(false, true)) return;
         if (activeCancelSignal != null) {
             activeCancelSignal.set(true);
         }
-        uploadSpeedPoller.shutdownNow();
-        downloadExecutor.shutdownNow();
+        PeerDownloadClient client = activeDownloadClient;
+        if (client != null) client.cancelActiveRequests();
+        uploadSpeedPoller.shutdown();
+        downloadExecutor.shutdown();
+        if (!awaitTermination(uploadSpeedPoller, 100)) uploadSpeedPoller.shutdownNow();
+        if (!awaitTermination(downloadExecutor, 100)) downloadExecutor.shutdownNow();
+        awaitTermination(uploadSpeedPoller, 100);
+        awaitTermination(downloadExecutor, 100);
+    }
+
+    boolean workersTerminated() {
+        return downloadExecutor.isTerminated() && uploadSpeedPoller.isTerminated();
+    }
+
+    private void postToUi(long generation, Runnable action) {
+        if (closed.get() || !AuthClientService.isCurrentGeneration(generation)) return;
+        Platform.runLater(() -> {
+            if (!closed.get() && AuthClientService.isCurrentGeneration(generation)) {
+                action.run();
+            }
+        });
+    }
+
+    private static boolean awaitTermination(
+            java.util.concurrent.ExecutorService executor, long timeoutMillis) {
+        try {
+            return executor.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 }
