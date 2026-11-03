@@ -111,6 +111,26 @@ class TicketRevocationListTest {
         assertEquals("tracker-A", list.trackerInstanceId());
     }
 
+    @Test
+    void resetClearsCursorRevocationsAndTrackerInstanceForNextHeartbeat() {
+        TicketRevocationList list = new TicketRevocationList(Clock.fixed(NOW, ZoneOffset.UTC));
+        var keys = PeerRequestProof.generateKeyPair();
+        var claims = claims("requester-1", "uploader-1", 10L, keys.getPublic());
+        list.apply(new HeartbeatResponse(NOW.toEpochMilli(), java.util.List.of(
+                new TicketRevocation(4, TicketRevocation.Type.REQUESTER, "requester-1",
+                        null, 0, NOW.toEpochMilli())), 4L, "tracker-old"));
+        assertTrue(list.isRevoked(claims, "uploader-1", 10L));
+
+        list.reset();
+
+        assertEquals(0L, list.latestSequence());
+        assertEquals(null, list.trackerInstanceId());
+        assertFalse(list.isRevoked(claims, "uploader-1", 10L));
+        list.apply(new HeartbeatResponse(NOW.toEpochMilli(), java.util.List.of(), 0L, "tracker-new"));
+        assertEquals(0L, list.latestSequence());
+        assertEquals("tracker-new", list.trackerInstanceId());
+    }
+
     private static PeerAccessTickets.TicketClaims claims(String requester, String uploader,
                                                           long fileId,
                                                           java.security.PublicKey key) {

@@ -20,6 +20,9 @@ import java.security.PrivateKey;
 import java.time.Clock;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * S09-S11, S21-S22: Kết nối trực tiếp Peer <-> Peer từ Downloader tới một Uploader
@@ -41,6 +44,8 @@ public final class PeerDownloadClient {
     private final PrivateKey requesterPrivateKey;
     private final Clock clock;
     private ConnectionPlanner planner;
+    private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
+    private final AtomicBoolean cancelled = new AtomicBoolean();
 
     public PeerDownloadClient(PeerP2pSocketFactory socketFactory, PrivateKey requesterPrivateKey) {
         this(socketFactory, requesterPrivateKey, Clock.systemUTC());
@@ -59,7 +64,35 @@ public final class PeerDownloadClient {
     }
 
     private Socket open(String host, int port) throws IOException {
-        return planner == null ? socketFactory.openClientSocket(host, port) : planner.open(host, port);
+        if (cancelled.get()) {
+            throw new java.io.InterruptedIOException("Download client was cancelled");
+        }
+        Socket socket = planner == null
+                ? socketFactory.openClientSocket(host, port) : planner.open(host, port);
+        activeSockets.add(socket);
+        if (cancelled.get()) {
+            activeSockets.remove(socket);
+            socket.close();
+            throw new java.io.InterruptedIOException("Download client was cancelled");
+        }
+        return socket;
+    }
+
+    public void cancelActiveRequests() {
+        cancelled.set(true);
+        for (Socket socket : activeSockets) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+                // best effort
+            } finally {
+                activeSockets.remove(socket);
+            }
+        }
+    }
+
+    private void release(Socket socket) {
+        activeSockets.remove(socket);
     }
 
     /**
@@ -78,7 +111,8 @@ public final class PeerDownloadClient {
                 ProtocolCodec.toPayload(payload)
         );
 
-        try (Socket socket = open(host, port)) {
+        Socket socket = open(host, port);
+        try (socket) {
             ProtocolCodec.write(socket.getOutputStream(), request);
             MessageEnvelope response = readResponse(socket.getInputStream());
 
@@ -91,6 +125,8 @@ public final class PeerDownloadClient {
             }
 
             return ProtocolCodec.fromPayload(response.payload(), BitfieldResponse.class);
+        } finally {
+            release(socket);
         }
     }
 
@@ -106,7 +142,8 @@ public final class PeerDownloadClient {
                 MessageType.METADATA_PAGE_REQUEST, UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize, accessTicket))
         );
-        try (Socket socket = open(host, port)) {
+        Socket socket = open(host, port);
+        try (socket) {
             ProtocolCodec.write(socket.getOutputStream(), request);
             MessageEnvelope response = readResponse(socket.getInputStream());
             if (response.status() == ResponseStatus.ERROR || response.type() != MessageType.METADATA_PAGE_RESPONSE) {
@@ -117,6 +154,8 @@ public final class PeerDownloadClient {
                 throw new IOException("Invalid metadata page response");
             }
             return page;
+        } finally {
+            release(socket);
         }
     }
 
@@ -137,7 +176,8 @@ public final class PeerDownloadClient {
                 ProtocolCodec.toPayload(payload)
         );
 
-        try (Socket socket = open(host, port)) {
+        Socket socket = open(host, port);
+        try (socket) {
             ProtocolCodec.write(socket.getOutputStream(), request);
             MessageEnvelope response = readResponse(socket.getInputStream());
 
@@ -158,6 +198,8 @@ public final class PeerDownloadClient {
             );
 
             return new DownloadedPiece(header, bytes);
+        } finally {
+            release(socket);
         }
     }
 

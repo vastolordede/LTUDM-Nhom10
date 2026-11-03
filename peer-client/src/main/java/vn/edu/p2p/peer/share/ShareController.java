@@ -12,6 +12,7 @@ import javafx.stage.FileChooser;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.transfer.LocalFileRegistry;
 import vn.edu.p2p.common.dto.FolderEntryDto;
 
@@ -23,6 +24,8 @@ import java.io.IOException;
 import javafx.stage.DirectoryChooser;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Controller for the Share File screen (T01-T15).
@@ -68,6 +71,8 @@ public final class ShareController {
 
     private final FileMetadataBuilder metadataBuilder = new FileMetadataBuilder();
     private final ObservableList<SharedFileEntry> sharedFiles = FXCollections.observableArrayList();
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final Object executorLock = new Object();
 
     private ShareFileClientService shareFileClientService;
     private String sessionId;
@@ -112,19 +117,22 @@ public final class ShareController {
         }
         ShareFileClientService service = shareFileClientService;
         String session = sessionId;
-        ioExecutor.submit(() -> {
+        long generation = AuthClientService.sessionGeneration();
+        submitIfOpen(() -> {
             for (SharedFilesStore.Entry saved : store.loadValid()) {
+                if (!isCurrentSession(generation)) return;
                 try {
                     Path path = Path.of(saved.path());
                     FileMetadata metadata = metadataBuilder.build(path);
                     ShareFileResponse r = service.publish(session, metadata);
+                    if (!isCurrentSession(generation)) return;
                     fileRegistry.registerCompleteFile(r.fileId(), path, metadata);
                     if (!metadata.fileHash().equalsIgnoreCase(saved.fileHash())) {
                         store.removeByHash(saved.fileHash());
                         store.add(new SharedFilesStore.Entry(saved.path(), metadata.fileName(),
                                 metadata.fileSize(), metadata.fileHash()));
                     }
-                    Platform.runLater(() -> {
+                    postToCurrentSession(generation, () -> {
                         sharedFiles.removeIf(x -> x.fileId() == r.fileId());
                         sharedFiles.add(new SharedFileEntry(r.fileId(), metadata.fileName()));
                     });
@@ -160,6 +168,7 @@ public final class ShareController {
     /** T03-T09: build FileMetadata, then T11: publish it to the Tracker. */
     @FXML
     private void onShareFile() {
+        if (closed.get()) return;
         if (selectedFile == null) {
             return;
         }
@@ -172,14 +181,15 @@ public final class ShareController {
         shareButton.setDisable(true);
         statusLabel.setText("Đang đọc, băm file và gửi lên Tracker...");
         Path sharedPath = selectedFile;
+        long generation = AuthClientService.sessionGeneration();
 
-        ioExecutor.submit(() -> {
+        submitIfOpen(() -> {
             try {
                 FileMetadata metadata = metadataBuilder.build(sharedPath);
                 ShareFileResponse response = shareFileClientService.publish(sessionId, metadata);
-                Platform.runLater(() -> onShareSuccess(metadata, response, sharedPath));
+                postToCurrentSession(generation, () -> onShareSuccess(metadata, response, sharedPath));
             } catch (Exception e) {
-                Platform.runLater(() -> onError("Lỗi khi chia sẻ file: " + e.getMessage()));
+                postToCurrentSession(generation, () -> onError("Lỗi khi chia sẻ file: " + e.getMessage()));
             }
         });
     }
@@ -219,12 +229,40 @@ public final class ShareController {
     }
 
     public void shutdown() {
-        ioExecutor.shutdownNow();
+        synchronized (executorLock) {
+            if (!closed.compareAndSet(false, true)) return;
+            ioExecutor.shutdownNow();
+        }
+        try {
+            ioExecutor.awaitTermination(250, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
+
+    private boolean isCurrentSession(long generation) {
+        return !closed.get() && AuthClientService.isCurrentGeneration(generation);
+    }
+
+    private void submitIfOpen(Runnable task) {
+        synchronized (executorLock) {
+            if (!closed.get()) ioExecutor.submit(task);
+        }
+    }
+
+    private void postToCurrentSession(long generation, Runnable action) {
+        if (!isCurrentSession(generation)) return;
+        Platform.runLater(() -> {
+            if (isCurrentSession(generation)) action.run();
+        });
+    }
+
+    boolean executorTerminated() { return ioExecutor.isTerminated(); }
 
     /** D64: chọn thư mục, Share từng file rồi đăng ký nhóm lên Tracker. */
     @FXML
     private void onShareFolder() {
+        if (closed.get()) return;
         if (shareFileClientService == null || folderClientService == null || sessionId == null) {
             statusLabel.setText("Chưa cấu hình phiên đăng nhập cho màn hình Share.");
             return;
@@ -236,20 +274,23 @@ public final class ShareController {
         chooseFolderButton.setDisable(true);
         statusLabel.setText("Đang quét thư mục...");
         SharedFilesStore store = SharedFilesStore.current();
+        long generation = AuthClientService.sessionGeneration();
 
-        ioExecutor.submit(() -> {
+        submitIfOpen(() -> {
             try {
                 List<FolderScanner.Entry> entries = FolderScanner.scan(dir.toPath());
                 List<String> directories = FolderScanner.scanDirectories(dir.toPath());
                 List<FolderEntryDto> dto = new ArrayList<>();
                 int done = 0;
                 for (FolderScanner.Entry entry : entries) {
+                    if (!isCurrentSession(generation)) return;
                     // Zero-byte files are valid: 0 pieces and SHA-256(empty).
                     final int n = ++done;
-                    Platform.runLater(() -> statusLabel.setText(
+                    postToCurrentSession(generation, () -> statusLabel.setText(
                             "Đang chia sẻ " + n + "/" + entries.size() + ": " + entry.relativePath()));
                     FileMetadata metadata = metadataBuilder.build(entry.absolutePath());
                     ShareFileResponse r = shareFileClientService.publish(sessionId, metadata);
+                    if (!isCurrentSession(generation)) return;
                     if (fileRegistry != null) {
                         fileRegistry.registerCompleteFile(r.fileId(), entry.absolutePath(), metadata);
                     }
@@ -258,18 +299,18 @@ public final class ShareController {
                                 metadata.fileName(), metadata.fileSize(), metadata.fileHash()));
                     }
                     dto.add(new FolderEntryDto(r.fileId(), entry.relativePath()));
-                    Platform.runLater(() -> {
+                    postToCurrentSession(generation, () -> {
                         sharedFiles.removeIf(x -> x.fileId() == r.fileId());
                         sharedFiles.add(new SharedFileEntry(r.fileId(), entry.relativePath()));
                     });
                 }
                 var res = folderClientService.share(sessionId, dir.getName(), dto, directories);
-                Platform.runLater(() -> {
+                postToCurrentSession(generation, () -> {
                     statusLabel.setText("Đã chia sẻ thư mục \"" + dir.getName() + "\" (" + res.fileCount() + " file).");
                     chooseFolderButton.setDisable(false);
                 });
             } catch (Exception e) {
-                Platform.runLater(() -> {
+                postToCurrentSession(generation, () -> {
                     statusLabel.setText("Lỗi chia sẻ thư mục: " + e.getMessage());
                     chooseFolderButton.setDisable(false);
                 });

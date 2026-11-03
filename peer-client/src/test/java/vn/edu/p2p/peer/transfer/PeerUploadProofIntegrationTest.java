@@ -20,6 +20,7 @@ import vn.edu.p2p.peer.share.FileHashUtil;
 import vn.edu.p2p.peer.share.FileMetadataBuilder;
 
 import java.net.Socket;
+import java.net.ServerSocket;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -69,6 +70,42 @@ class PeerUploadProofIntegrationTest {
             assertEquals(FileHashUtil.sha256(fixture.file()), fixture.metadata().fileHash());
             assertEquals(3L, server.totalBytesUploaded());
             assertEquals(2, fixture.replayGuard().size());
+        }
+    }
+
+    @Test
+    void closeReleasesPortAndSameInstanceCanServeAgain() throws Exception {
+        Fixture fixture = createFixture(freePort());
+        PeerUploadServer server = fixture.server();
+        int port = server.listeningPort();
+        server.close();
+        server.close();
+
+        assertTrue(server.workersTerminated());
+        server.start();
+        assertEquals(port, server.listeningPort());
+        try (server) {
+            PeerDownloadClient client = new PeerDownloadClient(fixture.socketFactory(),
+                    fixture.requesterKeys().getPrivate(), fixture.clock());
+            assertEquals(2, client.fetchBitfield("127.0.0.1", port, UPLOADER_ID,
+                    FILE_ID, fixture.ticket()).toBitSet().cardinality());
+            assertArrayEquals(new byte[]{1, 2, 3}, client.downloadPiece("127.0.0.1", port,
+                    UPLOADER_ID, FILE_ID, 0, fixture.ticket()).data());
+        }
+    }
+
+    @Test
+    void closeTerminatesAcceptAndClosesAnIncompleteClientRequest() throws Exception {
+        Fixture fixture = createFixture();
+        PeerUploadServer server = fixture.server();
+        try (Socket client = new Socket("127.0.0.1", server.listeningPort())) {
+            await(() -> server.activeSocketCount() == 1, 1_000);
+            server.close();
+            client.setSoTimeout(500);
+            assertEquals(-1, client.getInputStream().read());
+            assertFalse(server.acceptThreadAlive());
+            assertTrue(server.workersTerminated());
+            server.close();
         }
     }
 
@@ -281,6 +318,10 @@ class PeerUploadProofIntegrationTest {
     }
 
     private Fixture createFixture() throws Exception {
+        return createFixture(0);
+    }
+
+    private Fixture createFixture(int listeningPort) throws Exception {
         Path file = tempDir.resolve("proof-content.bin");
         Files.write(file, new byte[]{1, 2, 3, 4, 5, 6});
         FileMetadata metadata = new FileMetadataBuilder(3).build(file);
@@ -294,7 +335,7 @@ class PeerUploadProofIntegrationTest {
         TicketRevocationList ticketRevocations = new TicketRevocationList(clock);
         PeerP2pSocketFactory socketFactory =
                 new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
-        PeerUploadServer server = new PeerUploadServer(0, registry, socketFactory, 2,
+        PeerUploadServer server = new PeerUploadServer(listeningPort, registry, socketFactory, 2,
                 trackerKeys.getPublic(), false, clock, guard, ticketRevocations);
         server.setUploaderPeerId(UPLOADER_ID);
         server.start();
@@ -302,6 +343,20 @@ class PeerUploadProofIntegrationTest {
                 UPLOADER_ID, requesterKeys.getPublic(), NOW);
         return new Fixture(file, metadata, trackerKeys, requesterKeys, ticket, clock, guard,
                 ticketRevocations, socketFactory, server);
+    }
+
+    private static int freePort() throws IOException {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
+    }
+
+    private static void await(java.util.function.BooleanSupplier condition, long timeoutMillis)
+            throws InterruptedException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS
+                .toNanos(timeoutMillis);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.yield();
+        assertTrue(condition.getAsBoolean(), "condition was not met before timeout");
     }
 
     private static MessageEnvelope bitfieldRequest(Fixture fixture, java.security.PrivateKey signer,

@@ -274,6 +274,8 @@ public final class MultiSourceDownloadEngine {
         }
 
         try {
+            targetFilePath = resolveDownloadTarget(targetFilePath, metadata);
+            DownloadPreflight.check(targetFilePath, metadata.fileSize());
             // Zero-byte shared files contain no pieces. Ensure a real empty file exists
             // before final SHA-256 and history completion; reject symbolic-link targets.
             if (metadata.fileSize() == 0L) {
@@ -529,6 +531,21 @@ public final class MultiSourceDownloadEngine {
                 }
             }
         }
+    }
+
+    private static Path resolveDownloadTarget(Path targetFilePath, FileMetadata metadata)
+            throws IOException {
+        if (!Files.exists(targetFilePath)) {
+            return targetFilePath;
+        }
+        if (!Files.isRegularFile(targetFilePath)) {
+            throw new IOException("Download target exists and is not a regular file");
+        }
+        if (Files.size(targetFilePath) != metadata.fileSize()
+                || inspectExistingPiecesForResume(targetFilePath, metadata).isEmpty()) {
+            return FolderPathResolver.uniquify(targetFilePath);
+        }
+        return targetFilePath;
     }
 
     private FileSourceInfo sourceForRequest(long fileId, FileSourceInfo assignedSource,

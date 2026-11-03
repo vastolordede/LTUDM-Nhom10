@@ -14,6 +14,7 @@ import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.common.dto.FolderDetailResponse;
 import vn.edu.p2p.common.dto.FolderFileInfo;
 import vn.edu.p2p.common.dto.FolderSearchItem;
+import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.transfer.DownloadPreflight;
 import vn.edu.p2p.peer.transfer.DownloadSessionResult;
@@ -36,6 +37,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** D65, D73: tìm thư mục chia sẻ, tải cả thư mục hoặc chọn từng file, giữ cấu trúc thư mục. */
@@ -73,6 +75,8 @@ public final class FolderController {
     private List<String> currentDirectories = List.of();
     private volatile AtomicBoolean cancelSignal = new AtomicBoolean(false);
     private volatile ConnectionPlanner planner;
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private volatile PeerDownloadClient activeDownloadClient;
 
     @FXML
     private void initialize() {
@@ -132,16 +136,18 @@ public final class FolderController {
 
     @FXML
     private void onSearch() {
+        if (closed.get()) return;
         String q = queryField.getText();
         if (q == null || q.isBlank() || folderClient == null) {
             statusLabel.setText("Nhập tên thư mục cần tìm.");
             return;
         }
+        long generation = AuthClientService.sessionGeneration();
         searchButton.setDisable(true);
         executor.submit(() -> {
             try {
                 var res = folderClient.search(sessionId, q.trim());
-                Platform.runLater(() -> {
+                postToUi(generation, () -> {
                     groupsListView.getItems().setAll(res.groups());
                     filesListView.getItems().clear();
                     currentGroupId = 0;
@@ -153,7 +159,7 @@ public final class FolderController {
                     searchButton.setDisable(false);
                 });
             } catch (Exception e) {
-                Platform.runLater(() -> {
+                postToUi(generation, () -> {
                     statusLabel.setText("Lỗi tìm thư mục: " + e.getMessage());
                     searchButton.setDisable(false);
                 });
@@ -162,13 +168,14 @@ public final class FolderController {
     }
 
     private void loadDetail(FolderSearchItem item) {
-        if (item == null) {
+        if (item == null || closed.get()) {
             return;
         }
+        long generation = AuthClientService.sessionGeneration();
         executor.submit(() -> {
             try {
                 FolderDetailResponse d = folderClient.detail(sessionId, item.groupId());
-                Platform.runLater(() -> {
+                postToUi(generation, () -> {
                     currentGroupName = d.groupName();
                     currentGroupId = d.groupId();
                     filesListView.getItems().setAll(d.files());
@@ -176,7 +183,8 @@ public final class FolderController {
                     downloadAllButton.setDisable(false);
                 });
             } catch (Exception e) {
-                Platform.runLater(() -> statusLabel.setText("Lỗi lấy danh sách file: " + e.getMessage()));
+                postToUi(generation,
+                        () -> statusLabel.setText("Lỗi lấy danh sách file: " + e.getMessage()));
             }
         });
     }
@@ -203,14 +211,17 @@ public final class FolderController {
     @FXML
     private void onCancel() {
         cancelSignal.set(true);
+        PeerDownloadClient client = activeDownloadClient;
+        if (client != null) client.cancelActiveRequests();
         statusLabel.setText("Đang hủy...");
     }
 
     private void startDownload(List<FolderFileInfo> files, boolean fullFolder) {
-        if ((files.isEmpty() && !fullFolder) || currentGroupName == null
+        if (closed.get() || (files.isEmpty() && !fullFolder) || currentGroupName == null
                 || currentGroupId <= 0 || sessionId == null) {
             return;
         }
+        long generation = AuthClientService.sessionGeneration();
         String group = SafeFileName.validate(currentGroupName) == null
                 ? currentGroupName : SafeFileName.sanitize(currentGroupName);
         Path root = outputDir.resolve(group);
@@ -226,21 +237,24 @@ public final class FolderController {
             int failed = 0;
             StringBuilder errors = new StringBuilder();
             List<String> completedEvidence = new ArrayList<>();
+            List<String> renamedFiles = new ArrayList<>();
             try {
                 Files.createDirectories(root);
                 for (String dir : selectedDirectories) {
                     Files.createDirectories(FolderPathResolver.resolve(root, dir));
                 }
             } catch (Exception directoryFailure) {
-                Platform.runLater(() -> {
+                postToUi(generation, () -> {
                     statusLabel.setText("Cannot create folder structure: " + directoryFailure.getMessage());
                     setBusy(false);
                 });
                 return;
             }
+            PeerDownloadClient peerDownloadClient =
+                    new PeerDownloadClient(socketFactory, requesterPrivateKey).withPlanner(planner);
+            activeDownloadClient = peerDownloadClient;
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
-                    fileRegistry, new PeerDownloadClient(socketFactory, requesterPrivateKey)
-                            .withPlanner(planner),
+                    fileRegistry, peerDownloadClient,
                     MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED,
                     (refreshFileId, source) -> sourceClient.refreshTicket(
                             sessionId, refreshFileId, source.peerId()));
@@ -248,7 +262,7 @@ public final class FolderController {
             for (int i = 0; i < files.size() && !cancel.get(); i++) {
                 FolderFileInfo f = files.get(i);
                 final int index = i;
-                Platform.runLater(() -> {
+                postToUi(generation, () -> {
                     progressBar.setProgress((double) index / files.size());
                     statusLabel.setText("Đang tải " + (index + 1) + "/" + files.size() + ": " + f.relativePath());
                 });
@@ -276,7 +290,9 @@ public final class FolderController {
                         }
                         continue;
                     }
-                    DownloadPreflight.check(target, f.fileSize());
+                    if (!Files.exists(target)) {
+                        DownloadPreflight.check(target, f.fileSize());
+                    }
 
                     var sourceResponse = sourceClient.findSources(sessionId, f.fileId());
                     if (sourceResponse.fileHash() == null
@@ -294,6 +310,10 @@ public final class FolderController {
                     }
                     DownloadSessionResult r = engine.downloadFile(
                             f.fileId(), sources, target, null, cancel, transferId, f.fileHash());
+                    if (!r.outputFile().equals(target)) {
+                        renamedFiles.add(f.relativePath() + " -> "
+                                + r.outputFile().getFileName());
+                    }
                     boolean historySaved = false;
                     try {
                         historyClient.reportTransferResult(sessionId, r);
@@ -312,10 +332,13 @@ public final class FolderController {
                         errors.append("\n- ").append(f.relativePath()).append(": ").append(r.failureReason());
                     }
                 } catch (Exception e) {
-                    failed++;
-                    errors.append("\n- ").append(f.relativePath()).append(": ").append(e.getMessage());
+                    if (!cancel.get()) {
+                        failed++;
+                        errors.append("\n- ").append(f.relativePath()).append(": ").append(e.getMessage());
+                    }
                 }
             }
+            activeDownloadClient = null;
 
             if (fullFolder && !cancel.get() && failed == 0 && ok == files.size()) {
                 try {
@@ -328,10 +351,12 @@ public final class FolderController {
             final int okCount = ok;
             final int failCount = failed;
             final String detail = errors.toString();
-            Platform.runLater(() -> {
+            final String renameNotice = renamedFiles.isEmpty() ? ""
+                    : "\nĐã đổi tên file trùng: " + String.join(", ", renamedFiles);
+            postToUi(generation, () -> {
                 progressBar.setProgress(cancel.get() ? progressBar.getProgress() : 1.0);
                 statusLabel.setText((cancel.get() ? "Đã hủy. " : "Xong. ") + okCount + " file thành công, "
-                        + failCount + " lỗi. Lưu tại: " + root + detail);
+                        + failCount + " lỗi. Lưu tại: " + root + detail + renameNotice);
                 setBusy(false);
             });
         });
@@ -344,7 +369,32 @@ public final class FolderController {
     }
 
     public void shutdown() {
+        if (!closed.compareAndSet(false, true)) return;
         cancelSignal.set(true);
-        executor.shutdownNow();
+        PeerDownloadClient client = activeDownloadClient;
+        if (client != null) client.cancelActiveRequests();
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(100, TimeUnit.MILLISECONDS)) {
+                executor.shutdownNow();
+                executor.awaitTermination(150, TimeUnit.MILLISECONDS);
+            }
+        } catch (InterruptedException e) {
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    boolean workerTerminated() {
+        return executor.isTerminated();
+    }
+
+    private void postToUi(long generation, Runnable action) {
+        if (closed.get() || !AuthClientService.isCurrentGeneration(generation)) return;
+        Platform.runLater(() -> {
+            if (!closed.get() && AuthClientService.isCurrentGeneration(generation)) {
+                action.run();
+            }
+        });
     }
 }

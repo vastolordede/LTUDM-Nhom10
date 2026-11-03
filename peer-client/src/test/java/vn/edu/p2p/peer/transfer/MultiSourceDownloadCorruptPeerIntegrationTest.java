@@ -82,8 +82,10 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
             assertEquals(0, piecesReceivedFrom(result, BAD_PEER_ID));
             assertEquals(PIECE_COUNT, piecesReceivedFrom(result, GOOD_PEER_ID));
             assertNull(completedPieceError.get());
-            assertEquals(scenario.metadata().fileHash(), FileHashUtil.sha256(scenario.target()));
-            assertArrayEquals(scenario.content(), Files.readAllBytes(scenario.target()));
+            assertEquals(scenario.metadata().fileHash(), FileHashUtil.sha256(result.outputFile()));
+            assertArrayEquals(scenario.content(), Files.readAllBytes(result.outputFile()));
+            assertArrayEquals(filled(scenario.content().length, SENTINEL),
+                    Files.readAllBytes(scenario.target()));
         }
     }
 

@@ -43,9 +43,11 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private DownloadController downloadController;
     private TransferHistoryController historyController;
     private Stage stage;
-    private boolean closed;
+    private volatile boolean closed;
+    private volatile Thread natProbeThread;
     private final boolean p2pTls;
     private RelayAgent relayAgent;
+    private volatile RendezvousClient rendezvousClient;
     private FolderController folderController;
     private Runnable onLogoutRequested;
     private Button logoutButton;
@@ -235,6 +237,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         try {
             RendezvousClient rendezvous = new RendezvousClient(
                     connection.configuration(), EnvConfig.integer("RENDEZVOUS_PORT", 9001));
+            rendezvousClient = rendezvous;
             boolean relayWanted = EnvConfig.flag("RELAY_ENABLED", false);
             boolean relayAllowed = relayWanted;
             ConnectionPlanner planner = new ConnectionPlanner(
@@ -269,6 +272,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 });
             }, "peer-nat-probe");
             probe.setDaemon(true);
+            natProbeThread = probe;
             probe.start();
         } catch (RuntimeException e) {
             if (dashboardMessage != null) {
@@ -284,22 +288,57 @@ public final class TransferDashboardWindow implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
+        Thread probe = natProbeThread;
+        if (probe != null) probe.interrupt();
+        RendezvousClient rendezvous = rendezvousClient;
+        if (rendezvous != null) rendezvous.close();
         if (stage != null) {
             stage.setOnCloseRequest(null);
             stage.close();
         }
-        if (shareController != null) shareController.shutdown();
-        if (exploreController != null) exploreController.shutdown();
-        if (myFilesController != null) myFilesController.shutdown();
-        if (downloadController != null) downloadController.shutdown();
-        if (historyController != null) historyController.shutdown();
-        if (folderController != null) folderController.shutdown();
-        if (relayAgent != null) relayAgent.close();
-        uploadServer.close();
+        FolderController folder = folderController;
+        DownloadController download = downloadController;
+        RelayAgent relay = relayAgent;
+        ShareController share = shareController;
+        ExploreController explore = exploreController;
+        MyFilesController myFiles = myFilesController;
+        TransferHistoryController history = historyController;
+        Thread teardown = new Thread(() -> {
+            if (download != null && folder != null) {
+                Thread downloadShutdown = new Thread(download::shutdown, "peer-download-shutdown");
+                downloadShutdown.start();
+                folder.shutdown();
+                joinShutdownThread(downloadShutdown);
+            } else {
+                if (download != null) download.shutdown();
+                if (folder != null) folder.shutdown();
+            }
+            if (relay != null) relay.close();
+            uploadServer.close();
+            if (share != null) share.shutdown();
+            if (explore != null) explore.shutdown();
+            if (myFiles != null) myFiles.shutdown();
+            if (history != null) history.shutdown();
+        }, "peer-dashboard-teardown");
+        teardown.setDaemon(false);
+        teardown.start();
+        try {
+            teardown.join(1_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         logoutButton = null;
         dashboardMessage = null;
         contentPane = null;
         views = null;
         navButtons = null;
+    }
+
+    private static void joinShutdownThread(Thread thread) {
+        try {
+            thread.join(500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

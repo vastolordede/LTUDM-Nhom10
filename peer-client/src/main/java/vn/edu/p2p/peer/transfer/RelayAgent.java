@@ -17,11 +17,14 @@ import java.util.logging.Logger;
 /** D79: giữ kênh điều khiển tới Tracker, khi có người muốn tải thì mở kết nối dữ liệu ra ngoài. */
 public final class RelayAgent implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger(RelayAgent.class.getName());
+    private static final long SHUTDOWN_TIMEOUT_MILLIS = 500;
 
     private final RendezvousClient client;
     private final String sessionId;
     private final PeerUploadServer uploadServer;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final Object lifecycleLock = new Object();
     private final ExecutorService acceptors = new ThreadPoolExecutor(
             0, 16, 30, TimeUnit.SECONDS, new SynchronousQueue<>(), runnable -> {
                 Thread t = new Thread(runnable, "peer-relay-accept");
@@ -30,7 +33,7 @@ public final class RelayAgent implements AutoCloseable {
             });
 
     private volatile Socket control;
-    private Thread thread;
+    private volatile Thread thread;
 
     public RelayAgent(RendezvousClient client, String sessionId, PeerUploadServer uploadServer) {
         this.client = client;
@@ -39,6 +42,7 @@ public final class RelayAgent implements AutoCloseable {
     }
 
     public synchronized void start() {
+        if (closed.get()) return;
         if (!running.compareAndSet(false, true)) {
             return;
         }
@@ -51,7 +55,10 @@ public final class RelayAgent implements AutoCloseable {
         int delay = 3_000;
         while (running.get()) {
             try (Socket channel = client.register(sessionId)) {
-                control = channel;
+                synchronized (lifecycleLock) {
+                    if (closed.get()) return;
+                    control = channel;
+                }
                 delay = 3_000;
                 LOG.info("Relay channel registered with Tracker");
                 DataInputStream in = new DataInputStream(channel.getInputStream());
@@ -60,7 +67,7 @@ public final class RelayAgent implements AutoCloseable {
                     if ("INCOMING".equals(command)) {
                         String token = in.readUTF();
                         try {
-                            acceptors.execute(() -> accept(token));
+                            if (!closed.get()) acceptors.execute(() -> accept(token));
                         } catch (RejectedExecutionException e) {
                             // Saturated acceptor pool: reject this incoming request but keep
                             // the control channel alive for future downloads.
@@ -69,10 +76,11 @@ public final class RelayAgent implements AutoCloseable {
                     }
                 }
             } catch (IOException e) {
-                if (running.get()) {
+                if (running.get() && !closed.get()) {
                     LOG.log(Level.INFO, "Relay channel lost, retry in " + delay + " ms: " + e.getMessage());
                 }
             }
+            if (closed.get()) return;
             try {
                 Thread.sleep(delay);
             } catch (InterruptedException e) {
@@ -84,11 +92,19 @@ public final class RelayAgent implements AutoCloseable {
     }
 
     private void accept(String token) {
+        if (closed.get()) return;
         Socket data = null;
         try {
             data = client.accept(sessionId, token);
-            uploadServer.serveRelayedSocket(data); // upload server owns socket after handoff
-            data = null;
+            synchronized (lifecycleLock) {
+                if (closed.get()) {
+                    data.close();
+                    data = null;
+                    return;
+                }
+                uploadServer.serveRelayedSocket(data); // upload server owns socket after handoff
+                data = null;
+            }
         } catch (IOException | RuntimeException e) {
             if (data != null) {
                 try { data.close(); } catch (IOException ignored) { }
@@ -99,18 +115,52 @@ public final class RelayAgent implements AutoCloseable {
 
     @Override
     public void close() {
-        running.set(false);
-        Socket c = control;
-        if (c != null) {
-            try {
-                c.close();
-            } catch (IOException ignored) {
-                // best effort
+        synchronized (lifecycleLock) {
+            if (!closed.compareAndSet(false, true)) return;
+            running.set(false);
+            client.close();
+            Socket c = control;
+            control = null;
+            if (c != null) {
+                try {
+                    c.close();
+                } catch (IOException ignored) {
+                    // best effort
+                }
             }
         }
         acceptors.shutdownNow();
-        if (thread != null) {
-            thread.interrupt();
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SHUTDOWN_TIMEOUT_MILLIS);
+        Thread loop = thread;
+        if (loop != null && loop != Thread.currentThread()) {
+            loop.interrupt();
+            joinUntil(loop, deadline);
         }
+        long remaining = deadline - System.nanoTime();
+        if (remaining > 0) {
+            try {
+                acceptors.awaitTermination(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private static void joinUntil(Thread thread, long deadline) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) return;
+        try {
+            long millis = TimeUnit.NANOSECONDS.toMillis(remaining);
+            int nanos = (int) (remaining - TimeUnit.MILLISECONDS.toNanos(millis));
+            thread.join(millis, nanos);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    boolean acceptorsTerminated() { return acceptors.isTerminated(); }
+    boolean loopTerminated() {
+        Thread current = thread;
+        return current == null || !current.isAlive();
     }
 }

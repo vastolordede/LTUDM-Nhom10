@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,7 +62,10 @@ class MultiSourceDownloadFailoverIntegrationTest {
             assertEquals(bytesForFirstPieces(scenario.metadata(), K), seeds.a().totalBytesUploaded());
             assertEquals(bytesForPieces(scenario.metadata(), K, PIECE_COUNT),
                     seeds.b().totalBytesUploaded());
-            assertEquals(scenario.metadata().fileHash(), FileHashUtil.sha256(scenario.target()));
+            assertEquals(scenario.metadata().fileHash(), FileHashUtil.sha256(result.outputFile()));
+            assertArrayEquals(expectedPartialFile(scenario.content(), scenario.metadata(), 0),
+                    Files.readAllBytes(scenario.target()),
+                    "Original destination should remain unchanged; selected=" + result.outputFile());
             assertTrue(downloader.find(FILE_ID).orElseThrow().isComplete());
         }
     }
@@ -86,7 +90,11 @@ class MultiSourceDownloadFailoverIntegrationTest {
             assertTrue(result.failureReason().contains("incomplete"));
             assertEquals(K, piecesReceivedFrom(result, PEER_A));
             assertEquals(bytesForFirstPieces(scenario.metadata(), K), seed.totalBytesUploaded());
-            assertArrayEquals(expectedPartialFile(scenario.content(), scenario.metadata(), K),
+            assertNotEquals(scenario.target(), result.outputFile());
+            assertArrayEquals(expectedPartialFile(scenario.content(), scenario.metadata(), K,
+                            (byte) 0),
+                    Files.readAllBytes(result.outputFile()));
+            assertArrayEquals(expectedPartialFile(scenario.content(), scenario.metadata(), 0),
                     Files.readAllBytes(scenario.target()));
         }
     }
@@ -163,8 +171,13 @@ class MultiSourceDownloadFailoverIntegrationTest {
     }
 
     private static byte[] expectedPartialFile(byte[] source, FileMetadata metadata, int deliveredCount) {
+        return expectedPartialFile(source, metadata, deliveredCount, SENTINEL);
+    }
+
+    private static byte[] expectedPartialFile(byte[] source, FileMetadata metadata,
+                                              int deliveredCount, byte initialValue) {
         byte[] expected = new byte[source.length];
-        Arrays.fill(expected, SENTINEL);
+        Arrays.fill(expected, initialValue);
         for (int pieceIndex = 0; pieceIndex < deliveredCount; pieceIndex++) {
             int offset = pieceIndex * metadata.pieceSize();
             int length = metadata.pieces().get(pieceIndex).pieceLength();

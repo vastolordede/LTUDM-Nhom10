@@ -9,13 +9,15 @@ import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class TrackerConnection implements AutoCloseable {
     private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
     private static final int READ_TIMEOUT_MILLIS = 10_000;
 
     private final TrackerConnectionConfig config;
-    private Socket socket;
+    private final AtomicLong requestGeneration = new AtomicLong();
+    private volatile Socket socket;
 
     public TrackerConnection(TrackerConnectionConfig config) {
         this.config = java.util.Objects.requireNonNull(config);
@@ -25,7 +27,18 @@ public final class TrackerConnection implements AutoCloseable {
     public TrackerConnectionConfig configuration() { return config; }
 
     /** A stale persistent socket can appear connected even after Tracker timeout. */
-    public synchronized MessageEnvelope request(MessageEnvelope request) throws IOException {
+    public MessageEnvelope request(MessageEnvelope request) throws IOException {
+        long generation = requestGeneration.get();
+        synchronized (this) {
+            if (generation != requestGeneration.get()) {
+                throw new IOException("Tracker request was cancelled");
+            }
+            return requestLocked(request, generation);
+        }
+    }
+
+    private MessageEnvelope requestLocked(MessageEnvelope request, long generation)
+            throws IOException {
         boolean wasEstablished = socket != null && socket.isConnected() && !socket.isClosed();
         try {
             return requestOnce(request);
@@ -33,7 +46,8 @@ public final class TrackerConnection implements AutoCloseable {
             closeSocket();
             // Never replay registration, share, unshare or history mutations after
             // uncertain delivery. A duplicate login replaces the previous Peer session.
-            if (!wasEstablished || !isSafeToReplay(request.type())
+            if (generation != requestGeneration.get()
+                    || !wasEstablished || !isSafeToReplay(request.type())
                     || first instanceof ProtocolException) throw first;
             try {
                 return requestOnce(request);
@@ -93,8 +107,21 @@ public final class TrackerConnection implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        closeSocket();
+    public void close() {
+        abortCurrentRequest();
+    }
+
+    /** Closes a blocked request without waiting for the request monitor. */
+    public void abortCurrentRequest() {
+        requestGeneration.incrementAndGet();
+        Socket current = socket;
+        if (current != null) {
+            try {
+                current.close();
+            } catch (IOException ignored) {
+                // best effort
+            }
+        }
     }
 
     private void closeSocket() {

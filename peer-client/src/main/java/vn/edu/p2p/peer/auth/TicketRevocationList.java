@@ -67,6 +67,12 @@ public final class TicketRevocationList {
         return trackerInstanceId;
     }
 
+    public synchronized void reset() {
+        entries.clear();
+        latestSequence = 0L;
+        trackerInstanceId = null;
+    }
+
     public synchronized boolean isRevoked(PeerAccessTickets.TicketClaims claims,
                                           String uploaderPeerId, long fileId) {
         pruneExpired();
