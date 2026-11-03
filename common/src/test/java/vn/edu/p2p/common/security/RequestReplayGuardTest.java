@@ -19,6 +19,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RequestReplayGuardTest {
     @Test
+    void defaultRetentionCoversTheEntireProofTimestampWindow() {
+        assertTrue(RequestReplayGuard.DEFAULT_RETENTION.compareTo(
+                Duration.ofSeconds(2 * PeerRequestProof.DEFAULT_TIMESTAMP_WINDOW_SECONDS)) > 0);
+    }
+
+    @Test
     void rejectsDuplicateNonceButScopesItToRequester() {
         RequestReplayGuard guard = new RequestReplayGuard(
                 Clock.fixed(Instant.parse("2026-11-01T00:00:00Z"), ZoneOffset.UTC),

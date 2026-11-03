@@ -88,7 +88,8 @@ class MultiSourceTransferIntegrationTest {
             );
 
             LocalFileRegistry downloaderReg = new LocalFileRegistry();
-            PeerDownloadClient downloadClient = new PeerDownloadClient(socketFactory);
+            PeerDownloadClient downloadClient = new PeerDownloadClient(
+                    socketFactory, PeerTestTickets.requesterPrivateKey());
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     downloaderReg,
                     downloadClient,

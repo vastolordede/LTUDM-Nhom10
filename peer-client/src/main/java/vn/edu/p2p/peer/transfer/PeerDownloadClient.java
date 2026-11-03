@@ -11,10 +11,13 @@ import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ResponseStatus;
+import vn.edu.p2p.common.security.PeerRequestProof;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.Socket;
+import java.security.PrivateKey;
+import java.time.Clock;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -35,10 +38,19 @@ public final class PeerDownloadClient {
     }
 
     private final PeerP2pSocketFactory socketFactory;
+    private final PrivateKey requesterPrivateKey;
+    private final Clock clock;
     private ConnectionPlanner planner;
 
-    public PeerDownloadClient(PeerP2pSocketFactory socketFactory) {
+    public PeerDownloadClient(PeerP2pSocketFactory socketFactory, PrivateKey requesterPrivateKey) {
+        this(socketFactory, requesterPrivateKey, Clock.systemUTC());
+    }
+
+    PeerDownloadClient(PeerP2pSocketFactory socketFactory, PrivateKey requesterPrivateKey,
+                       Clock clock) {
         this.socketFactory = Objects.requireNonNull(socketFactory, "socketFactory");
+        this.requesterPrivateKey = Objects.requireNonNull(requesterPrivateKey, "requesterPrivateKey");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public PeerDownloadClient withPlanner(ConnectionPlanner planner) {
@@ -53,13 +65,13 @@ public final class PeerDownloadClient {
     /**
      * S21-S22: Gửi GET_BITFIELD_REQUEST tới một Peer nguồn và nhận BITFIELD_RESPONSE.
      */
-    public BitfieldResponse fetchBitfield(String host, int port, long fileId) throws IOException {
-        return fetchBitfield(host, port, fileId, null);
-    }
-
-    public BitfieldResponse fetchBitfield(String host, int port, long fileId,
+    public BitfieldResponse fetchBitfield(String host, int port, String uploaderId, long fileId,
                                           String accessTicket) throws IOException {
-        GetBitfieldRequest payload = new GetBitfieldRequest(fileId, accessTicket);
+        PeerRequestProof.Proof proof = PeerRequestProof.sign(requesterPrivateKey,
+                PeerRequestProof.RequestType.BITFIELD, uploaderId, fileId,
+                PeerRequestProof.BITFIELD_PIECE_INDEX, accessTicket, clock);
+        GetBitfieldRequest payload = new GetBitfieldRequest(fileId, accessTicket,
+                proof.timestampEpochMillis(), proof.requestNonce(), proof.signature());
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.GET_BITFIELD_REQUEST,
                 UUID.randomUUID().toString(),
@@ -112,18 +124,13 @@ public final class PeerDownloadClient {
      * S03-S05, S10-S11: Gửi REQUEST_PIECE tới Peer nguồn, đọc PIECE_RESPONSE header
      * và đọc tiếp mảng byte nhị phân của piece đó.
      */
-    public DownloadedPiece downloadPiece(
-            String host,
-            int port,
-            long fileId,
-            int pieceIndex
-    ) throws IOException {
-        return downloadPiece(host, port, fileId, pieceIndex, null);
-    }
-
-    public DownloadedPiece downloadPiece(String host, int port, long fileId,
+    public DownloadedPiece downloadPiece(String host, int port, String uploaderId, long fileId,
                                          int pieceIndex, String accessTicket) throws IOException {
-        PieceRequest payload = new PieceRequest(fileId, pieceIndex, accessTicket);
+        PeerRequestProof.Proof proof = PeerRequestProof.sign(requesterPrivateKey,
+                PeerRequestProof.RequestType.PIECE, uploaderId, fileId,
+                pieceIndex, accessTicket, clock);
+        PieceRequest payload = new PieceRequest(fileId, pieceIndex, accessTicket,
+                proof.timestampEpochMillis(), proof.requestNonce(), proof.signature());
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.REQUEST_PIECE,
                 UUID.randomUUID().toString(),

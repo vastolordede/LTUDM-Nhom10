@@ -139,7 +139,8 @@ class MultiSourceDownloadFailoverIntegrationTest {
 
     private static MultiSourceDownloadEngine engine(LocalFileRegistry registry) {
         return new MultiSourceDownloadEngine(registry,
-                new PeerDownloadClient(new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp())),
+                new PeerDownloadClient(new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp()),
+                        PeerTestTickets.requesterPrivateKey()),
                 1,
                 PieceScheduler.Strategy.ROUND_ROBIN);
     }

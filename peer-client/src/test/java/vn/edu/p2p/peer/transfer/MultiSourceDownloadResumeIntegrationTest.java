@@ -84,7 +84,7 @@ class MultiSourceDownloadResumeIntegrationTest {
                     System.currentTimeMillis(), ticket);
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     new LocalFileRegistry(),
-                    new PeerDownloadClient(socketFactory),
+                    new PeerDownloadClient(socketFactory, PeerTestTickets.requesterPrivateKey()),
                     3,
                     PieceScheduler.Strategy.ROUND_ROBIN
             );

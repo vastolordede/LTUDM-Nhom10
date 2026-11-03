@@ -22,6 +22,7 @@ import vn.edu.p2p.peer.share.FileSourceClientService;
 import java.io.File;
 import java.nio.file.Path;
 import java.nio.file.Files;
+import java.security.PrivateKey;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -99,6 +100,7 @@ public final class DownloadController {
     private PeerP2pSocketFactory p2pSocketFactory;
     private PeerUploadServer uploadServer;
     private String sessionId;
+    private PrivateKey requesterPrivateKey;
     private ConnectionPlanner planner;
 
     private Path selectedOutputDir;
@@ -129,7 +131,8 @@ public final class DownloadController {
             String sessionId,
             LocalFileRegistry fileRegistry,
             PeerP2pSocketFactory p2pSocketFactory,
-            PeerUploadServer uploadServer
+            PeerUploadServer uploadServer,
+            PrivateKey requesterPrivateKey
     ) {
         this.fileSourceClientService = new FileSourceClientService(connection);
         this.transferHistoryClientService = new TransferHistoryClientService(connection);
@@ -137,6 +140,7 @@ public final class DownloadController {
         this.fileRegistry = fileRegistry;
         this.p2pSocketFactory = p2pSocketFactory;
         this.uploadServer = uploadServer;
+        this.requesterPrivateKey = requesterPrivateKey;
     }
 
     public void setConnectionPlanner(ConnectionPlanner planner) {
@@ -283,7 +287,8 @@ public final class DownloadController {
                 // Vẫn tiếp tục tải P2P kể cả khi ghi log bước đầu gặp lỗi mạng tạm thời
             }
 
-            PeerDownloadClient downloadClient = new PeerDownloadClient(p2pSocketFactory);
+            PeerDownloadClient downloadClient = new PeerDownloadClient(
+                    p2pSocketFactory, requesterPrivateKey);
                         if (planner != null) {
                 planner.remember(sources);
                 planner.setListener((peerId, mode) -> Platform.runLater(() ->

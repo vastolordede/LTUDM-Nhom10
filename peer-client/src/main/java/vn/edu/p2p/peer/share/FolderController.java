@@ -30,6 +30,7 @@ import vn.edu.p2p.peer.transfer.ConnectionPlanner;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.PrivateKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -64,6 +65,7 @@ public final class FolderController {
     private LocalFileRegistry fileRegistry;
     private PeerP2pSocketFactory socketFactory;
     private String sessionId;
+    private PrivateKey requesterPrivateKey;
 
     private Path outputDir = Path.of(System.getProperty("user.home"), "Downloads");
     private String currentGroupName;
@@ -100,13 +102,15 @@ public final class FolderController {
     }
 
     public void configure(TrackerConnection connection, String sessionId,
-                          LocalFileRegistry registry, PeerP2pSocketFactory socketFactory) {
+                          LocalFileRegistry registry, PeerP2pSocketFactory socketFactory,
+                          PrivateKey requesterPrivateKey) {
         this.folderClient = new FolderClientService(connection);
         this.sourceClient = new FileSourceClientService(connection);
         this.historyClient = new TransferHistoryClientService(connection);
         this.sessionId = sessionId;
         this.fileRegistry = registry;
         this.socketFactory = socketFactory;
+        this.requesterPrivateKey = requesterPrivateKey;
     }
 
     public void setConnectionPlanner(ConnectionPlanner planner) {
@@ -235,7 +239,8 @@ public final class FolderController {
                 return;
             }
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
-                    fileRegistry, new PeerDownloadClient(socketFactory).withPlanner(planner),
+                    fileRegistry, new PeerDownloadClient(socketFactory, requesterPrivateKey)
+                            .withPlanner(planner),
                     MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED);
 
             for (int i = 0; i < files.size() && !cancel.get(); i++) {

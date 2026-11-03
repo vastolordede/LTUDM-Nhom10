@@ -128,6 +128,7 @@ public final class MultiSourceDownloadEngine {
                 BitfieldResponse bf = downloadClient.fetchBitfield(
                         source.ipAddress(),
                         source.listeningPort(),
+                        source.peerId(),
                         fileId,
                         source.accessTicket()
                 );
@@ -381,6 +382,7 @@ public final class MultiSourceDownloadEngine {
                 PeerDownloadClient.DownloadedPiece downloaded = downloadClient.downloadPiece(
                         source.ipAddress(),
                         source.listeningPort(),
+                        source.peerId(),
                         fileId,
                         pieceIndex,
                         source.accessTicket()

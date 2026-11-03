@@ -6,10 +6,17 @@ package vn.edu.p2p.common.dto;
 public record PieceRequest(
         long fileId,
         int pieceIndex,
-        String accessTicket
+        String accessTicket,
+        Long proofTimestamp,
+        String proofNonce,
+        String proofSignature
 ) {
     public PieceRequest(long fileId, int pieceIndex) {
-        this(fileId, pieceIndex, null);
+        this(fileId, pieceIndex, null, null, null, null);
+    }
+
+    public PieceRequest(long fileId, int pieceIndex, String accessTicket) {
+        this(fileId, pieceIndex, accessTicket, null, null, null);
     }
 
     public PieceRequest {

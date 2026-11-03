@@ -166,7 +166,8 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
         PeerP2pSocketFactory socketFactory =
                 new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
         return new MultiSourceDownloadEngine(
-                registry, new PeerDownloadClient(socketFactory), 1, strategy);
+                registry, new PeerDownloadClient(socketFactory,
+                        PeerTestTickets.requesterPrivateKey()), 1, strategy);
     }
 
     private static void verifyRegistryPieces(

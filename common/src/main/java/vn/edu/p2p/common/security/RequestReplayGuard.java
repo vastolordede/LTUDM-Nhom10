@@ -8,7 +8,8 @@ import java.util.Map;
 import java.util.Objects;
 
 public final class RequestReplayGuard {
-    public static final Duration DEFAULT_RETENTION = Duration.ofSeconds(60);
+    public static final Duration DEFAULT_RETENTION = Duration.ofSeconds(
+            2 * PeerRequestProof.DEFAULT_TIMESTAMP_WINDOW_SECONDS + 1);
     public static final int DEFAULT_MAX_ENTRIES = 100_000;
 
     private record ReplayKey(String requesterId, String nonce) {}
