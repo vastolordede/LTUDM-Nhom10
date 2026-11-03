@@ -15,16 +15,40 @@ public final class TrackerConnection implements AutoCloseable {
     private static final int CONNECT_TIMEOUT_MILLIS = 5_000;
     private static final int READ_TIMEOUT_MILLIS = 10_000;
 
-    private final TrackerConnectionConfig config;
+    private final Object socketLock = new Object();
+    private volatile TrackerConnectionConfig config;
+    private final int connectTimeoutMillis;
+    private final int readTimeoutMillis;
     private final AtomicLong requestGeneration = new AtomicLong();
     private volatile Socket socket;
 
     public TrackerConnection(TrackerConnectionConfig config) {
+        this(config, CONNECT_TIMEOUT_MILLIS, READ_TIMEOUT_MILLIS);
+    }
+
+    public TrackerConnection(TrackerConnectionConfig config, int connectTimeoutMillis,
+                             int readTimeoutMillis) {
         this.config = java.util.Objects.requireNonNull(config);
+        if (connectTimeoutMillis < 1 || readTimeoutMillis < 1) {
+            throw new IllegalArgumentException("Tracker timeouts must be positive");
+        }
+        this.connectTimeoutMillis = connectTimeoutMillis;
+        this.readTimeoutMillis = readTimeoutMillis;
     }
 
     /** Reuse the actual selected Tracker endpoint (including UI-saved TLS settings). */
     public TrackerConnectionConfig configuration() { return config; }
+
+    /** Replaces endpoint settings without waiting for a blocked request or retaining its socket. */
+    public void reconfigure(TrackerConnectionConfig newConfig) {
+        java.util.Objects.requireNonNull(newConfig, "newConfig");
+        synchronized (socketLock) {
+            if (config.equals(newConfig)) return;
+            config = newConfig;
+            requestGeneration.incrementAndGet();
+            closeSocketLocked();
+        }
+    }
 
     /** A stale persistent socket can appear connected even after Tracker timeout. */
     public MessageEnvelope request(MessageEnvelope request) throws IOException {
@@ -60,9 +84,9 @@ public final class TrackerConnection implements AutoCloseable {
     }
 
     private MessageEnvelope requestOnce(MessageEnvelope request) throws IOException {
-        ensureConnected();
-        ProtocolCodec.write(socket.getOutputStream(), request);
-        MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+        Socket active = ensureConnected();
+        ProtocolCodec.write(active.getOutputStream(), request);
+        MessageEnvelope response = ProtocolCodec.read(active.getInputStream());
         ProtocolCompatibilityException.validateResponse(response, "Tracker");
         if (!request.requestId().equals(response.requestId())) {
             throw new ProtocolException("Tracker response requestId mismatch");
@@ -79,30 +103,45 @@ public final class TrackerConnection implements AutoCloseable {
         };
     }
 
-    private void ensureConnected() throws IOException {
-        if (socket != null && socket.isConnected() && !socket.isClosed()) {
-            return;
+    private Socket ensureConnected() throws IOException {
+        final TrackerConnectionConfig selectedConfig;
+        final long selectedGeneration;
+        synchronized (socketLock) {
+            if (socket != null && socket.isConnected() && !socket.isClosed()) return socket;
+            socket = null;
+            selectedConfig = config;
+            selectedGeneration = requestGeneration.get();
         }
 
-        if (config.tlsEnabled()) {
-            socket = new TlsTrackerSocketFactory(config).connect(
-                    CONNECT_TIMEOUT_MILLIS,
-                    READ_TIMEOUT_MILLIS
-            );
-            return;
+        Socket candidate;
+        if (selectedConfig.tlsEnabled()) {
+            candidate = new TlsTrackerSocketFactory(selectedConfig).connect(
+                    connectTimeoutMillis, readTimeoutMillis);
+        } else {
+            candidate = new Socket();
+            boolean connected = false;
+            try {
+                candidate.connect(new InetSocketAddress(selectedConfig.host(), selectedConfig.port()),
+                        connectTimeoutMillis);
+                candidate.setSoTimeout(readTimeoutMillis);
+                candidate.setTcpNoDelay(true);
+                connected = true;
+            } finally {
+                if (!connected) candidate.close();
+            }
         }
 
-        Socket candidate = new Socket();
-        boolean connected = false;
-        try {
-            candidate.connect(new InetSocketAddress(config.host(), config.port()),
-                    CONNECT_TIMEOUT_MILLIS);
-            candidate.setSoTimeout(READ_TIMEOUT_MILLIS);
-            candidate.setTcpNoDelay(true);
+        synchronized (socketLock) {
+            if (selectedGeneration != requestGeneration.get() || selectedConfig != config) {
+                candidate.close();
+                throw new IOException("Tracker configuration changed while connecting");
+            }
+            if (socket != null && socket.isConnected() && !socket.isClosed()) {
+                candidate.close();
+                return socket;
+            }
             socket = candidate;
-            connected = true;
-        } finally {
-            if (!connected) candidate.close();
+            return candidate;
         }
     }
 
@@ -113,25 +152,27 @@ public final class TrackerConnection implements AutoCloseable {
 
     /** Closes a blocked request without waiting for the request monitor. */
     public void abortCurrentRequest() {
-        requestGeneration.incrementAndGet();
+        synchronized (socketLock) {
+            requestGeneration.incrementAndGet();
+            closeSocketLocked();
+        }
+    }
+
+    private void closeSocket() {
+        synchronized (socketLock) {
+            closeSocketLocked();
+        }
+    }
+
+    private void closeSocketLocked() {
         Socket current = socket;
+        socket = null;
         if (current != null) {
             try {
                 current.close();
             } catch (IOException ignored) {
                 // best effort
             }
-        }
-    }
-
-    private void closeSocket() {
-        if (socket != null) {
-            try {
-                socket.close();
-            } catch (IOException ignored) {
-                // best effort
-            }
-            socket = null;
         }
     }
 }

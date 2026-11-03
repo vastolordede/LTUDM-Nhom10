@@ -11,6 +11,7 @@ import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.network.TrackerConnectionConfig;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
 
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -114,6 +115,7 @@ class AuthClientServiceLogoutTest {
                 } catch (Exception e) {
                     throw new RuntimeException(e);
                 }
+
             });
 
             AuthClientService service = service(tracker.getLocalPort(), "tracker-error");
@@ -136,6 +138,44 @@ class AuthClientServiceLogoutTest {
                 service.close();
             }
             backend.get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void sameAuthServiceReconnectsAfterTrackerConfigurationIsCorrected() throws Exception {
+        int closedPort;
+        try (ServerSocket closed = new ServerSocket(0)) {
+            closedPort = closed.getLocalPort();
+        }
+        TrackerConnection connection = new TrackerConnection(new TrackerConnectionConfig(
+                "127.0.0.1", closedPort, false, null, null, null), 500, 300);
+        PeerIdentityStore identities = new PeerIdentityStore(tempDir.resolve("reconnect.properties"));
+        PeerIdentity identity = identities.loadOrCreate();
+        AuthClientService service = new AuthClientService(connection, identities, identity,
+                new PeerKeyStore(tempDir.resolve("reconnect-keys")), new TicketRevocationList());
+        try {
+            AuthClientException firstFailure = org.junit.jupiter.api.Assertions.assertThrows(
+                    AuthClientException.class, () -> service.login("alice", "password", 7401));
+            assertEquals(TrackerConnectionDiagnostics.FailureKind.CONNECTION_REFUSED,
+                    TrackerConnectionDiagnostics.classify(firstFailure, connection.configuration()));
+            assertNull(service.currentSession());
+
+            try (ServerSocket tracker = new ServerSocket(0)) {
+                CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                    try (Socket socket = tracker.accept()) {
+                        respondToLogin(socket);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                connection.reconfigure(new TrackerConnectionConfig(
+                        "127.0.0.1", tracker.getLocalPort(), false, null, null, null));
+                var session = service.login("alice", "password", 7401);
+                assertEquals(session, service.currentSession());
+                backend.get(2, TimeUnit.SECONDS);
+            }
+        } finally {
+            service.close();
         }
     }
 

@@ -47,20 +47,27 @@ final class TlsTrackerSocketFactory {
         SSLSocket socket = (SSLSocket)
                 sslContext.getSocketFactory().createSocket();
 
-        socket.connect(
-                new InetSocketAddress(host, port),
-                connectTimeoutMillis
-        );
-        socket.setEnabledProtocols(
-                supportedProtocols(socket.getSupportedProtocols())
-        );
-        socket.setSoTimeout(readTimeoutMillis);
-        socket.setTcpNoDelay(true);
-        SSLParameters params = socket.getSSLParameters();
-        params.setEndpointIdentificationAlgorithm("HTTPS");
-        socket.setSSLParameters(params);
-        socket.startHandshake();
-        return socket;
+        boolean connected = false;
+        try {
+            socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
+            socket.setEnabledProtocols(supportedProtocols(socket.getSupportedProtocols()));
+            socket.setSoTimeout(readTimeoutMillis);
+            socket.setTcpNoDelay(true);
+            SSLParameters params = socket.getSSLParameters();
+            params.setEndpointIdentificationAlgorithm("HTTPS");
+            socket.setSSLParameters(params);
+            socket.startHandshake();
+            connected = true;
+            return socket;
+        } finally {
+            if (!connected) {
+                try {
+                    socket.close();
+                } catch (IOException ignored) {
+                    // Preserve the connection or handshake failure.
+                }
+            }
+        }
     }
 
     private static String[] supportedProtocols(String[] supported) {
