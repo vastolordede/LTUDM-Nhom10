@@ -6,7 +6,11 @@ import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
+import vn.edu.p2p.common.dto.TicketRevocation;
+import vn.edu.p2p.common.protocol.ProtocolCodec;
 
+import java.util.List;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -50,6 +54,36 @@ class PeerSessionServiceTest {
 
         assertEquals(now.toEpochMilli(), response.serverTimeEpochMillis());
         assertEquals(now.atOffset(ZoneOffset.UTC), sessions.lastSeen);
+    }
+
+    @Test
+    void heartbeatReturnsNewRevocationsAndSupportsLegacyRequestWithoutSequence() throws Exception {
+        UUID sessionId = UUID.randomUUID();
+        UUID peerId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-24T00:00:00Z");
+        FakeSessionRepository sessions = new FakeSessionRepository();
+        sessions.sessions.put(sessionId, new PeerSessionRecord(sessionId, peerId, "127.0.0.1",
+                7001, PeerStatus.ONLINE, now.atOffset(ZoneOffset.UTC),
+                now.atOffset(ZoneOffset.UTC), null));
+        TicketRevocationRegistry registry = new TicketRevocationRegistry(
+                Clock.fixed(now, ZoneOffset.UTC));
+        var revoked = registry.revokeRequester(peerId.toString());
+        PeerSessionService service = new PeerSessionService(sessions,
+                Clock.fixed(now, ZoneOffset.UTC), registry);
+
+        var legacyPayload = ProtocolCodec.toPayload(java.util.Map.of(
+                "sessionId", sessionId.toString()));
+        HeartbeatRequest legacyRequest = ProtocolCodec.fromPayload(
+                legacyPayload, HeartbeatRequest.class);
+        HeartbeatResponse response = service.heartbeat(legacyRequest);
+        HeartbeatResponse upToDate = service.heartbeat(new HeartbeatRequest(
+                sessionId.toString(), response.latestRevocationSeq()));
+
+        assertEquals(0L, legacyRequest.lastRevocationSeq());
+        assertEquals(List.of(revoked), response.revocations());
+        assertEquals(revoked.sequence(), response.latestRevocationSeq());
+        assertEquals(List.of(), upToDate.revocations());
+        assertEquals(revoked.sequence(), upToDate.latestRevocationSeq());
     }
 
     @Test

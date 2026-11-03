@@ -14,9 +14,11 @@ import vn.edu.p2p.tracker.domain.UserRecord;
 import vn.edu.p2p.tracker.repository.PeerRepository;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
 import vn.edu.p2p.tracker.repository.UserRepository;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.sql.SQLException;
 import java.security.PublicKey;
+import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -31,6 +33,8 @@ public final class DefaultAuthService implements AuthService {
     private final PeerSessionRepository sessionRepository;
     private final PasswordService passwordService;
     private final int heartbeatIntervalSeconds;
+    private final TicketRevocationRegistry revocationRegistry;
+    private final Clock clock;
 
     public DefaultAuthService(
             UserRepository userRepository,
@@ -39,11 +43,26 @@ public final class DefaultAuthService implements AuthService {
             PasswordService passwordService,
             int heartbeatIntervalSeconds
     ) {
+        this(userRepository, peerRepository, sessionRepository, passwordService,
+                heartbeatIntervalSeconds, new TicketRevocationRegistry(), Clock.systemUTC());
+    }
+
+    public DefaultAuthService(
+            UserRepository userRepository,
+            PeerRepository peerRepository,
+            PeerSessionRepository sessionRepository,
+            PasswordService passwordService,
+            int heartbeatIntervalSeconds,
+            TicketRevocationRegistry revocationRegistry,
+            Clock clock
+    ) {
         this.userRepository = userRepository;
         this.peerRepository = peerRepository;
         this.sessionRepository = sessionRepository;
         this.passwordService = passwordService;
         this.heartbeatIntervalSeconds = heartbeatIntervalSeconds;
+        this.revocationRegistry = revocationRegistry;
+        this.clock = clock;
     }
 
     @Override
@@ -74,7 +93,7 @@ public final class DefaultAuthService implements AuthService {
             }
 
             UUID peerId = parseUuid(request.peerId(), "INVALID_PEER_ID");
-            OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+            OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
 
             ensurePeer(
                     peerId,
@@ -99,6 +118,7 @@ public final class DefaultAuthService implements AuthService {
                     now
             );
             if (replacedSessions > 0) {
+                revocationRegistry.revokeRequester(peerId.toString());
                 LOG.info(() -> String.format(
                         "Peer %s reconnect: replaced %d previous ONLINE session(s)",
                         peerId,
@@ -161,15 +181,19 @@ public final class DefaultAuthService implements AuthService {
         }
 
         UUID sessionId = parseUuid(request.sessionId(), "INVALID_SESSION");
-        OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
+        OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
 
         try {
+            PeerSessionRecord session = sessionRepository.findBySessionId(sessionId)
+                    .orElseThrow(() -> new AuthException(
+                            "INVALID_SESSION", "Session is not online or does not exist."));
             if (!sessionRepository.markLoggedOut(sessionId, now)) {
                 throw new AuthException(
                         "INVALID_SESSION",
                         "Session is not online or does not exist."
                 );
             }
+            revocationRegistry.revokeRequester(session.peerId().toString());
         } catch (AuthException e) {
             throw e;
         } catch (SQLException e) {

@@ -5,6 +5,7 @@ import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.sql.SQLException;
 import java.time.Clock;
@@ -15,14 +16,26 @@ import java.util.UUID;
 public final class PeerSessionService {
     private final PeerSessionRepository sessionRepository;
     private final Clock clock;
+    private final TicketRevocationRegistry revocationRegistry;
 
     public PeerSessionService(PeerSessionRepository sessionRepository) {
-        this(sessionRepository, Clock.systemUTC());
+        this(sessionRepository, Clock.systemUTC(), new TicketRevocationRegistry());
     }
 
     PeerSessionService(PeerSessionRepository sessionRepository, Clock clock) {
+        this(sessionRepository, clock, new TicketRevocationRegistry(clock));
+    }
+
+    public PeerSessionService(PeerSessionRepository sessionRepository,
+                              TicketRevocationRegistry revocationRegistry) {
+        this(sessionRepository, Clock.systemUTC(), revocationRegistry);
+    }
+
+    PeerSessionService(PeerSessionRepository sessionRepository, Clock clock,
+                       TicketRevocationRegistry revocationRegistry) {
         this.sessionRepository = sessionRepository;
         this.clock = clock;
+        this.revocationRegistry = revocationRegistry;
     }
 
     public HeartbeatResponse heartbeat(HeartbeatRequest request) throws SessionException {
@@ -41,7 +54,10 @@ public final class PeerSessionService {
                         "Session is no longer online."
                 );
             }
-            return new HeartbeatResponse(clock.instant().toEpochMilli());
+            TicketRevocationRegistry.Batch revocations =
+                    revocationRegistry.snapshotAfter(request.lastRevocationSeq());
+            return new HeartbeatResponse(clock.instant().toEpochMilli(),
+                    revocations.revocations(), revocations.latestSequence());
         } catch (SessionException e) {
             throw e;
         } catch (SQLException e) {

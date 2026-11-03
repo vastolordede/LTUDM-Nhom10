@@ -86,6 +86,9 @@ final class RequestValidator {
             throw invalid("Missing heartbeat payload.");
         }
         requireUuid(request.sessionId(), "INVALID_SESSION", "sessionId");
+        if (request.lastRevocationSeq() < 0) {
+            throw invalid("lastRevocationSeq must be non-negative.");
+        }
     }
 
     void validateFileSources(FileSourcesRequest request)

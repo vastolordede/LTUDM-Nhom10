@@ -11,6 +11,7 @@ import vn.edu.p2p.common.dto.ShareFileRequest;
 import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.common.dto.UnshareFileRequest;
 import vn.edu.p2p.common.dto.UnshareFileResponse;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.sql.SQLException;
 import java.util.List;
@@ -34,6 +35,7 @@ public final class FileCatalogService {
     private final FileRepository fileRepository;
     private final PeerFileRepository peerFileRepository;
     private final ShareEventRepository shareEventRepository;
+    private final TicketRevocationRegistry revocationRegistry;
 
     public FileCatalogService(
             SessionPeerResolver sessionPeerResolver,
@@ -41,10 +43,22 @@ public final class FileCatalogService {
             PeerFileRepository peerFileRepository,
             ShareEventRepository shareEventRepository
     ) {
+        this(sessionPeerResolver, fileRepository, peerFileRepository, shareEventRepository,
+                new TicketRevocationRegistry());
+    }
+
+    public FileCatalogService(
+            SessionPeerResolver sessionPeerResolver,
+            FileRepository fileRepository,
+            PeerFileRepository peerFileRepository,
+            ShareEventRepository shareEventRepository,
+            TicketRevocationRegistry revocationRegistry
+    ) {
         this.sessionPeerResolver = sessionPeerResolver;
         this.fileRepository = fileRepository;
         this.peerFileRepository = peerFileRepository;
         this.shareEventRepository = shareEventRepository;
+        this.revocationRegistry = revocationRegistry;
     }
 
     public ShareFileResponse publish(ShareFileRequest request) throws FileCatalogException, SQLException {
@@ -142,6 +156,7 @@ public final class FileCatalogService {
 
         peerFileRepository.setSharing(peerId, request.fileId(), false);
         shareEventRepository.insert(peerId, request.fileId(), "SHARE_STOP");
+        revocationRegistry.revokeFile(peerId.toString(), request.fileId());
 
         return new UnshareFileResponse(request.fileId(), true);
     }

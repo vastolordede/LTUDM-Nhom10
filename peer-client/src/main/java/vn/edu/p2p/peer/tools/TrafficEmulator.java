@@ -103,6 +103,7 @@ public final class TrafficEmulator {
                 var peerKeys = new PeerKeyStore(work).loadOrCreate(session.peerId());
                 // R43 tickets bind the destination to this exact peer identity.
                 server.setUploaderPeerId(session.peerId());
+                server.setTicketRevocationList(auth.ticketRevocations());
                 server.start();
                 ONLINE.incrementAndGet();
                 online = true;

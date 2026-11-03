@@ -12,11 +12,15 @@ import vn.edu.p2p.tracker.domain.UserRecord;
 import vn.edu.p2p.tracker.repository.PeerRepository;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
 import vn.edu.p2p.tracker.repository.UserRepository;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.sql.SQLException;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.time.OffsetDateTime;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -40,6 +44,8 @@ class DefaultAuthServiceTest {
         FakeUserRepository users = new FakeUserRepository();
         FakePeerRepository peers = new FakePeerRepository();
         FakeSessionRepository sessions = new FakeSessionRepository();
+        TicketRevocationRegistry revocations = new TicketRevocationRegistry(
+                Clock.fixed(Instant.parse("2026-11-03T00:00:00Z"), ZoneOffset.UTC));
         PasswordService passwords = new BCryptPasswordService(4);
 
         users.user = new UserRecord(
@@ -55,7 +61,9 @@ class DefaultAuthServiceTest {
                 peers,
                 sessions,
                 passwords,
-                10
+                10,
+                revocations,
+                Clock.fixed(Instant.parse("2026-11-03T00:00:00Z"), ZoneOffset.UTC)
         );
 
         String peerId = UUID.randomUUID().toString();
@@ -75,6 +83,8 @@ class DefaultAuthServiceTest {
 
         service.logout(new LogoutRequest(response.sessionId()));
         assertEquals("LOGGED_OUT", sessions.lastStatus);
+        assertEquals(1, revocations.size());
+        assertEquals(peerId, revocations.entriesAfter(0).get(0).requesterPeerId());
     }
 
     @Test
