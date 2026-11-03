@@ -21,6 +21,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class PeerSessionServiceTest {
@@ -80,10 +82,34 @@ class PeerSessionServiceTest {
                 sessionId.toString(), response.latestRevocationSeq()));
 
         assertEquals(0L, legacyRequest.lastRevocationSeq());
+        assertNull(legacyRequest.lastTrackerInstanceId());
         assertEquals(List.of(revoked), response.revocations());
         assertEquals(revoked.sequence(), response.latestRevocationSeq());
+        assertNotNull(response.trackerInstanceId());
         assertEquals(List.of(), upToDate.revocations());
         assertEquals(revoked.sequence(), upToDate.latestRevocationSeq());
+    }
+
+    @Test
+    void heartbeatFromPreviousTrackerInstanceGetsFullRevocationSnapshot() throws Exception {
+        UUID sessionId = UUID.randomUUID();
+        UUID peerId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-24T00:00:00Z");
+        FakeSessionRepository sessions = new FakeSessionRepository();
+        sessions.sessions.put(sessionId, new PeerSessionRecord(sessionId, peerId, "127.0.0.1",
+                7001, PeerStatus.ONLINE, now.atOffset(ZoneOffset.UTC),
+                now.atOffset(ZoneOffset.UTC), null));
+        TicketRevocationRegistry registry =
+                new TicketRevocationRegistry(Clock.fixed(now, ZoneOffset.UTC));
+        var revoked = registry.revokeRequester(peerId.toString());
+        PeerSessionService service = new PeerSessionService(sessions,
+                Clock.fixed(now, ZoneOffset.UTC), registry, "tracker-new");
+
+        HeartbeatResponse response = service.heartbeat(new HeartbeatRequest(
+                sessionId.toString(), revoked.sequence(), "tracker-old"));
+
+        assertEquals(List.of(revoked), response.revocations());
+        assertEquals("tracker-new", response.trackerInstanceId());
     }
 
     @Test

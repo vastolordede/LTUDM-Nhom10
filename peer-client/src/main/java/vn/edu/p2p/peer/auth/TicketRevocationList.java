@@ -17,6 +17,7 @@ public final class TicketRevocationList {
     private final List<TicketRevocation> entries = new ArrayList<>();
     private final Clock clock;
     private long latestSequence;
+    private String trackerInstanceId;
 
     public TicketRevocationList() {
         this(Clock.systemUTC());
@@ -35,6 +36,14 @@ public final class TicketRevocationList {
         Objects.requireNonNull(response, "response");
         pruneExpired();
         Long responseSequence = response.latestRevocationSeq();
+        String responseInstanceId = response.trackerInstanceId();
+        if (responseInstanceId != null) {
+            if (trackerInstanceId != null && !trackerInstanceId.equals(responseInstanceId)) {
+                entries.clear();
+                latestSequence = 0L;
+            }
+            trackerInstanceId = responseInstanceId;
+        }
         if (responseSequence != null && responseSequence < latestSequence) {
             entries.clear();
             latestSequence = 0L;
@@ -52,6 +61,10 @@ public final class TicketRevocationList {
                 && responseSequence >= latestSequence) {
             latestSequence = responseSequence;
         }
+    }
+
+    public synchronized String trackerInstanceId() {
+        return trackerInstanceId;
     }
 
     public synchronized boolean isRevoked(PeerAccessTickets.TicketClaims claims,

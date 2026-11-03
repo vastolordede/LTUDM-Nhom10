@@ -20,6 +20,7 @@ import vn.edu.p2p.peer.share.FileHashUtil;
 import vn.edu.p2p.peer.share.FileMetadataBuilder;
 
 import java.net.Socket;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
@@ -29,11 +30,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PeerUploadProofIntegrationTest {
@@ -164,6 +167,69 @@ class PeerUploadProofIntegrationTest {
 
             assertEquals(0, fixture.replayGuard().size());
             assertEquals(0L, server.totalBytesUploaded());
+        }
+    }
+
+    @Test
+    void expiredTicketRemainsRejectedByUploader() throws Exception {
+        Fixture fixture = createFixture();
+        PeerUploadServer server = fixture.server();
+        String expired = PeerAccessTickets.issue(fixture.trackerKeys().getPrivate(),
+                PeerAccessTickets.DEFAULT_KEY_ID, FILE_ID, REQUESTER_ID, UPLOADER_ID,
+                fixture.requesterKeys().getPublic(),
+                NOW.minusSeconds(PeerAccessTickets.DEFAULT_TTL_SECONDS + 1),
+                PeerAccessTickets.DEFAULT_TTL_SECONDS);
+        try (server) {
+            MessageEnvelope request = bitfieldRequest(fixture,
+                    fixture.requesterKeys().getPrivate(), UPLOADER_ID, FILE_ID, expired);
+            assertDenied(exchange(fixture, request, false));
+            assertEquals(0L, server.totalBytesUploaded());
+        }
+    }
+
+    @Test
+    void uploaderAcceptsOverlappingKeyIdsAndRejectsRemovedKey() throws Exception {
+        Path file = tempDir.resolve("rotating-key-content.bin");
+        Files.write(file, new byte[]{4, 5, 6});
+        FileMetadata metadata = new FileMetadataBuilder(3).build(file);
+        LocalFileRegistry registry = new LocalFileRegistry();
+        registry.registerCompleteFile(FILE_ID, file, metadata);
+        KeyPair oldTrackerKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair newTrackerKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair requesterKey = PeerRequestProof.generateKeyPair();
+        PeerP2pSocketFactory sockets =
+                new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
+        PeerUploadServer overlapping = new PeerUploadServer(0, registry, sockets, 2,
+                Map.of("key-a", oldTrackerKey.getPublic(), "key-b", newTrackerKey.getPublic()),
+                false);
+        overlapping.setUploaderPeerId(UPLOADER_ID);
+        overlapping.start();
+        try (overlapping) {
+            PeerDownloadClient client = new PeerDownloadClient(sockets, requesterKey.getPrivate());
+            String oldTicket = PeerAccessTickets.issue(oldTrackerKey.getPrivate(), "key-a",
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, requesterKey.getPublic(),
+                    Instant.now(), 900);
+            String newTicket = PeerAccessTickets.issue(newTrackerKey.getPrivate(), "key-b",
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, requesterKey.getPublic(),
+                    Instant.now(), 900);
+
+            assertNotNull(client.fetchBitfield("127.0.0.1", overlapping.listeningPort(),
+                    UPLOADER_ID, FILE_ID, oldTicket));
+            assertNotNull(client.fetchBitfield("127.0.0.1", overlapping.listeningPort(),
+                    UPLOADER_ID, FILE_ID, newTicket));
+        }
+
+        PeerUploadServer newKeyOnly = new PeerUploadServer(0, registry, sockets, 1,
+                Map.of("key-b", newTrackerKey.getPublic()), false);
+        newKeyOnly.setUploaderPeerId(UPLOADER_ID);
+        newKeyOnly.start();
+        try (newKeyOnly) {
+            PeerDownloadClient client = new PeerDownloadClient(sockets, requesterKey.getPrivate());
+            String oldTicket = PeerAccessTickets.issue(oldTrackerKey.getPrivate(), "key-a",
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, requesterKey.getPublic(),
+                    Instant.now(), 900);
+            assertThrows(IOException.class, () -> client.fetchBitfield("127.0.0.1",
+                    newKeyOnly.listeningPort(), UPLOADER_ID, FILE_ID, oldTicket));
         }
     }
 

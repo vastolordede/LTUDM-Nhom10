@@ -241,7 +241,9 @@ public final class FolderController {
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     fileRegistry, new PeerDownloadClient(socketFactory, requesterPrivateKey)
                             .withPlanner(planner),
-                    MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED);
+                    MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED,
+                    (refreshFileId, source) -> sourceClient.refreshTicket(
+                            sessionId, refreshFileId, source.peerId()));
 
             for (int i = 0; i < files.size() && !cancel.get(); i++) {
                 FolderFileInfo f = files.get(i);

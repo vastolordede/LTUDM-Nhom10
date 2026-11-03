@@ -5,10 +5,16 @@ import java.util.List;
 public record HeartbeatResponse(
         long serverTimeEpochMillis,
         List<TicketRevocation> revocations,
-        Long latestRevocationSeq
+        Long latestRevocationSeq,
+        String trackerInstanceId
 ) {
     public HeartbeatResponse(long serverTimeEpochMillis) {
-        this(serverTimeEpochMillis, List.of(), 0L);
+        this(serverTimeEpochMillis, List.of(), 0L, null);
+    }
+
+    public HeartbeatResponse(long serverTimeEpochMillis, List<TicketRevocation> revocations,
+                             Long latestRevocationSeq) {
+        this(serverTimeEpochMillis, revocations, latestRevocationSeq, null);
     }
 
     public HeartbeatResponse {

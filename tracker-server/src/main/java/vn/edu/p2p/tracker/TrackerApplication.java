@@ -83,6 +83,7 @@ public final class TrackerApplication {
         ShareEventRepository shareEvents = new JdbcShareEventRepository(connectionFactory);
         SessionPeerResolver sessionPeerResolver = new JdbcSessionPeerResolver(connectionFactory);
         TicketRevocationRegistry revocationRegistry = new TicketRevocationRegistry();
+        String trackerInstanceId = java.util.UUID.randomUUID().toString();
 
         DefaultAuthService authService = new DefaultAuthService(
                 users,
@@ -93,7 +94,8 @@ public final class TrackerApplication {
                 revocationRegistry,
                 java.time.Clock.systemUTC()
         );
-        PeerSessionService peerSessionService = new PeerSessionService(sessions, revocationRegistry);
+        PeerSessionService peerSessionService =
+                new PeerSessionService(sessions, revocationRegistry, trackerInstanceId);
 
         FileSourceService fileSourceService = new FileSourceService(
                 fileSources,

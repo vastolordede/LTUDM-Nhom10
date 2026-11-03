@@ -7,7 +7,7 @@ import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.common.security.PeerRequestProof;
 import java.security.PrivateKey;
 import java.security.PublicKey;
-import java.time.Instant;
+import java.time.Clock;
 import vn.edu.p2p.tracker.domain.FileSourceRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.peer.PeerSessionService;
@@ -24,6 +24,9 @@ public final class FileSourceService {
     private final PeerSessionService sessionService;
     private final PeerRepository peerRepository;
     private final PrivateKey signingKey;
+    private final String ticketKeyId;
+    private final long ticketTtlSeconds;
+    private final Clock clock;
 
     public FileSourceService(
             FileSourceRepository repository,
@@ -35,10 +38,21 @@ public final class FileSourceService {
 
     public FileSourceService(FileSourceRepository repository, PeerSessionService sessionService,
                              PeerRepository peerRepository, PrivateKey signingKey) {
+        this(repository, sessionService, peerRepository, signingKey,
+                PeerAccessTickets.activeKeyId(), PeerAccessTickets.configuredTtlSeconds(),
+                Clock.systemUTC());
+    }
+
+    public FileSourceService(FileSourceRepository repository, PeerSessionService sessionService,
+                             PeerRepository peerRepository, PrivateKey signingKey,
+                             String ticketKeyId, long ticketTtlSeconds, Clock clock) {
         this.repository = repository;
         this.sessionService = sessionService;
         this.peerRepository = peerRepository;
         this.signingKey = signingKey;
+        this.ticketKeyId = ticketKeyId;
+        this.ticketTtlSeconds = ticketTtlSeconds;
+        this.clock = clock;
     }
 
     public FileSourcesResponse findSources(FileSourcesRequest request)
@@ -111,8 +125,9 @@ public final class FileSourceService {
                 source.ipAddress(),
                 source.listeningPort(),
                 lastSeen,
-                signingKey == null ? null : PeerAccessTickets.issue(signingKey, fileId,
-                        requesterPeerId, source.peerId().toString(), requesterPublicKey, Instant.now())
+                signingKey == null ? null : PeerAccessTickets.issue(signingKey, ticketKeyId,
+                        fileId, requesterPeerId, source.peerId().toString(), requesterPublicKey,
+                        clock.instant(), ticketTtlSeconds)
         );
     }
 }

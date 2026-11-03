@@ -299,7 +299,9 @@ public final class DownloadController {
                     fileRegistry,
                     downloadClient,
                     MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS,
-                    strategy
+                    strategy,
+                    (refreshFileId, source) -> fileSourceClientService.refreshTicket(
+                            sessionId, refreshFileId, source.peerId())
             );
 
             DownloadProgressListener uiListener = new DownloadProgressListener() {
@@ -341,6 +343,8 @@ public final class DownloadController {
                     && "FAILED".equals(current.status())
                     && current.failureReason() != null
                     && current.failureReason().startsWith("Download incomplete")
+                    && !current.failureReason().toLowerCase(java.util.Locale.ROOT)
+                            .contains("ticket refresh failed")
                     && !activeCancelSignal.get(); attempt++) {
                 final int n = attempt;
                 Thread.sleep(2000);

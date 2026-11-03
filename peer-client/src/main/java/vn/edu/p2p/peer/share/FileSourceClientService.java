@@ -9,6 +9,7 @@ import vn.edu.p2p.common.protocol.ResponseStatus;
 import vn.edu.p2p.peer.network.TrackerConnection;
 
 import java.io.IOException;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -51,6 +52,22 @@ public final class FileSourceClientService {
             return ProtocolCodec.fromPayload(response.payload(), FileSourcesResponse.class);
         } catch (IOException e) {
             throw new ShareFileClientException("Network error while fetching sources: " + e.getMessage(), e);
+        }
+    }
+
+    public String refreshTicket(String sessionId, long fileId, String sourcePeerId)
+            throws IOException {
+        try {
+            FileSourcesResponse response = findSources(sessionId, fileId);
+            return response.sources().stream()
+                    .filter(source -> Objects.equals(source.peerId(), sourcePeerId))
+                    .map(vn.edu.p2p.common.dto.FileSourceInfo::accessTicket)
+                    .filter(ticket -> ticket != null && !ticket.isBlank())
+                    .findFirst()
+                    .orElseThrow(() -> new IOException(
+                            "Tracker no longer offers this source; it may be offline or sharing stopped"));
+        } catch (ShareFileClientException e) {
+            throw new IOException("Tracker rejected ticket refresh: " + e.getMessage(), e);
         }
     }
 

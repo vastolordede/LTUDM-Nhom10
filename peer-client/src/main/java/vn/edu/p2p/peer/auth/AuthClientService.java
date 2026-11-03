@@ -185,7 +185,8 @@ public final class AuthClientService implements AutoCloseable {
                 UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(
                         new HeartbeatRequest(currentSession.sessionId(),
-                                ticketRevocations.latestSequence())
+                                ticketRevocations.latestSequence(),
+                                ticketRevocations.trackerInstanceId())
                 )
         );
 

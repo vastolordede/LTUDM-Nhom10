@@ -7,7 +7,7 @@ import vn.edu.p2p.common.security.RequestReplayGuard;
 import vn.edu.p2p.peer.auth.TicketRevocationList;
 import java.security.PublicKey;
 import java.time.Clock;
-import java.time.Instant;
+import java.util.Map;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
 import vn.edu.p2p.common.dto.MetadataPageRequest;
@@ -48,7 +48,7 @@ public final class PeerUploadServer implements AutoCloseable {
 
     private final int listeningPort;
     private final LocalFileRegistry fileRegistry;
-    private final PublicKey ticketVerificationKey;
+    private final Map<String, PublicKey> ticketVerificationKeys;
     private final boolean allowInsecureLoopbackDemo;
     private final Clock clock;
     private final RequestReplayGuard replayGuard;
@@ -77,7 +77,7 @@ public final class PeerUploadServer implements AutoCloseable {
             int maxUploadWorkers
     ) {
         this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers,
-                PeerAccessTickets.optionalPeerKey(), PeerAccessTickets.localInsecureDemoEnabled(),
+                PeerAccessTickets.optionalPeerKeys(), PeerAccessTickets.localInsecureDemoEnabled(),
                 Clock.systemUTC(), new RequestReplayGuard(), new TicketRevocationList());
     }
 
@@ -85,7 +85,17 @@ public final class PeerUploadServer implements AutoCloseable {
     PeerUploadServer(int listeningPort, LocalFileRegistry fileRegistry,
                      PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
                      PublicKey ticketVerificationKey, boolean allowInsecureLoopbackDemo) {
-        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers, ticketVerificationKey,
+        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers,
+                keyMap(ticketVerificationKey),
+                allowInsecureLoopbackDemo, Clock.systemUTC(), new RequestReplayGuard(),
+                new TicketRevocationList());
+    }
+
+    PeerUploadServer(int listeningPort, LocalFileRegistry fileRegistry,
+                     PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
+                     Map<String, PublicKey> ticketVerificationKeys,
+                     boolean allowInsecureLoopbackDemo) {
+        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers, ticketVerificationKeys,
                 allowInsecureLoopbackDemo, Clock.systemUTC(), new RequestReplayGuard(),
                 new TicketRevocationList());
     }
@@ -94,7 +104,8 @@ public final class PeerUploadServer implements AutoCloseable {
                      PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
                      PublicKey ticketVerificationKey, boolean allowInsecureLoopbackDemo,
                      Clock clock, RequestReplayGuard replayGuard) {
-        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers, ticketVerificationKey,
+        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers,
+                keyMap(ticketVerificationKey),
                 allowInsecureLoopbackDemo, clock, replayGuard, new TicketRevocationList(clock));
     }
 
@@ -103,9 +114,19 @@ public final class PeerUploadServer implements AutoCloseable {
                      PublicKey ticketVerificationKey, boolean allowInsecureLoopbackDemo,
                      Clock clock, RequestReplayGuard replayGuard,
                      TicketRevocationList ticketRevocations) {
+        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers,
+                keyMap(ticketVerificationKey), allowInsecureLoopbackDemo, clock, replayGuard,
+                ticketRevocations);
+    }
+
+    PeerUploadServer(int listeningPort, LocalFileRegistry fileRegistry,
+                     PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
+                     Map<String, PublicKey> ticketVerificationKeys, boolean allowInsecureLoopbackDemo,
+                     Clock clock, RequestReplayGuard replayGuard,
+                     TicketRevocationList ticketRevocations) {
         this.listeningPort = listeningPort;
         this.fileRegistry = fileRegistry;
-        this.ticketVerificationKey = ticketVerificationKey;
+        this.ticketVerificationKeys = Map.copyOf(ticketVerificationKeys);
         this.allowInsecureLoopbackDemo = allowInsecureLoopbackDemo;
         this.clock = java.util.Objects.requireNonNull(clock, "clock");
         this.replayGuard = java.util.Objects.requireNonNull(replayGuard, "replayGuard");
@@ -125,7 +146,7 @@ public final class PeerUploadServer implements AutoCloseable {
         if (running.get()) {
             return;
         }
-        if (ticketVerificationKey == null && !allowInsecureLoopbackDemo) {
+        if (ticketVerificationKeys.isEmpty() && !allowInsecureLoopbackDemo) {
             throw new IOException("Missing Tracker Ed25519 PUBLIC key for Peer upload server. "
                     + "Copy tracker-public.key.b64 to ~/.fileshare-p2p or set "
                     + "P2P_TICKET_PUBLIC_KEY_FILE; do not disable ticket checks on LAN.");
@@ -395,8 +416,8 @@ public final class PeerUploadServer implements AutoCloseable {
                                              int pieceIndex, Long proofTimestamp, String proofNonce,
                                              String proofSignature, MessageType responseType)
             throws IOException {
-        PeerAccessTickets.TicketClaims claims = ticketVerificationKey == null || uploaderPeerId == null
-                ? null : PeerAccessTickets.verifyClaims(ticketVerificationKey, ticket, fileId,
+        PeerAccessTickets.TicketClaims claims = ticketVerificationKeys.isEmpty() || uploaderPeerId == null
+                ? null : PeerAccessTickets.verifyClaims(ticketVerificationKeys, ticket, fileId,
                         uploaderPeerId, clock.instant());
         if (claims == null) {
             if (isInsecureLoopbackDemo(client)) return true;
@@ -424,8 +445,8 @@ public final class PeerUploadServer implements AutoCloseable {
 
     private boolean authorizeTicket(Socket client, MessageEnvelope request, long fileId,
                                     String ticket, MessageType responseType) throws IOException {
-        PeerAccessTickets.TicketClaims claims = ticketVerificationKey != null && uploaderPeerId != null
-                ? PeerAccessTickets.verifyClaims(ticketVerificationKey, ticket, fileId,
+        PeerAccessTickets.TicketClaims claims = !ticketVerificationKeys.isEmpty() && uploaderPeerId != null
+                ? PeerAccessTickets.verifyClaims(ticketVerificationKeys, ticket, fileId,
                         uploaderPeerId, clock.instant()) : null;
         boolean allowed = claims != null
                 && !ticketRevocations.isRevoked(claims, uploaderPeerId, fileId);
@@ -435,8 +456,12 @@ public final class PeerUploadServer implements AutoCloseable {
     }
 
     private boolean isInsecureLoopbackDemo(Socket client) {
-        return ticketVerificationKey == null && allowInsecureLoopbackDemo
+        return ticketVerificationKeys.isEmpty() && allowInsecureLoopbackDemo
                 && client.getInetAddress().isLoopbackAddress();
+    }
+
+    private static Map<String, PublicKey> keyMap(PublicKey key) {
+        return key == null ? Map.of() : Map.of(PeerAccessTickets.DEFAULT_KEY_ID, key);
     }
 
     private boolean deny(Socket client, MessageEnvelope request, MessageType responseType,

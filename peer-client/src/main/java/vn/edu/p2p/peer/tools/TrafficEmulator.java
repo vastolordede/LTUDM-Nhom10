@@ -19,6 +19,7 @@ import vn.edu.p2p.peer.transfer.PeerP2pSocketFactory;
 import vn.edu.p2p.peer.transfer.PeerUploadServer;
 import vn.edu.p2p.peer.transfer.PeerDownloadClient;
 import vn.edu.p2p.peer.transfer.MultiSourceDownloadEngine;
+import vn.edu.p2p.peer.transfer.PieceScheduler;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import java.nio.file.Files;
@@ -129,8 +130,9 @@ public final class TrafficEmulator {
                     if (!allPublished.await(30, TimeUnit.SECONDS)) {
                         throw new java.io.IOException("Not all virtual peers published within 30 seconds");
                     }
-                    var available = new FileSourceClientService(connection)
-                            .findSources(session.sessionId(), commonFileId).sources();
+                    FileSourceClientService sourceService = new FileSourceClientService(connection);
+                    var available = sourceService.findSources(
+                            session.sessionId(), commonFileId).sources();
                     if (available.isEmpty()) {
                         throw new java.io.IOException("No online peer source for emulator download");
                     }
@@ -138,7 +140,11 @@ public final class TrafficEmulator {
                     Files.deleteIfExists(target);
                     var engine = new MultiSourceDownloadEngine(registry,
                             new PeerDownloadClient(new PeerP2pSocketFactory(p2p),
-                                    peerKeys.getPrivate()));
+                                    peerKeys.getPrivate()),
+                            MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS,
+                            PieceScheduler.Strategy.RANKED,
+                            (refreshFileId, source) -> sourceService.refreshTicket(
+                                    session.sessionId(), refreshFileId, source.peerId()));
                     var result = engine.downloadFile(commonFileId, available, target,
                             null, new AtomicBoolean(false));
                     if (!"COMPLETED".equals(result.status()) || !FileHashUtil.sha256(target)
