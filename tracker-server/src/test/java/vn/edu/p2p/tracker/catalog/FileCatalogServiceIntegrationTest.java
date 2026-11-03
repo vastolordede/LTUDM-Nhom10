@@ -2,6 +2,8 @@ package vn.edu.p2p.tracker.catalog;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import vn.edu.p2p.common.dto.FilePiecesPageRequest;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.PieceInfo;
 import vn.edu.p2p.common.dto.SearchRequest;
@@ -25,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -139,6 +142,26 @@ class FileCatalogServiceIntegrationTest {
         );
     }
 
+    @Test
+    @Timeout(value = 2, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void nonOwnerCannotAppendMetadataPageToAnotherPeersShare() throws Exception {
+        ShareFileResponse published = service.publish(new ShareFileRequest(
+                SESSION_ID.toString(), sampleMetadata("owner-only.bin")));
+        UUID otherSession = UUID.randomUUID();
+        UUID otherPeer = UUID.randomUUID();
+        FileCatalogService nonOwnerService = new FileCatalogService(
+                sessionId -> {
+                    assertEquals(otherSession, sessionId);
+                    return otherPeer;
+                }, catalog, catalog, catalog, revocations);
+
+        assertThrows(FileCatalogException.class, () -> nonOwnerService.appendPiecePage(
+                new FilePiecesPageRequest(otherSession.toString(), published.fileId(),
+                        List.of(new PieceInfo(0, 100, "c".repeat(64))))));
+        assertFalse(catalog.isSharing(otherPeer, published.fileId()));
+        assertTrue(catalog.isSharing(PEER_ID, published.fileId()));
+    }
+
     private static FileMetadata sampleMetadata(String fileName) {
         List<PieceInfo> pieces = List.of(new PieceInfo(0, 100, "a".repeat(64)));
         return new FileMetadata(fileName, 100, "b".repeat(64), 1024, 1, pieces);
@@ -202,6 +225,11 @@ class FileCatalogServiceIntegrationTest {
         @Override
         public void setSharing(UUID peerId, long fileId, boolean sharing) {
             sharingByPeerFile.put(peerId + ":" + fileId, sharing);
+        }
+
+        @Override
+        public boolean isSharing(UUID peerId, long fileId) {
+            return sharingByPeerFile.getOrDefault(peerId + ":" + fileId, false);
         }
 
         @Override

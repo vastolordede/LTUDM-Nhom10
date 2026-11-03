@@ -49,7 +49,12 @@ public final class FileSourceClientService {
                 throw new ShareFileClientException("Unexpected response type: " + response.type());
             }
 
-            return ProtocolCodec.fromPayload(response.payload(), FileSourcesResponse.class);
+            FileSourcesResponse sources = ProtocolCodec.fromPayload(
+                    response.payload(), FileSourcesResponse.class);
+            if (sources == null) {
+                throw new ShareFileClientException("Tracker returned an empty source response");
+            }
+            return sources;
         } catch (IOException e) {
             throw new ShareFileClientException("Network error while fetching sources: " + e.getMessage(), e);
         }

@@ -303,19 +303,26 @@ public final class PeerUploadServer implements AutoCloseable {
                     continue;
                 }
 
-                switch (request.type()) {
-                    case GET_BITFIELD_REQUEST -> handleGetBitfield(client, request);
-                    case METADATA_PAGE_REQUEST -> handleMetadataPage(client, request);
-                    case REQUEST_PIECE -> handleRequestPiece(client, request);
-                    default -> {
-                        MessageEnvelope err = MessageEnvelope.error(
-                                MessageType.ERROR,
-                                request.requestId(),
-                                "UNSUPPORTED_P2P_COMMAND",
-                                "Unsupported P2P request type: " + request.type()
-                        );
-                        ProtocolCodec.write(client.getOutputStream(), err);
+                try {
+                    switch (request.type()) {
+                        case GET_BITFIELD_REQUEST -> handleGetBitfield(client, request);
+                        case METADATA_PAGE_REQUEST -> handleMetadataPage(client, request);
+                        case REQUEST_PIECE -> handleRequestPiece(client, request);
+                        default -> {
+                            MessageEnvelope err = MessageEnvelope.error(
+                                    MessageType.ERROR,
+                                    request.requestId(),
+                                    "UNSUPPORTED_P2P_COMMAND",
+                                    "Unsupported P2P request type: " + request.type()
+                            );
+                            ProtocolCodec.write(client.getOutputStream(), err);
+                        }
                     }
+                } catch (com.fasterxml.jackson.core.JsonProcessingException
+                         | IllegalArgumentException invalidRequest) {
+                    ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
+                            MessageType.ERROR, request.requestId(),
+                            "INVALID_P2P_REQUEST", "Invalid P2P request"));
                 }
             }
         } catch (Exception e) {
