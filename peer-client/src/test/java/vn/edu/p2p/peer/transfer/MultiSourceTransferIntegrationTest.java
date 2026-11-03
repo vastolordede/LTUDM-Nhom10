@@ -77,18 +77,19 @@ class MultiSourceTransferIntegrationTest {
 
             List<FileSourceInfo> sources = List.of(
                     new FileSourceInfo("peer-1", "PARTIAL", "127.0.0.1", s1.listeningPort(), System.currentTimeMillis(),
-                            vn.edu.p2p.common.security.PeerAccessTickets.issue(tickets.getPrivate(),
+                            PeerTestTickets.issue(tickets.getPrivate(),
                                     fileId, "test-reader", "peer-1", java.time.Instant.now())),
                     new FileSourceInfo("peer-2", "PARTIAL", "127.0.0.1", s2.listeningPort(), System.currentTimeMillis(),
-                            vn.edu.p2p.common.security.PeerAccessTickets.issue(tickets.getPrivate(),
+                            PeerTestTickets.issue(tickets.getPrivate(),
                                     fileId, "test-reader", "peer-2", java.time.Instant.now())),
                     new FileSourceInfo("peer-3", "PARTIAL", "127.0.0.1", s3.listeningPort(), System.currentTimeMillis(),
-                            vn.edu.p2p.common.security.PeerAccessTickets.issue(tickets.getPrivate(),
+                            PeerTestTickets.issue(tickets.getPrivate(),
                                     fileId, "test-reader", "peer-3", java.time.Instant.now()))
             );
 
             LocalFileRegistry downloaderReg = new LocalFileRegistry();
-            PeerDownloadClient downloadClient = new PeerDownloadClient(socketFactory);
+            PeerDownloadClient downloadClient = new PeerDownloadClient(
+                    socketFactory, PeerTestTickets.requesterPrivateKey());
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     downloaderReg,
                     downloadClient,

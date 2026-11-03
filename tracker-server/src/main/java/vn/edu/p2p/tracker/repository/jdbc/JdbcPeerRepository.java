@@ -72,6 +72,31 @@ public final class JdbcPeerRepository implements PeerRepository {
         }
     }
 
+    @Override
+    public Optional<String> findPublicKey(UUID peerId) throws SQLException {
+        String sql = "SELECT public_key FROM peers WHERE peer_id = ?";
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, peerId);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Optional.ofNullable(rs.getString("public_key")) : Optional.empty();
+            }
+        }
+    }
+
+    @Override
+    public void updatePublicKey(UUID peerId, String publicKey) throws SQLException {
+        String sql = "UPDATE peers SET public_key = ? WHERE peer_id = ?";
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, publicKey);
+            statement.setObject(2, peerId);
+            if (statement.executeUpdate() != 1) {
+                throw new SQLException("Peer public key update matched no peer row");
+            }
+        }
+    }
+
     private static PeerRecord map(ResultSet rs) throws SQLException {
         return new PeerRecord(
                 rs.getObject("peer_id", UUID.class),

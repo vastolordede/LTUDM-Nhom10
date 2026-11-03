@@ -15,14 +15,15 @@ psql -v ON_ERROR_STOP=1 -f database/migration_v5.sql
 psql -v ON_ERROR_STOP=1 -f database/migration_v6.sql
 psql -v ON_ERROR_STOP=1 -f database/migration_v7.sql
 psql -v ON_ERROR_STOP=1 -f database/migration_v8.sql
+psql -v ON_ERROR_STOP=1 -f database/migration_v9.sql
 psql -v ON_ERROR_STOP=1 -f database/verify_schema.sql
 ```
 
-The `schema.sql` file creates the foundational tables/views, v2 adds publish status and aliases, v3 filters non-READY sources, v4 adds folders, v5 repairs eligible legacy metadata, and v6 adds completed-folder events; v7 requires completed child-transfer evidence; v8 preserves empty nested directories.
+The `schema.sql` file creates the foundational tables/views, v2 adds publish status and aliases, v3 filters non-READY sources, v4 adds folders, v5 repairs eligible legacy metadata, and v6 adds completed-folder events; v7 requires completed child-transfer evidence; v8 preserves empty nested directories; v9 adds the nullable Peer public key.
 
 ## Existing / populated database
 
-**DO NOT run the full sequence blindly:** v2 and v4 include non-idempotent DDL. Inspect `information_schema`, `to_regclass`, and prior migrations. Export a backup, coordinate schema changes with the team, apply only missing migrations **in order**, then execute `verify_schema.sql`. Never publish DB credentials or backups to Git.
+**DO NOT run the full sequence blindly:** v2 and v4 include non-idempotent DDL. Inspect `information_schema`, `to_regclass`, and prior migrations. Export a backup, coordinate schema changes with the team, apply only missing migrations **in order**, then execute `verify_schema.sql`. Migration v9 is additive and idempotent. Never publish DB credentials or backups to Git.
 
 Tracker startup uses `DatabaseConnectionFactory.verify()` and now fails fast if mandatory relations or `files.publish_status` are absent. This protects the JavaFX app from silent protocol/database errors, but it does not replace a full migration history table or database transaction rehearsal.
 
@@ -32,3 +33,4 @@ Tracker startup uses `DatabaseConnectionFactory.verify()` and now fails fast if 
 - Run on a staging copy of an existing DB: apply missing migrations only; preserve data.
 - Remove v6 in a disposable test DB: Tracker must refuse to start with a useful error.
 - Check `file_aliases`, `file_groups`, `group_files`, `folder_download_sessions`, indexes, `v_file_sources` and sample Search/Download.
+- Protocol 3 login registers the Peer Ed25519 public key; apply migration v9 and have existing Peers log in again before requesting sources.

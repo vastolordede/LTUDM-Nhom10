@@ -123,14 +123,14 @@ class MultiSourceDownloadFailoverIntegrationTest {
         if (includeB) {
             seedB.start();
         }
-        String ticketA = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+        String ticketA = PeerTestTickets.issue(
                 keys.getPrivate(), FILE_ID, "failover-reader", PEER_A, Instant.now());
         FileSourceInfo sourceA = new FileSourceInfo(PEER_A, "COMPLETE", "127.0.0.1",
                 seedA.listeningPort(), System.currentTimeMillis(), ticketA);
         if (!includeB) {
             return new Seeds(seedA, null, List.of(sourceA));
         }
-        String ticketB = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+        String ticketB = PeerTestTickets.issue(
                 keys.getPrivate(), FILE_ID, "failover-reader", PEER_B, Instant.now());
         FileSourceInfo sourceB = new FileSourceInfo(PEER_B, "COMPLETE", "127.0.0.1",
                 seedB.listeningPort(), System.currentTimeMillis(), ticketB);
@@ -139,7 +139,8 @@ class MultiSourceDownloadFailoverIntegrationTest {
 
     private static MultiSourceDownloadEngine engine(LocalFileRegistry registry) {
         return new MultiSourceDownloadEngine(registry,
-                new PeerDownloadClient(new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp())),
+                new PeerDownloadClient(new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp()),
+                        PeerTestTickets.requesterPrivateKey()),
                 1,
                 PieceScheduler.Strategy.ROUND_ROBIN);
     }

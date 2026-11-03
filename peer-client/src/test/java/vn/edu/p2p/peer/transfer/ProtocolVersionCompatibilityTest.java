@@ -63,7 +63,7 @@ class ProtocolVersionCompatibilityTest {
                 0, registry, socketFactory, 2, keyPair.getPublic(), false)) {
             server.setUploaderPeerId("versioned-peer");
             server.start();
-            String ticket = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+            String ticket = PeerTestTickets.issue(
                     keyPair.getPrivate(), 1L, "version-reader", "versioned-peer", Instant.now());
             try (Socket client = new Socket("127.0.0.1", server.listeningPort())) {
                 ProtocolCodec.write(client.getOutputStream(), new MessageEnvelope(
@@ -109,9 +109,11 @@ class ProtocolVersionCompatibilityTest {
             });
 
             PeerDownloadClient client = new PeerDownloadClient(
-                    new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp()));
+                    new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp()),
+                    PeerTestTickets.requesterPrivateKey());
             ProtocolCompatibilityException error = assertThrows(ProtocolCompatibilityException.class, () ->
-                    client.fetchBitfield("127.0.0.1", fakePeer.getLocalPort(), 1L));
+                    client.fetchBitfield("127.0.0.1", fakePeer.getLocalPort(),
+                            "fake-uploader", 1L, "protocol-test-ticket"));
             assertTrue(error.getMessage().contains("Peer"));
             assertTrue(error.getMessage().contains("compatible"));
             backend.get(5, TimeUnit.SECONDS);

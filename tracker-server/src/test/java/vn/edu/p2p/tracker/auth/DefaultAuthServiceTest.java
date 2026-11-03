@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.tracker.domain.AccountStatus;
 import vn.edu.p2p.tracker.domain.PeerRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
@@ -13,6 +14,8 @@ import vn.edu.p2p.tracker.repository.PeerSessionRepository;
 import vn.edu.p2p.tracker.repository.UserRepository;
 
 import java.sql.SQLException;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -27,6 +30,7 @@ import java.util.stream.IntStream;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class DefaultAuthServiceTest {
@@ -55,8 +59,10 @@ class DefaultAuthServiceTest {
         );
 
         String peerId = UUID.randomUUID().toString();
+        KeyPair peerKeys = PeerRequestProof.generateKeyPair();
         LoginResponse response = service.login(
-                new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC"),
+                new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC",
+                        PeerRequestProof.encodePublicKey(peerKeys.getPublic())),
                 "127.0.0.1"
         );
 
@@ -64,6 +70,8 @@ class DefaultAuthServiceTest {
         assertNotNull(response.sessionId());
         assertEquals(10, response.heartbeatIntervalSeconds());
         assertEquals(1, sessions.sessions.size());
+        assertEquals(PeerRequestProof.encodePublicKey(peerKeys.getPublic()),
+                peers.publicKeys.get(UUID.fromString(peerId)));
 
         service.logout(new LogoutRequest(response.sessionId()));
         assertEquals("LOGGED_OUT", sessions.lastStatus);
@@ -93,12 +101,14 @@ class DefaultAuthServiceTest {
         );
 
         String peerId = UUID.randomUUID().toString();
+        String publicKey = PeerRequestProof.encodePublicKey(PeerRequestProof.generateKeyPair().getPublic());
         LoginRequest request = new LoginRequest(
                 "dang",
                 "secret",
                 7001,
                 peerId,
-                "TEST-PC"
+                "TEST-PC",
+                publicKey
         );
 
         LoginResponse first = service.login(request, "127.0.0.1");
@@ -128,8 +138,9 @@ class DefaultAuthServiceTest {
                 users, peers, sessions, passwords, 10
         );
         String peerId = UUID.randomUUID().toString();
+        String publicKey = PeerRequestProof.encodePublicKey(PeerRequestProof.generateKeyPair().getPublic());
         LoginRequest request = new LoginRequest(
-                "dang", "secret", 7001, peerId, "TEST-PC"
+                "dang", "secret", 7001, peerId, "TEST-PC", publicKey
         );
 
         ExecutorService executor = Executors.newFixedThreadPool(8);
@@ -149,7 +160,7 @@ class DefaultAuthServiceTest {
     }
 
     @Test
-    void shouldRejectWrongPassword() {
+    void shouldRejectWrongPassword() throws Exception {
         FakeUserRepository users = new FakeUserRepository();
         FakePeerRepository peers = new FakePeerRepository();
         FakeSessionRepository sessions = new FakeSessionRepository();
@@ -179,13 +190,68 @@ class DefaultAuthServiceTest {
                                 "wrong",
                                 7001,
                                 UUID.randomUUID().toString(),
-                                "TEST-PC"
+                                "TEST-PC",
+                                PeerRequestProof.encodePublicKey(
+                                        PeerRequestProof.generateKeyPair().getPublic())
                         ),
                         "127.0.0.1"
                 )
         );
 
         assertEquals("INVALID_CREDENTIALS", error.errorCode());
+    }
+
+    @Test
+    void loginWithDifferentValidKeyOverwritesPreviouslyRegisteredKey() throws Exception {
+        FakeUserRepository users = new FakeUserRepository();
+        FakePeerRepository peers = new FakePeerRepository();
+        FakeSessionRepository sessions = new FakeSessionRepository();
+        PasswordService passwords = new BCryptPasswordService(4);
+        users.user = new UserRecord(1L, "dang", passwords.hash("secret"),
+                AccountStatus.ACTIVE, OffsetDateTime.now());
+        DefaultAuthService service = new DefaultAuthService(users, peers, sessions, passwords, 10);
+        String peerId = UUID.randomUUID().toString();
+        KeyPair first = PeerRequestProof.generateKeyPair();
+        KeyPair second = PeerRequestProof.generateKeyPair();
+
+        service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC",
+                PeerRequestProof.encodePublicKey(first.getPublic())), "127.0.0.1");
+        service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC",
+                PeerRequestProof.encodePublicKey(second.getPublic())), "127.0.0.1");
+
+        assertEquals(PeerRequestProof.encodePublicKey(second.getPublic()),
+                peers.publicKeys.get(UUID.fromString(peerId)));
+    }
+
+    @Test
+    void rejectsMissingMalformedAndNonEd25519PublicKeys() throws Exception {
+        FakeUserRepository users = new FakeUserRepository();
+        FakePeerRepository peers = new FakePeerRepository();
+        FakeSessionRepository sessions = new FakeSessionRepository();
+        PasswordService passwords = new BCryptPasswordService(4);
+        users.user = new UserRecord(1L, "dang", passwords.hash("secret"),
+                AccountStatus.ACTIVE, OffsetDateTime.now());
+        DefaultAuthService service = new DefaultAuthService(users, peers, sessions, passwords, 10);
+        String peerId = UUID.randomUUID().toString();
+
+        AuthException missing = assertThrows(AuthException.class,
+                () -> service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC", null),
+                        "127.0.0.1"));
+        AuthException malformed = assertThrows(AuthException.class,
+                () -> service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC", "not-a-key"),
+                        "127.0.0.1"));
+        KeyPair rsaKeys = KeyPairGenerator.getInstance("RSA").generateKeyPair();
+        String rsaPublicKey = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(rsaKeys.getPublic().getEncoded());
+        AuthException wrongAlgorithm = assertThrows(AuthException.class,
+                () -> service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC",
+                                rsaPublicKey),
+                        "127.0.0.1"));
+
+        assertEquals("INVALID_PEER_PUBLIC_KEY", missing.errorCode());
+        assertEquals("INVALID_PEER_PUBLIC_KEY", malformed.errorCode());
+        assertEquals("INVALID_PEER_PUBLIC_KEY", wrongAlgorithm.errorCode());
+        assertNull(peers.publicKeys.get(UUID.fromString(peerId)));
     }
 
     private static final class FakeUserRepository implements UserRepository {
@@ -207,6 +273,7 @@ class DefaultAuthServiceTest {
 
     private static final class FakePeerRepository implements PeerRepository {
         final Map<UUID, PeerRecord> peers = new HashMap<>();
+        final Map<UUID, String> publicKeys = new HashMap<>();
 
         @Override
         public Optional<PeerRecord> findById(UUID peerId) {
@@ -229,11 +296,22 @@ class DefaultAuthServiceTest {
                     lastLoginAt
             ));
         }
+
+        @Override
+        public Optional<String> findPublicKey(UUID peerId) {
+            return Optional.ofNullable(publicKeys.get(peerId));
+        }
+
+        @Override
+        public void updatePublicKey(UUID peerId, String publicKey) {
+            publicKeys.put(peerId, publicKey);
+        }
     }
 
     private static final class ConcurrentPeerRepository implements PeerRepository {
         private final ConcurrentHashMap<UUID, PeerRecord> peers =
                 new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<UUID, String> publicKeys = new ConcurrentHashMap<>();
 
         @Override
         public Optional<PeerRecord> findById(UUID peerId) {
@@ -255,6 +333,16 @@ class DefaultAuthServiceTest {
                     old.peerId(), old.userId(), old.deviceName(),
                     old.createdAt(), lastLoginAt
             ));
+        }
+
+        @Override
+        public Optional<String> findPublicKey(UUID peerId) {
+            return Optional.ofNullable(publicKeys.get(peerId));
+        }
+
+        @Override
+        public void updatePublicKey(UUID peerId, String publicKey) {
+            publicKeys.put(peerId, publicKey);
         }
     }
 

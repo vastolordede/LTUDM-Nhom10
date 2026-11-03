@@ -30,6 +30,16 @@ BEGIN
     END IF;
 END $$;
 
+-- R76 PR 2: authenticated Peers register an Ed25519 public key at login.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='public' AND table_name='peers'
+                     AND column_name='public_key') THEN
+        RAISE EXCEPTION 'Missing migration_v9: peers.public_key';
+    END IF;
+END $$;
+
 -- R67 v7 - audit missing evidence table before using completed folder ranking.
 SELECT to_regclass('public.folder_download_evidence') AS v7_folder_download_evidence;
 

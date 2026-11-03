@@ -3,7 +3,7 @@
   "migrations": [
     {
       "path": "database/schema.sql",
-      "sha256": "453f0d2d9de5b2daa77d758294309032e417a0b357c9cda001def75a85ab7994"
+      "sha256": "aa4c554820a035868a9e506596880bcdb49dd7b03268fbbdf32ad23caa83b7cc"
     },
     {
       "path": "database/migration_v2.sql",
@@ -32,6 +32,10 @@
     {
       "path": "database/migration_v8.sql",
       "sha256": "c13db98c028e9bc86915c9de33df206cee91aadb666f1c45ed7d2174ae9e3e2f"
+    },
+    {
+      "path": "database/migration_v9.sql",
+      "sha256": "a4ccdb60e6f34688594b2312d4fcdd6407f03437b4c0c39b9857777349610df3"
     }
   ]
 }

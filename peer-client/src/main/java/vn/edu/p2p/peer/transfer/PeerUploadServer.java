@@ -2,7 +2,10 @@ package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.dto.BitfieldResponse;
 import vn.edu.p2p.common.security.PeerAccessTickets;
+import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.common.security.RequestReplayGuard;
 import java.security.PublicKey;
+import java.time.Clock;
 import java.time.Instant;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
@@ -46,6 +49,8 @@ public final class PeerUploadServer implements AutoCloseable {
     private final LocalFileRegistry fileRegistry;
     private final PublicKey ticketVerificationKey;
     private final boolean allowInsecureLoopbackDemo;
+    private final Clock clock;
+    private final RequestReplayGuard replayGuard;
     private volatile String uploaderPeerId;
     private final PeerP2pSocketFactory socketFactory;
     private final ExecutorService clientWorkers;
@@ -70,17 +75,28 @@ public final class PeerUploadServer implements AutoCloseable {
             int maxUploadWorkers
     ) {
         this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers,
-                PeerAccessTickets.optionalPeerKey(), PeerAccessTickets.localInsecureDemoEnabled());
+                PeerAccessTickets.optionalPeerKey(), PeerAccessTickets.localInsecureDemoEnabled(),
+                Clock.systemUTC(), new RequestReplayGuard());
     }
 
     /** Package-private key injection for deterministic tests only. */
     PeerUploadServer(int listeningPort, LocalFileRegistry fileRegistry,
                      PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
                      PublicKey ticketVerificationKey, boolean allowInsecureLoopbackDemo) {
+        this(listeningPort, fileRegistry, socketFactory, maxUploadWorkers, ticketVerificationKey,
+                allowInsecureLoopbackDemo, Clock.systemUTC(), new RequestReplayGuard());
+    }
+
+    PeerUploadServer(int listeningPort, LocalFileRegistry fileRegistry,
+                     PeerP2pSocketFactory socketFactory, int maxUploadWorkers,
+                     PublicKey ticketVerificationKey, boolean allowInsecureLoopbackDemo,
+                     Clock clock, RequestReplayGuard replayGuard) {
         this.listeningPort = listeningPort;
         this.fileRegistry = fileRegistry;
         this.ticketVerificationKey = ticketVerificationKey;
         this.allowInsecureLoopbackDemo = allowInsecureLoopbackDemo;
+        this.clock = java.util.Objects.requireNonNull(clock, "clock");
+        this.replayGuard = java.util.Objects.requireNonNull(replayGuard, "replayGuard");
         this.socketFactory = socketFactory;
         if (maxUploadWorkers <= 0) throw new IllegalArgumentException("maxUploadWorkers must be > 0");
         this.clientWorkers = new ThreadPoolExecutor(maxUploadWorkers, maxUploadWorkers,
@@ -224,8 +240,14 @@ public final class PeerUploadServer implements AutoCloseable {
                 request.payload(), GetBitfieldRequest.class
         );
 
-        if (!authorize(client, request, payload.fileId(), payload.accessTicket(),
-                MessageType.BITFIELD_RESPONSE)) return;
+        if (payload == null) {
+            deny(client, request, MessageType.BITFIELD_RESPONSE, "invalid request");
+            return;
+        }
+        if (!authorizeDownloadRequest(client, request, payload.fileId(),
+                payload.accessTicket(), PeerRequestProof.RequestType.BITFIELD,
+                PeerRequestProof.BITFIELD_PIECE_INDEX, payload.proofTimestamp(),
+                payload.proofNonce(), payload.proofSignature(), MessageType.BITFIELD_RESPONSE)) return;
         Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.find(payload.fileId());
         if (found.isEmpty()) {
             MessageEnvelope err = MessageEnvelope.error(
@@ -266,7 +288,7 @@ public final class PeerUploadServer implements AutoCloseable {
                     "INVALID_METADATA_PAGE", "Invalid metadata page bounds"));
             return;
         }
-        if (!authorize(client, request, payload.fileId(), payload.accessTicket(),
+        if (!authorizeTicket(client, request, payload.fileId(), payload.accessTicket(),
                 MessageType.METADATA_PAGE_RESPONSE)) return;
         Optional<LocalFileRegistry.RegisteredFile> file = fileRegistry.find(payload.fileId());
         if (file.isEmpty() || payload.startIndex() >= file.get().metadata().pieceCount()) {
@@ -292,7 +314,13 @@ public final class PeerUploadServer implements AutoCloseable {
                 request.payload(), PieceRequest.class
         );
 
-        if (!authorize(client, request, payload.fileId(), payload.accessTicket(),
+        if (payload == null) {
+            deny(client, request, MessageType.PIECE_RESPONSE, "invalid request");
+            return;
+        }
+        if (!authorizeDownloadRequest(client, request, payload.fileId(),
+                payload.accessTicket(), PeerRequestProof.RequestType.PIECE, payload.pieceIndex(),
+                payload.proofTimestamp(), payload.proofNonce(), payload.proofSignature(),
                 MessageType.PIECE_RESPONSE)) return;
         Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.find(payload.fileId());
         if (found.isEmpty()) {
@@ -344,18 +372,55 @@ public final class PeerUploadServer implements AutoCloseable {
         totalBytesUploaded.addAndGet(pieceBytes.length);
     }
 
-    private boolean authorize(Socket client, MessageEnvelope request, long fileId, String ticket,
-                              MessageType responseType) throws IOException {
-        boolean allowed = ticketVerificationKey != null && uploaderPeerId != null
-                && PeerAccessTickets.verify(ticketVerificationKey, ticket, fileId,
-                        uploaderPeerId, Instant.now());
-        if (!allowed && ticketVerificationKey == null && allowInsecureLoopbackDemo
-                && client.getInetAddress().isLoopbackAddress()) {
-            allowed = true; // Explicit local-only migration/demo option.
+    private boolean authorizeDownloadRequest(Socket client, MessageEnvelope request, long fileId,
+                                             String ticket, PeerRequestProof.RequestType requestType,
+                                             int pieceIndex, Long proofTimestamp, String proofNonce,
+                                             String proofSignature, MessageType responseType)
+            throws IOException {
+        PeerAccessTickets.TicketClaims claims = ticketVerificationKey == null || uploaderPeerId == null
+                ? null : PeerAccessTickets.verifyClaims(ticketVerificationKey, ticket, fileId,
+                        uploaderPeerId, clock.instant());
+        if (claims == null) {
+            if (isInsecureLoopbackDemo(client)) return true;
+            return deny(client, request, responseType, "invalid ticket");
         }
+
+        if (proofTimestamp == null || proofNonce == null || proofSignature == null
+                || proofNonce.isBlank() || proofSignature.isBlank()) {
+            return deny(client, request, responseType, "missing proof");
+        }
+        PeerRequestProof.Proof proof = new PeerRequestProof.Proof(
+                proofTimestamp, proofNonce, proofSignature);
+        if (!PeerRequestProof.verify(claims.requesterPublicKey(), requestType, uploaderPeerId,
+                fileId, pieceIndex, ticket, proof, clock)) {
+            return deny(client, request, responseType, "invalid proof");
+        }
+        if (!replayGuard.accept(claims.requesterId(), proofNonce)) {
+            return deny(client, request, responseType, "replayed proof");
+        }
+        return true;
+    }
+
+    private boolean authorizeTicket(Socket client, MessageEnvelope request, long fileId,
+                                    String ticket, MessageType responseType) throws IOException {
+        boolean allowed = ticketVerificationKey != null && uploaderPeerId != null
+                && PeerAccessTickets.verifyClaims(ticketVerificationKey, ticket, fileId,
+                        uploaderPeerId, clock.instant()) != null;
+        if (!allowed && isInsecureLoopbackDemo(client)) return true;
         if (allowed) return true;
+        return deny(client, request, responseType, "invalid ticket");
+    }
+
+    private boolean isInsecureLoopbackDemo(Socket client) {
+        return ticketVerificationKey == null && allowInsecureLoopbackDemo
+                && client.getInetAddress().isLoopbackAddress();
+    }
+
+    private boolean deny(Socket client, MessageEnvelope request, MessageType responseType,
+                         String reason) throws IOException {
+        LOG.fine(() -> "Peer request denied: " + reason);
         ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(responseType,
-                request.requestId(), "ACCESS_DENIED", "A valid Tracker-issued file ticket is required"));
+                request.requestId(), "ACCESS_DENIED", "A valid Tracker-issued authorization is required"));
         return false;
     }
 

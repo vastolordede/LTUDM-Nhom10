@@ -3,20 +3,31 @@ package vn.edu.p2p.tracker.source;
 import org.junit.jupiter.api.Test;
 import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
+import vn.edu.p2p.common.security.PeerAccessTickets;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.tracker.domain.FileSourceRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
 import vn.edu.p2p.tracker.peer.PeerSessionService;
 import vn.edu.p2p.tracker.repository.FileSourceRepository;
+import vn.edu.p2p.tracker.repository.PeerRepository;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.sql.SQLException;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class FileSourceServiceTest {
     @Test
@@ -37,6 +48,10 @@ class FileSourceServiceTest {
         );
 
         FakeSessionRepository sessions = new FakeSessionRepository(requesterSession);
+        KeyPair requesterKeys = PeerRequestProof.generateKeyPair();
+        KeyPair trackerKeys = PeerRequestProof.generateKeyPair();
+        FakePeerRepository peers = new FakePeerRepository();
+        peers.publicKeys.put(requesterPeer, PeerRequestProof.encodePublicKey(requesterKeys.getPublic()));
         FakeSourceRepository sources = new FakeSourceRepository(List.of(
                 new FileSourceRecord(
                         11L,
@@ -50,7 +65,9 @@ class FileSourceServiceTest {
 
         FileSourceService service = new FileSourceService(
                 sources,
-                new PeerSessionService(sessions)
+                new PeerSessionService(sessions),
+                peers,
+                trackerKeys.getPrivate()
         );
 
         FileSourcesResponse response = service.findSources(
@@ -62,6 +79,54 @@ class FileSourceServiceTest {
         assertEquals(1, response.sources().size());
         assertEquals(sourcePeer.toString(), response.sources().getFirst().peerId());
         assertEquals(requesterPeer, sources.excludedPeer);
+        assertEquals(requesterKeys.getPublic(), PeerAccessTickets.verifyClaims(
+                trackerKeys.getPublic(), response.sources().getFirst().accessTicket(), 11L,
+                sourcePeer.toString(), Instant.now()).requesterPublicKey());
+    }
+
+    @Test
+    void shouldRefuseToIssueTicketWhenRequesterHasNoRegisteredKey() {
+        UUID requesterPeer = UUID.randomUUID();
+        UUID sessionId = UUID.randomUUID();
+        PeerSessionRecord requesterSession = new PeerSessionRecord(
+                sessionId, requesterPeer, "127.0.0.1", 7001, PeerStatus.ONLINE,
+                OffsetDateTime.now(ZoneOffset.UTC), OffsetDateTime.now(ZoneOffset.UTC), null);
+        FileSourceService service = new FileSourceService(
+                new FakeSourceRepository(List.of()),
+                new PeerSessionService(new FakeSessionRepository(requesterSession)),
+                new FakePeerRepository(),
+                null);
+
+        FileSourceException error = assertThrows(FileSourceException.class,
+                () -> service.findSources(new FileSourcesRequest(sessionId.toString(), 11L)));
+
+        assertEquals("REQUESTER_KEY_MISSING", error.errorCode());
+        assertEquals("Peer public key is missing; please log in again.", error.getMessage());
+    }
+
+    private static final class FakePeerRepository implements PeerRepository {
+        private final Map<UUID, String> publicKeys = new HashMap<>();
+
+        @Override
+        public Optional<vn.edu.p2p.tracker.domain.PeerRecord> findById(UUID peerId) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void create(vn.edu.p2p.tracker.domain.PeerRecord peer) {}
+
+        @Override
+        public void updateLastLogin(UUID peerId, OffsetDateTime lastLoginAt) {}
+
+        @Override
+        public Optional<String> findPublicKey(UUID peerId) {
+            return Optional.ofNullable(publicKeys.get(peerId));
+        }
+
+        @Override
+        public void updatePublicKey(UUID peerId, String publicKey) throws SQLException {
+            publicKeys.put(peerId, publicKey);
+        }
     }
 
     private static final class FakeSourceRepository implements FileSourceRepository {

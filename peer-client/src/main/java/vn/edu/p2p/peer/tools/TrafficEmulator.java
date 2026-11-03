@@ -5,6 +5,7 @@ import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.auth.PeerIdentity;
 import vn.edu.p2p.peer.auth.PeerIdentityStore;
+import vn.edu.p2p.peer.auth.PeerKeyStore;
 import vn.edu.p2p.peer.network.PeerSettings;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.session.ClientSession;
@@ -92,11 +93,14 @@ public final class TrafficEmulator {
         String tag = "vpeer-" + idx;
         boolean online = false;
         try (TrackerConnection connection = new TrackerConnection(settings.trackerConnectionConfig())) {
-            PeerIdentity identity = new PeerIdentityStore(work.resolve("peer-" + idx + ".properties")).loadOrCreate();
-            AuthClientService auth = new AuthClientService(connection, identity);
+            PeerIdentityStore identityStore =
+                    new PeerIdentityStore(work.resolve("peer-" + idx + ".properties"));
+            PeerIdentity identity = identityStore.loadOrCreate();
+            AuthClientService auth = new AuthClientService(connection, identityStore, identity);
             LocalFileRegistry registry = new LocalFileRegistry();
             try (PeerUploadServer server = new PeerUploadServer(port, registry, new PeerP2pSocketFactory(p2p))) {
                 ClientSession session = auth.login(user, pass, port);
+                var peerKeys = new PeerKeyStore(work).loadOrCreate(session.peerId());
                 // R43 tickets bind the destination to this exact peer identity.
                 server.setUploaderPeerId(session.peerId());
                 server.start();
@@ -132,7 +136,8 @@ public final class TrafficEmulator {
                     Path target = work.resolve("received-" + idx + ".bin");
                     Files.deleteIfExists(target);
                     var engine = new MultiSourceDownloadEngine(registry,
-                            new PeerDownloadClient(new PeerP2pSocketFactory(p2p)));
+                            new PeerDownloadClient(new PeerP2pSocketFactory(p2p),
+                                    peerKeys.getPrivate()));
                     var result = engine.downloadFile(commonFileId, available, target,
                             null, new AtomicBoolean(false));
                     if (!"COMPLETED".equals(result.status()) || !FileHashUtil.sha256(target)

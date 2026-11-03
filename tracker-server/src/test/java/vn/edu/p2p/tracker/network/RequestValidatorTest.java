@@ -3,6 +3,7 @@ package vn.edu.p2p.tracker.network;
 import org.junit.jupiter.api.Test;
 import vn.edu.p2p.common.dto.HeartbeatRequest;
 import vn.edu.p2p.common.dto.LoginRequest;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
@@ -69,7 +70,8 @@ class RequestValidatorTest {
                         "secret",
                         0,
                         UUID.randomUUID().toString(),
-                        "PC"
+                        "PC",
+                        PeerRequestProof.encodePublicKey(PeerRequestProof.generateKeyPair().getPublic())
                 ))
         );
 

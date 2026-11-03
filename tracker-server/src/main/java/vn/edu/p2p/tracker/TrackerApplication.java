@@ -94,6 +94,7 @@ public final class TrackerApplication {
         FileSourceService fileSourceService = new FileSourceService(
                 fileSources,
                 peerSessionService,
+                peers,
                 PeerAccessTickets.localInsecureDemoEnabled() ? null : PeerAccessTickets.requiredTrackerKey()
         );
 

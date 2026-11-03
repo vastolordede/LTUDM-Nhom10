@@ -34,6 +34,10 @@ public final class PeerIdentityStore {
         return new PeerIdentityStore(file);
     }
 
+    Path directory() {
+        return file.toAbsolutePath().getParent();
+    }
+
     public PeerIdentity loadOrCreate() throws IOException {
         if (Files.exists(file)) {
             return load();

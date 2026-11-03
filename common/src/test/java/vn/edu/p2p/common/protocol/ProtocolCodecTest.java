@@ -3,6 +3,7 @@ package vn.edu.p2p.common.protocol;
 import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import vn.edu.p2p.common.dto.LoginRequest;
+import vn.edu.p2p.common.security.PeerRequestProof;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -23,7 +24,8 @@ class ProtocolCodecTest {
                 "secret",
                 7001,
                 UUID.randomUUID().toString(),
-                "DESKTOP-TEST"
+                "DESKTOP-TEST",
+                PeerRequestProof.encodePublicKey(PeerRequestProof.generateKeyPair().getPublic())
         );
 
         MessageEnvelope original = MessageEnvelope.request(

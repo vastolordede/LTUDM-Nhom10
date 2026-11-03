@@ -28,7 +28,7 @@ public record MessageEnvelope(
         String message,
         JsonNode payload
 ) {
-    public static final int CURRENT_VERSION = 2;
+    public static final int CURRENT_VERSION = 3;
 
     public MessageEnvelope {
         if (version <= 0) {

@@ -24,8 +24,10 @@ import vn.edu.p2p.peer.share.ShareController;
 import vn.edu.p2p.peer.share.FolderController;
 import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.peer.network.RendezvousClient;
+import vn.edu.p2p.peer.auth.PeerKeyStore;
 
 import java.io.IOException;
+import java.security.KeyPair;
 
 /** One user-facing window, one shared file registry and one upload server per session. */
 public final class TransferDashboardWindow implements AutoCloseable {
@@ -82,6 +84,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             throw new IllegalStateException("Dashboard was closed; create a new instance");
         }
         uploadServer.setUploaderPeerId(peerId);
+        KeyPair peerKeys = PeerKeyStore.defaultStore().loadOrCreate(peerId);
         uploadServer.start();
         try {
             FXMLLoader shareLoader = loader("share-view.fxml");
@@ -97,12 +100,14 @@ public final class TransferDashboardWindow implements AutoCloseable {
             FXMLLoader downloadLoader = loader("download-view.fxml");
             Parent downloadRoot = downloadLoader.load();
             downloadController = downloadLoader.getController();
-            downloadController.configure(connection, sessionId, fileRegistry, socketFactory, uploadServer);
+            downloadController.configure(connection, sessionId, fileRegistry, socketFactory,
+                    uploadServer, peerKeys.getPrivate());
 
             FXMLLoader folderLoader = loader("folder-view.fxml");
             Parent folderRoot = folderLoader.load();
             folderController = folderLoader.getController();
-            folderController.configure(connection, sessionId, fileRegistry, socketFactory);
+            folderController.configure(connection, sessionId, fileRegistry, socketFactory,
+                    peerKeys.getPrivate());
 
             FXMLLoader exploreLoader = loader("explore-view.fxml");
             Parent exploreRoot = exploreLoader.load();

@@ -6,6 +6,7 @@ import vn.edu.p2p.common.dto.LogoutRequest;
 import vn.edu.p2p.common.dto.RegisterRequest;
 import vn.edu.p2p.common.dto.RegisterResponse;
 import vn.edu.p2p.common.auth.RegisterInputPolicy;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.tracker.domain.PeerRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
@@ -15,6 +16,7 @@ import vn.edu.p2p.tracker.repository.PeerSessionRepository;
 import vn.edu.p2p.tracker.repository.UserRepository;
 
 import java.sql.SQLException;
+import java.security.PublicKey;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
@@ -63,6 +65,14 @@ public final class DefaultAuthService implements AuthService {
                 throw invalidCredentials();
             }
 
+            PublicKey peerPublicKey;
+            try {
+                peerPublicKey = PeerRequestProof.decodePublicKey(request.peerPublicKey());
+            } catch (IllegalArgumentException e) {
+                throw new AuthException("INVALID_PEER_PUBLIC_KEY",
+                        "Peer public key is missing or is not a valid Ed25519 X.509 key.", e);
+            }
+
             UUID peerId = parseUuid(request.peerId(), "INVALID_PEER_ID");
             OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
 
@@ -72,7 +82,6 @@ public final class DefaultAuthService implements AuthService {
                     request.deviceName(),
                     now
             );
-
             UUID sessionId = UUID.randomUUID();
             PeerSessionRecord newSession = new PeerSessionRecord(
                     sessionId,
@@ -96,6 +105,11 @@ public final class DefaultAuthService implements AuthService {
                         replacedSessions
                 ));
             }
+
+            peerRepository.updatePublicKey(peerId, PeerRequestProof.encodePublicKey(peerPublicKey));
+            String fingerprint = PeerRequestProof.fingerprint(peerPublicKey);
+            LOG.info(() -> "Registered Peer public key fingerprint "
+                    + fingerprint.substring(0, 12) + " for Peer " + peerId);
 
             return new LoginResponse(
                     peerId.toString(),
@@ -225,6 +239,10 @@ public final class DefaultAuthService implements AuthService {
         }
         if (request.peerId() == null || request.peerId().isBlank()) {
             throw new AuthException("INVALID_PEER_ID", "Missing Peer identity.");
+        }
+        if (request.peerPublicKey() == null || request.peerPublicKey().isBlank()) {
+            throw new AuthException("INVALID_PEER_PUBLIC_KEY",
+                    "Peer public key is required; restart the Peer application.");
         }
     }
 

@@ -13,4 +13,8 @@ public interface PeerRepository {
     void create(PeerRecord peer) throws SQLException;
 
     void updateLastLogin(UUID peerId, OffsetDateTime lastLoginAt) throws SQLException;
+
+    Optional<String> findPublicKey(UUID peerId) throws SQLException;
+
+    void updatePublicKey(UUID peerId, String publicKey) throws SQLException;
 }

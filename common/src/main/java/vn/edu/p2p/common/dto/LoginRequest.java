@@ -9,6 +9,7 @@ public record LoginRequest(
         String password,
         int listeningPort,
         String peerId,
-        String deviceName
+        String deviceName,
+        String peerPublicKey
 ) {
 }
