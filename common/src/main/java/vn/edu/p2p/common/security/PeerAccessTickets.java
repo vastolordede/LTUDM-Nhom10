@@ -24,8 +24,20 @@ public final class PeerAccessTickets {
     private static final long CLOCK_SKEW_SECONDS = 90;
     private static final int MAX_TICKET_LENGTH = 2048;
     private static final SecureRandom RANDOM = new SecureRandom();
+    private static final String LEGACY_CLAIMS_VERSION = "1";
+    private static final String CLAIMS_VERSION = "2";
 
     private PeerAccessTickets() {}
+
+    public record TicketClaims(
+            long fileId,
+            String requesterId,
+            String uploaderId,
+            long issuedAtEpochSecond,
+            long expiresAtEpochSecond,
+            String nonce,
+            PublicKey requesterPublicKey
+    ) {}
 
     public static PrivateKey decodePrivateKey(String encoded) {
         try {
@@ -110,6 +122,11 @@ public final class PeerAccessTickets {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
+    /**
+     * Legacy bearer-ticket format retained until R76 PR 3 migrates all callsites.
+     * Remove in R76 PR 3.
+     */
+    @Deprecated(forRemoval = false)
     public static String issue(PrivateKey key, long fileId, String requesterId,
                                String uploaderId, Instant now) {
         Objects.requireNonNull(key, "key");
@@ -119,9 +136,38 @@ public final class PeerAccessTickets {
         }
         byte[] nonce = new byte[16];
         RANDOM.nextBytes(nonce);
-        String claims = "1:" + fileId + ":" + requesterId + ":" + uploaderId + ":"
-                + now.getEpochSecond() + ":" + (now.getEpochSecond() + TTL_SECONDS) + ":"
-                + Base64.getUrlEncoder().withoutPadding().encodeToString(nonce);
+        String claims = claims(LEGACY_CLAIMS_VERSION, fileId, requesterId, uploaderId,
+                now, Base64.getUrlEncoder().withoutPadding().encodeToString(nonce), null);
+        return signClaims(key, claims);
+    }
+
+    public static String issue(PrivateKey key, long fileId, String requesterId,
+                               String uploaderId, PublicKey requesterPublicKey, Instant now) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(requesterPublicKey, "requesterPublicKey");
+        Objects.requireNonNull(now, "now");
+        if (fileId <= 0 || !safeId(requesterId) || !safeId(uploaderId)
+                || !isEd25519(requesterPublicKey)) {
+            throw new IllegalArgumentException("Invalid ticket claims");
+        }
+        byte[] nonce = new byte[16];
+        RANDOM.nextBytes(nonce);
+        String encodedPublicKey = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(requesterPublicKey.getEncoded());
+        String claimString = claims(CLAIMS_VERSION, fileId, requesterId, uploaderId,
+                now, Base64.getUrlEncoder().withoutPadding().encodeToString(nonce), encodedPublicKey);
+        return signClaims(key, claimString);
+    }
+
+    private static String claims(String version, long fileId, String requesterId,
+                                 String uploaderId, Instant now, String nonce,
+                                 String requesterPublicKey) {
+        String base = version + ":" + fileId + ":" + requesterId + ":" + uploaderId + ":"
+                + now.getEpochSecond() + ":" + (now.getEpochSecond() + TTL_SECONDS) + ":" + nonce;
+        return requesterPublicKey == null ? base : base + ":" + requesterPublicKey;
+    }
+
+    private static String signClaims(PrivateKey key, String claims) {
         String encodedClaims = Base64.getUrlEncoder().withoutPadding()
                 .encodeToString(claims.getBytes(StandardCharsets.US_ASCII));
         try {
@@ -135,30 +181,72 @@ public final class PeerAccessTickets {
         }
     }
 
+    /**
+     * Legacy boolean verifier retained until R76 PR 3 migrates all callsites.
+     * Remove in R76 PR 3.
+     */
+    @Deprecated(forRemoval = false)
     public static boolean verify(PublicKey key, String token, long fileId,
                                  String uploaderId, Instant now) {
+        return verifyInternal(key, token, fileId, uploaderId, now, false) != null;
+    }
+
+    public static TicketClaims verifyClaims(PublicKey key, String token, long fileId,
+                                            String uploaderId, Instant now) {
+        return verifyInternal(key, token, fileId, uploaderId, now, true);
+    }
+
+    private static TicketClaims verifyInternal(PublicKey key, String token, long fileId,
+                                               String uploaderId, Instant now,
+                                               boolean requireRequesterPublicKey) {
         if (key == null || token == null || token.length() > MAX_TICKET_LENGTH
-                || fileId <= 0 || !safeId(uploaderId)) return false;
+                || now == null || fileId <= 0 || !safeId(uploaderId)) return null;
         try {
             String[] parts = token.split("\\.", -1);
-            if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) return false;
+            if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) return null;
             Signature verifier = Signature.getInstance("Ed25519");
             verifier.initVerify(key);
             verifier.update(parts[0].getBytes(StandardCharsets.US_ASCII));
-            if (!verifier.verify(Base64.getUrlDecoder().decode(parts[1]))) return false;
+            if (!verifier.verify(Base64.getUrlDecoder().decode(parts[1]))) return null;
             String claims = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.US_ASCII);
             String[] c = claims.split(":", -1);
-            if (c.length != 7 || !"1".equals(c[0]) || Long.parseLong(c[1]) != fileId
-                    || !safeId(c[2]) || !uploaderId.equals(c[3]) || c[6].length() != 22) return false;
+            String expectedVersion = requireRequesterPublicKey ? CLAIMS_VERSION : LEGACY_CLAIMS_VERSION;
+            int expectedLength = requireRequesterPublicKey ? 8 : 7;
+            if (c.length != expectedLength || !expectedVersion.equals(c[0])
+                    || Long.parseLong(c[1]) != fileId || !safeId(c[2])
+                    || !uploaderId.equals(c[3]) || !isValidNonce(c[6])) return null;
             long issued = Long.parseLong(c[4]);
             long expires = Long.parseLong(c[5]);
             long current = now.getEpochSecond();
-            return issued <= current + CLOCK_SKEW_SECONDS && expires >= current
+            if (!(issued <= current + CLOCK_SKEW_SECONDS && expires >= current
                     && expires > issued && expires - issued <= TTL_SECONDS
-                    && expires <= current + TTL_SECONDS + CLOCK_SKEW_SECONDS;
+                    && expires <= current + TTL_SECONDS + CLOCK_SKEW_SECONDS)) return null;
+            PublicKey requesterPublicKey = null;
+            if (requireRequesterPublicKey) {
+                byte[] keyBytes = Base64.getUrlDecoder().decode(c[7]);
+                requesterPublicKey = java.security.KeyFactory.getInstance("Ed25519")
+                        .generatePublic(new X509EncodedKeySpec(keyBytes));
+                if (!isEd25519(requesterPublicKey)) return null;
+            }
+            return new TicketClaims(Long.parseLong(c[1]), c[2], c[3], issued, expires,
+                    c[6], requesterPublicKey);
         } catch (RuntimeException | java.security.GeneralSecurityException e) {
+            return null;
+        }
+    }
+
+    private static boolean isValidNonce(String nonce) {
+        if (nonce == null || nonce.length() != 22) return false;
+        try {
+            return Base64.getUrlDecoder().decode(nonce).length == 16;
+        } catch (IllegalArgumentException e) {
             return false;
         }
+    }
+
+    private static boolean isEd25519(PublicKey key) {
+        String algorithm = key.getAlgorithm();
+        return "Ed25519".equalsIgnoreCase(algorithm) || "EdDSA".equalsIgnoreCase(algorithm);
     }
 
     private static boolean safeId(String id) {
