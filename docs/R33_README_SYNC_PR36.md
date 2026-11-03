@@ -15,7 +15,7 @@ real storage/network acceptance testing.
 ## Local dev setup
 
 1. Create a **dedicated** PostgreSQL database; apply `database/schema.sql`
-   then `database/migration_v2.sql` ... `migration_v8.sql` sequentially *only
+   then `database/migration_v2.sql` ... `migration_v9.sql` sequentially *only
    if not yet applied*. Run `database/verify_schema.sql` and preserve backups.
 2. Configure Tracker DB/TLS and Ed25519 signing key on the server; configure
    the PUBLIC ticket verification key on uploading Peers. Do not publish keys.

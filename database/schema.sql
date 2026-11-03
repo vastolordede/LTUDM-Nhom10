@@ -41,6 +41,7 @@ CREATE TABLE peers (
     user_id BIGINT NOT NULL,
 
     device_name VARCHAR(100),
+    public_key TEXT NULL,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_login_at TIMESTAMPTZ,

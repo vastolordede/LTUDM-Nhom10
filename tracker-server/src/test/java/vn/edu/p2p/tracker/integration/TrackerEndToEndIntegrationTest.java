@@ -9,6 +9,8 @@ import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
+import vn.edu.p2p.common.security.PeerAccessTickets;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
@@ -36,6 +38,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.security.KeyPair;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -106,9 +109,12 @@ class TrackerEndToEndIntegrationTest {
                 10
         );
         PeerSessionService peerSessionService = new PeerSessionService(sessions);
+        KeyPair ticketSigningKeys = PeerRequestProof.generateKeyPair();
         FileSourceService fileSourceService = new FileSourceService(
                 fileSources,
-                peerSessionService
+                peerSessionService,
+                peers,
+                ticketSigningKeys.getPrivate()
         );
         TrackerRequestDispatcher dispatcher = new TrackerRequestDispatcher(
                 authService,
@@ -231,6 +237,9 @@ class TrackerEndToEndIntegrationTest {
                 assertEquals(1, sourcesPayload.sources().size());
 
                 FileSourceInfo source = sourcesPayload.sources().getFirst();
+                assertNotNull(PeerAccessTickets.verifyClaims(ticketSigningKeys.getPublic(),
+                        source.accessTicket(), 101L, sourcePeerId.toString(),
+                        java.time.Instant.now()));
                 assertEquals(sourcePeerId.toString(), source.peerId());
                 assertEquals("COMPLETE", source.availabilityStatus());
                 assertEquals("192.168.1.50", source.ipAddress());
@@ -347,7 +356,9 @@ class TrackerEndToEndIntegrationTest {
                                         "123456",
                                         listeningPort,
                                         peerId.toString(),
-                                        "INTEGRATION-TEST"
+                                        "INTEGRATION-TEST",
+                                        PeerRequestProof.encodePublicKey(
+                                                PeerRequestProof.generateKeyPair().getPublic())
                                 )
                         )
                 )
@@ -450,6 +461,7 @@ class TrackerEndToEndIntegrationTest {
             implements PeerRepository {
         private final Map<UUID, PeerRecord> peers =
                 new ConcurrentHashMap<>();
+        private final Map<UUID, String> publicKeys = new ConcurrentHashMap<>();
 
         @Override
         public Optional<PeerRecord> findById(UUID peerId) {
@@ -476,6 +488,16 @@ class TrackerEndToEndIntegrationTest {
                     old.createdAt(),
                     lastLoginAt
             ));
+        }
+
+        @Override
+        public Optional<String> findPublicKey(UUID peerId) {
+            return Optional.ofNullable(publicKeys.get(peerId));
+        }
+
+        @Override
+        public void updatePublicKey(UUID peerId, String publicKey) {
+            publicKeys.put(peerId, publicKey);
         }
     }
 

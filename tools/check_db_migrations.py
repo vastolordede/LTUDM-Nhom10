@@ -17,11 +17,11 @@ def normalized_sql_sha256(path: Path) -> str:
     normalized = path.read_bytes().replace(b'\r\n', b'\n')
     return hashlib.sha256(normalized).hexdigest()
 info = json.loads((ROOT / 'database/migration_checksums.json').read_text(encoding='utf-8'))
-expected = ['database/schema.sql'] + [f'database/migration_v{i}.sql' for i in range(2, 9)]
+expected = ['database/schema.sql'] + [f'database/migration_v{i}.sql' for i in range(2, 10)]
 paths = [entry['path'] for entry in info['migrations']]
 issues = []
 if paths != expected:
-    issues.append('Manifest must list schema then migration_v2..migration_v8 in order')
+    issues.append('Manifest must list schema then migration_v2..migration_v9 in order')
 for entry in info['migrations']:
     path = ROOT / entry['path']
     if not path.is_file() or normalized_sql_sha256(path) != entry['sha256']:

@@ -19,7 +19,7 @@ FileShare-P2P/
 ├── common/          # DTO, protocol, TLS helper
 ├── tracker-server/  # Tracker TCP server
 ├── peer-client/     # JavaFX GUI, upload server, downloader
-├── database/        # schema.sql, migration_v2..v8.sql
+├── database/        # schema.sql, migration_v2..v9.sql
 └── docs/
 ```
 
@@ -45,10 +45,11 @@ psql -U postgres -d fileshare_p2p -f database/migration_v5.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v6.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v7.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v8.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v9.sql
 psql -U postgres -d fileshare_p2p -f database/verify_schema.sql
 ```
 
-Chạy `schema.sql` rồi `migration_v2.sql` đến `migration_v8.sql` **theo thứ tự** trên DB mới. Trên DB đã có dữ liệu, chỉ chạy migration **chưa được áp dụng**; trước tiên sao lưu dữ liệu.
+Chạy `schema.sql` rồi `migration_v2.sql` đến `migration_v9.sql` **theo thứ tự** trên DB mới. Trên DB đã có dữ liệu, chỉ chạy migration **chưa được áp dụng**; trước tiên sao lưu dữ liệu.
 
 ## Cấu hình
 
@@ -132,6 +133,7 @@ psql -U postgres -d fileshare_p2p -f database/migration_v5.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v6.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v7.sql
 psql -U postgres -d fileshare_p2p -f database/migration_v8.sql
+psql -U postgres -d fileshare_p2p -f database/migration_v9.sql
 psql -U postgres -d fileshare_p2p -f database/verify_schema.sql
 ```
 
@@ -147,7 +149,7 @@ psql -U postgres -d fileshare_p2p -f database/verify_schema.sql
 
 - Requirements: Java 21/JAVA_HOME, Python 3 and Gradle Wrapper; do not hard-code a team member's JDK path.
 - Before every PR: `python tools/check_repo_markers.py`, `python tools/check_db_migrations.py`, `python tools/check_fxml_bindings.py`, `python tools/check_release_hygiene.py`, `gradlew.bat clean test build` on Windows.
-- Database migration order is v2..v8; check `docs/database_bootstrap_v6.md`, back up populated databases and apply ONLY the missing migration scripts. `migration_checksums.json` checks source integrity, **not** whether migration ran in your DB.
+- Database migration order is v2..v9; check `docs/database_bootstrap_v6.md`, back up populated databases and apply ONLY the missing migration scripts. `migration_checksums.json` checks source integrity, **not** whether migration ran in your DB.
 - Do not apply ZIPs or migrations to production without a backup and explicit approval.
 
 ## Stabilization ZIP11-18: safety and release gates

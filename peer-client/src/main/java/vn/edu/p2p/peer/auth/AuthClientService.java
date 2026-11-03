@@ -11,16 +11,19 @@ import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ResponseStatus;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.session.ClientSession;
 
 import java.io.IOException;
+import java.security.KeyPair;
 import java.util.UUID;
 
 public final class AuthClientService implements AutoCloseable {
     private final TrackerConnection connection;
     private final PeerIdentity peerIdentity;
     private final PeerIdentityStore identityStore;
+    private final PeerKeyStore peerKeyStore;
     private ClientSession currentSession;
 
     public AuthClientService(
@@ -30,14 +33,22 @@ public final class AuthClientService implements AutoCloseable {
         this.connection = connection;
         this.peerIdentity = peerIdentity;
         this.identityStore = null;
+        this.peerKeyStore = PeerKeyStore.defaultStore();
     }
 
     /** Desktop account switching: resolve identity per user, preserving legacy peer.id. */
     public AuthClientService(TrackerConnection connection, PeerIdentityStore identityStore,
                              PeerIdentity initialIdentity) {
+        this(connection, identityStore, initialIdentity,
+                new PeerKeyStore(identityStore.directory()));
+    }
+
+    public AuthClientService(TrackerConnection connection, PeerIdentityStore identityStore,
+                             PeerIdentity initialIdentity, PeerKeyStore peerKeyStore) {
         this.connection = connection;
         this.identityStore = identityStore;
         this.peerIdentity = initialIdentity;
+        this.peerKeyStore = peerKeyStore;
     }
 
     public synchronized ClientSession login(
@@ -100,8 +111,16 @@ public final class AuthClientService implements AutoCloseable {
 
     private MessageEnvelope sendLogin(String username, String password, int listeningPort,
                                       PeerIdentity identity) throws AuthClientException {
+        final KeyPair peerKeys;
+        try {
+            peerKeys = peerKeyStore.loadOrCreate(identity.peerId());
+        } catch (IOException e) {
+            throw new AuthClientException("LOCAL_KEY_ERROR",
+                    "Cannot load or create the Peer identity key: " + e.getMessage(), e);
+        }
         LoginRequest payload = new LoginRequest(username, password, listeningPort,
-                identity.peerId(), identity.deviceName());
+                identity.peerId(), identity.deviceName(),
+                PeerRequestProof.encodePublicKey(peerKeys.getPublic()));
         MessageEnvelope request = MessageEnvelope.request(MessageType.LOGIN_REQUEST,
                 UUID.randomUUID().toString(), ProtocolCodec.toPayload(payload));
         return send(request);

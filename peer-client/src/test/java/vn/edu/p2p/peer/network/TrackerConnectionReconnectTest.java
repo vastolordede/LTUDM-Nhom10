@@ -7,6 +7,7 @@ import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ResponseStatus;
+import vn.edu.p2p.common.security.PeerRequestProof;
 
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -109,6 +110,7 @@ class TrackerConnectionReconnectTest {
     private static MessageEnvelope login() {
         return MessageEnvelope.request(MessageType.LOGIN_REQUEST, UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(new LoginRequest("alice", "correct password", 7001,
-                        UUID.randomUUID().toString(), "laptop")));
+                        UUID.randomUUID().toString(), "laptop",
+                        PeerRequestProof.encodePublicKey(PeerRequestProof.generateKeyPair().getPublic()))));
     }
 }

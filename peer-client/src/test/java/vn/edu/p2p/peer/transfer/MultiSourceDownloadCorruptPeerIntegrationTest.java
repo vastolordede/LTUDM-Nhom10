@@ -155,7 +155,7 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
     }
 
     private static FileSourceInfo goodPeerSource(PeerUploadServer server, KeyPair keys) {
-        String ticket = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+        String ticket = PeerTestTickets.issue(
                 keys.getPrivate(), FILE_ID, "corruption-test", GOOD_PEER_ID, Instant.now());
         return new FileSourceInfo(GOOD_PEER_ID, "COMPLETE", "127.0.0.1",
                 server.listeningPort(), System.currentTimeMillis(), ticket);
@@ -228,7 +228,7 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
             this.metadata = metadata;
             this.ticketKeys = ticketKeys;
             this.peerId = peerId;
-            String ticket = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+            String ticket = PeerTestTickets.issue(
                     ticketKeys.getPrivate(), FILE_ID, "corruption-test", peerId, Instant.now());
             this.source = new FileSourceInfo(peerId, "COMPLETE", "127.0.0.1",
                     serverSocket.getLocalPort(), System.currentTimeMillis(), ticket);
@@ -303,7 +303,7 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
         }
 
         private boolean ticketValid(long fileId, String accessTicket) {
-            return fileId == FILE_ID && vn.edu.p2p.common.security.PeerAccessTickets.verify(
+            return fileId == FILE_ID && PeerTestTickets.verify(
                     ticketKeys.getPublic(), accessTicket, FILE_ID, peerId, Instant.now());
         }
 

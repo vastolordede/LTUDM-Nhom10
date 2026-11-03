@@ -11,6 +11,8 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
 import java.security.Signature;
+import java.security.KeyFactory;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Base64;
@@ -49,6 +51,34 @@ public final class PeerRequestProof {
                     MessageDigest.getInstance("SHA-256").digest(key.getEncoded()));
         } catch (java.security.GeneralSecurityException e) {
             throw new IllegalStateException("Cannot calculate public-key fingerprint", e);
+        }
+    }
+
+    public static String encodePublicKey(PublicKey key) {
+        Objects.requireNonNull(key, "key");
+        if (!isEd25519(key)) {
+            throw new IllegalArgumentException("Public key must use Ed25519");
+        }
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(key.getEncoded());
+    }
+
+    public static PublicKey decodePublicKey(String encoded) {
+        if (encoded == null || encoded.isBlank() || encoded.length() > 256) {
+            throw new IllegalArgumentException("Invalid Ed25519 public key encoding");
+        }
+        try {
+            byte[] keyBytes = Base64.getUrlDecoder().decode(encoded);
+            if (keyBytes.length < 32 || keyBytes.length > 128) {
+                throw new IllegalArgumentException("Invalid Ed25519 public key length");
+            }
+            PublicKey key = KeyFactory.getInstance("Ed25519")
+                    .generatePublic(new X509EncodedKeySpec(keyBytes));
+            if (!isEd25519(key)) {
+                throw new IllegalArgumentException("Public key must use Ed25519");
+            }
+            return key;
+        } catch (java.security.GeneralSecurityException | IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid Ed25519 X.509 public key", e);
         }
     }
 
@@ -144,5 +174,10 @@ public final class PeerRequestProof {
     private static void writeBytes(DataOutputStream out, byte[] bytes) throws IOException {
         out.writeInt(bytes.length);
         out.write(bytes);
+    }
+
+    private static boolean isEd25519(PublicKey key) {
+        return "Ed25519".equalsIgnoreCase(key.getAlgorithm())
+                || "EdDSA".equalsIgnoreCase(key.getAlgorithm());
     }
 }

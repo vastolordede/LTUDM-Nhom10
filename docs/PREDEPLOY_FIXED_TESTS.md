@@ -15,7 +15,7 @@ Do not commit if either command exits nonzero.
 
 ## 2. DB (local PostgreSQL; backup existing database first)
 
-On a fresh DB: schema.sql then migration_v2.sql through migration_v5.sql.
+On a fresh DB: schema.sql then migration_v2.sql through migration_v9.sql.
 On an existing DB: only migrations that have NOT already been applied, in order.
 Then run `psql -X -v ON_ERROR_STOP=1 -U postgres -d fileshare_p2p -f database/verify_schema.sql`.
 Verify `ready_files_missing_pieces = 0`.

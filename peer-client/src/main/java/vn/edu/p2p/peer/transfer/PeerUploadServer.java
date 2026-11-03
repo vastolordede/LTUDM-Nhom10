@@ -347,8 +347,8 @@ public final class PeerUploadServer implements AutoCloseable {
     private boolean authorize(Socket client, MessageEnvelope request, long fileId, String ticket,
                               MessageType responseType) throws IOException {
         boolean allowed = ticketVerificationKey != null && uploaderPeerId != null
-                && PeerAccessTickets.verify(ticketVerificationKey, ticket, fileId,
-                        uploaderPeerId, Instant.now());
+                && PeerAccessTickets.verifyClaims(ticketVerificationKey, ticket, fileId,
+                        uploaderPeerId, Instant.now()) != null;
         if (!allowed && ticketVerificationKey == null && allowInsecureLoopbackDemo
                 && client.getInetAddress().isLoopbackAddress()) {
             allowed = true; // Explicit local-only migration/demo option.

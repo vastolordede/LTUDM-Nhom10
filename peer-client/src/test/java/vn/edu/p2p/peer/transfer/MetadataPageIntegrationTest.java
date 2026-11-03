@@ -30,7 +30,7 @@ class MetadataPageIntegrationTest {
         registry.registerCompleteFile(9, dummy, metadata);
         var sockets = new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
         var keys = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
-        String token = vn.edu.p2p.common.security.PeerAccessTickets.issue(keys.getPrivate(), 9,
+        String token = PeerTestTickets.issue(keys.getPrivate(), 9,
                 "test-client", "test-server", java.time.Instant.now());
         try (PeerUploadServer server = new PeerUploadServer(0, registry, sockets, 8, keys.getPublic(), false)) {
             server.setUploaderPeerId("test-server");

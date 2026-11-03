@@ -63,7 +63,7 @@ class ProtocolVersionCompatibilityTest {
                 0, registry, socketFactory, 2, keyPair.getPublic(), false)) {
             server.setUploaderPeerId("versioned-peer");
             server.start();
-            String ticket = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+            String ticket = PeerTestTickets.issue(
                     keyPair.getPrivate(), 1L, "version-reader", "versioned-peer", Instant.now());
             try (Socket client = new Socket("127.0.0.1", server.listeningPort())) {
                 ProtocolCodec.write(client.getOutputStream(), new MessageEnvelope(

@@ -92,8 +92,10 @@ public final class TrafficEmulator {
         String tag = "vpeer-" + idx;
         boolean online = false;
         try (TrackerConnection connection = new TrackerConnection(settings.trackerConnectionConfig())) {
-            PeerIdentity identity = new PeerIdentityStore(work.resolve("peer-" + idx + ".properties")).loadOrCreate();
-            AuthClientService auth = new AuthClientService(connection, identity);
+            PeerIdentityStore identityStore =
+                    new PeerIdentityStore(work.resolve("peer-" + idx + ".properties"));
+            PeerIdentity identity = identityStore.loadOrCreate();
+            AuthClientService auth = new AuthClientService(connection, identityStore, identity);
             LocalFileRegistry registry = new LocalFileRegistry();
             try (PeerUploadServer server = new PeerUploadServer(port, registry, new PeerP2pSocketFactory(p2p))) {
                 ClientSession session = auth.login(user, pass, port);

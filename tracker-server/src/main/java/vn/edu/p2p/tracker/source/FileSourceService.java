@@ -4,13 +4,16 @@ import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
 import vn.edu.p2p.common.security.PeerAccessTickets;
+import vn.edu.p2p.common.security.PeerRequestProof;
 import java.security.PrivateKey;
+import java.security.PublicKey;
 import java.time.Instant;
 import vn.edu.p2p.tracker.domain.FileSourceRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.peer.PeerSessionService;
 import vn.edu.p2p.tracker.peer.SessionException;
 import vn.edu.p2p.tracker.repository.FileSourceRepository;
+import vn.edu.p2p.tracker.repository.PeerRepository;
 
 import java.sql.SQLException;
 import java.time.ZoneOffset;
@@ -19,19 +22,22 @@ import java.util.List;
 public final class FileSourceService {
     private final FileSourceRepository repository;
     private final PeerSessionService sessionService;
+    private final PeerRepository peerRepository;
     private final PrivateKey signingKey;
 
     public FileSourceService(
             FileSourceRepository repository,
-            PeerSessionService sessionService
+            PeerSessionService sessionService,
+            PeerRepository peerRepository
     ) {
-        this(repository, sessionService, null);
+        this(repository, sessionService, peerRepository, null);
     }
 
     public FileSourceService(FileSourceRepository repository, PeerSessionService sessionService,
-                             PrivateKey signingKey) {
+                             PeerRepository peerRepository, PrivateKey signingKey) {
         this.repository = repository;
         this.sessionService = sessionService;
+        this.peerRepository = peerRepository;
         this.signingKey = signingKey;
     }
 
@@ -58,6 +64,16 @@ public final class FileSourceService {
         }
 
         try {
+            String encodedPublicKey = peerRepository.findPublicKey(requester.peerId())
+                    .orElseThrow(() -> new FileSourceException("REQUESTER_KEY_MISSING",
+                            "Peer public key is missing; please log in again."));
+            final PublicKey requesterPublicKey;
+            try {
+                requesterPublicKey = PeerRequestProof.decodePublicKey(encodedPublicKey);
+            } catch (IllegalArgumentException e) {
+                throw new FileSourceException("REQUESTER_KEY_INVALID",
+                        "Registered Peer public key is invalid; please log in again.", e);
+            }
             String trustedHash = repository.findReadyCatalogHash(request.fileId())
                     .orElseThrow(() -> new FileSourceException("FILE_NOT_READY",
                             "File is not published or catalog hash is unavailable"));
@@ -66,7 +82,8 @@ public final class FileSourceService {
                             requester.peerId()
                     )
                     .stream()
-                    .map(source -> toInfo(source, request.fileId(), requester.peerId().toString()))
+                    .map(source -> toInfo(source, request.fileId(), requester.peerId().toString(),
+                            requesterPublicKey))
                     .toList();
 
             return new FileSourcesResponse(request.fileId(), sources, trustedHash);
@@ -79,7 +96,8 @@ public final class FileSourceService {
         }
     }
 
-    private FileSourceInfo toInfo(FileSourceRecord source, long fileId, String requesterPeerId) {
+    private FileSourceInfo toInfo(FileSourceRecord source, long fileId, String requesterPeerId,
+                                  PublicKey requesterPublicKey) {
         long lastSeen = source.lastSeen() == null
                 ? 0L
                 : source.lastSeen()
@@ -94,7 +112,7 @@ public final class FileSourceService {
                 source.listeningPort(),
                 lastSeen,
                 signingKey == null ? null : PeerAccessTickets.issue(signingKey, fileId,
-                        requesterPeerId, source.peerId().toString(), Instant.now())
+                        requesterPeerId, source.peerId().toString(), requesterPublicKey, Instant.now())
         );
     }
 }

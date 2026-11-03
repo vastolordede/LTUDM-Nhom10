@@ -77,7 +77,7 @@ class MultiSourceDownloadResumeIntegrationTest {
                 0, seedRegistry, socketFactory, 2, ticketKeys.getPublic(), false)) {
             seed.setUploaderPeerId(PEER_ID);
             seed.start();
-            String ticket = vn.edu.p2p.common.security.PeerAccessTickets.issue(
+            String ticket = PeerTestTickets.issue(
                     ticketKeys.getPrivate(), FILE_ID, "resume-reader", PEER_ID, Instant.now());
             FileSourceInfo source = new FileSourceInfo(
                     PEER_ID, "COMPLETE", "127.0.0.1", seed.listeningPort(),

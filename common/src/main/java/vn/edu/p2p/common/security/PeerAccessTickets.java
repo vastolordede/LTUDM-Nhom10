@@ -74,10 +74,14 @@ public final class PeerAccessTickets {
         // When a companion public key is present, detect accidental key-pair mismatch at startup
         // rather than allowing peers to fail with ACCESS_DENIED after successful login.
         PublicKey publicKey = optionalPeerKey();
-        if (publicKey != null && !verify(publicKey,
-                issue(key, 1L, "startup-check", "startup-check", Instant.now()),
-                1L, "startup-check", Instant.now())) {
-            throw new IllegalStateException("Tracker signing key does not match configured public key");
+        if (publicKey != null) {
+            java.security.KeyPair requester = PeerRequestProof.generateKeyPair();
+            String startupTicket = issue(key, 1L, "startup-check", "startup-check",
+                    requester.getPublic(), Instant.now());
+            if (verifyClaims(publicKey, startupTicket, 1L, "startup-check", Instant.now()) == null) {
+                throw new IllegalStateException(
+                        "Tracker signing key does not match configured public key");
+            }
         }
         return key;
     }
@@ -146,14 +150,12 @@ public final class PeerAccessTickets {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(requesterPublicKey, "requesterPublicKey");
         Objects.requireNonNull(now, "now");
-        if (fileId <= 0 || !safeId(requesterId) || !safeId(uploaderId)
-                || !isEd25519(requesterPublicKey)) {
+        if (fileId <= 0 || !safeId(requesterId) || !safeId(uploaderId)) {
             throw new IllegalArgumentException("Invalid ticket claims");
         }
         byte[] nonce = new byte[16];
         RANDOM.nextBytes(nonce);
-        String encodedPublicKey = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(requesterPublicKey.getEncoded());
+        String encodedPublicKey = PeerRequestProof.encodePublicKey(requesterPublicKey);
         String claimString = claims(CLAIMS_VERSION, fileId, requesterId, uploaderId,
                 now, Base64.getUrlEncoder().withoutPadding().encodeToString(nonce), encodedPublicKey);
         return signClaims(key, claimString);
@@ -223,10 +225,7 @@ public final class PeerAccessTickets {
                     && expires <= current + TTL_SECONDS + CLOCK_SKEW_SECONDS)) return null;
             PublicKey requesterPublicKey = null;
             if (requireRequesterPublicKey) {
-                byte[] keyBytes = Base64.getUrlDecoder().decode(c[7]);
-                requesterPublicKey = java.security.KeyFactory.getInstance("Ed25519")
-                        .generatePublic(new X509EncodedKeySpec(keyBytes));
-                if (!isEd25519(requesterPublicKey)) return null;
+                requesterPublicKey = PeerRequestProof.decodePublicKey(c[7]);
             }
             return new TicketClaims(Long.parseLong(c[1]), c[2], c[3], issued, expires,
                     c[6], requesterPublicKey);
@@ -242,11 +241,6 @@ public final class PeerAccessTickets {
         } catch (IllegalArgumentException e) {
             return false;
         }
-    }
-
-    private static boolean isEd25519(PublicKey key) {
-        String algorithm = key.getAlgorithm();
-        return "Ed25519".equalsIgnoreCase(algorithm) || "EdDSA".equalsIgnoreCase(algorithm);
     }
 
     private static boolean safeId(String id) {
