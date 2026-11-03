@@ -145,7 +145,7 @@ class TrackerEndToEndIntegrationTest {
                 MessageEnvelope incompatibleResponse = roundTrip(
                         incompatibleClient,
                         new MessageEnvelope(
-                                MessageEnvelope.CURRENT_VERSION + 1,
+                                MessageEnvelope.CURRENT_VERSION - 1,
                                 MessageType.HEARTBEAT,
                                 "unsupported-version",
                                 null,
@@ -156,6 +156,20 @@ class TrackerEndToEndIntegrationTest {
                 );
                 assertEquals(ResponseStatus.ERROR, incompatibleResponse.status());
                 assertEquals("UNSUPPORTED_PROTOCOL_VERSION", incompatibleResponse.errorCode());
+                assertEquals(MessageEnvelope.CURRENT_VERSION, incompatibleResponse.version());
+                assertEquals(MessageType.HEARTBEAT_ACK, incompatibleResponse.type());
+                assertTrue(incompatibleResponse.message().contains(
+                        "Tracker supports protocol version " + MessageEnvelope.CURRENT_VERSION));
+                assertTrue(incompatibleResponse.message().contains(
+                        "received " + (MessageEnvelope.CURRENT_VERSION - 1)));
+                assertNull(incompatibleResponse.payload());
+
+                // A legacy client can still decode the existing error-envelope fields.
+                MessageEnvelope legacyClientDecoded = ProtocolCodec.fromJson(
+                        ProtocolCodec.toJson(incompatibleResponse));
+                assertEquals(ResponseStatus.ERROR, legacyClientDecoded.status());
+                assertEquals("UNSUPPORTED_PROTOCOL_VERSION", legacyClientDecoded.errorCode());
+                assertEquals(incompatibleResponse.message(), legacyClientDecoded.message());
             }
 
             UUID peerId = UUID.randomUUID();
@@ -361,6 +375,7 @@ class TrackerEndToEndIntegrationTest {
             MessageEnvelope response,
             MessageType expectedType
     ) {
+        assertEquals(MessageEnvelope.CURRENT_VERSION, response.version());
         assertEquals(expectedType, response.type());
         assertEquals(ResponseStatus.SUCCESS, response.status());
         assertNull(response.errorCode());

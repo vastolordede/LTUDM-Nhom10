@@ -54,7 +54,8 @@ class ProtocolCodecTest {
     @Test
     void shouldRejectUnknownDtoFieldsWhenDeserializingPayload() throws Exception {
         MessageEnvelope response = ProtocolCodec.fromJson(
-                "{\"version\":1,\"type\":\"FILE_SOURCES_RESPONSE\","
+                "{\"version\":" + MessageEnvelope.CURRENT_VERSION
+                        + ",\"type\":\"FILE_SOURCES_RESPONSE\","
                         + "\"requestId\":\"legacy-client\","
                         + "\"payload\":{\"fileId\":7,\"sources\":[],"
                         + "\"fileHash\":\"" + "a".repeat(64) + "\"}}"

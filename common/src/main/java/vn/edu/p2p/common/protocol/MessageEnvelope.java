@@ -10,7 +10,7 @@ import java.util.Objects;
  *
  * Request:
  * {
- *   "version": 1,
+ *   "version": CURRENT_VERSION,
  *   "type": "LOGIN_REQUEST",
  *   "requestId": "...",
  *   "payload": { ... }
@@ -28,7 +28,7 @@ public record MessageEnvelope(
         String message,
         JsonNode payload
 ) {
-    public static final int CURRENT_VERSION = 1;
+    public static final int CURRENT_VERSION = 2;
 
     public MessageEnvelope {
         if (version <= 0) {

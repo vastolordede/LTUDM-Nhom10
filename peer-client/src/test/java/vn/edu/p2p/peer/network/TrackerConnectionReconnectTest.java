@@ -24,7 +24,7 @@ class TrackerConnectionReconnectTest {
                 try (Socket socket = server.accept()) {
                     MessageEnvelope request = ProtocolCodec.read(socket.getInputStream());
                     ProtocolCodec.write(socket.getOutputStream(), new MessageEnvelope(
-                            MessageEnvelope.CURRENT_VERSION + 1,
+                            MessageEnvelope.CURRENT_VERSION - 1,
                             MessageType.LOGIN_RESPONSE,
                             request.requestId(),
                             ResponseStatus.SUCCESS,

@@ -11,6 +11,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RequestValidatorTest {
     private final RequestValidator validator = new RequestValidator();
@@ -18,7 +19,7 @@ class RequestValidatorTest {
     @Test
     void shouldRejectMissingRequestId() {
         MessageEnvelope request = new MessageEnvelope(
-                1,
+                MessageEnvelope.CURRENT_VERSION,
                 MessageType.HEARTBEAT,
                 " ",
                 null,
@@ -38,7 +39,7 @@ class RequestValidatorTest {
     @Test
     void shouldRejectUnsupportedProtocolVersion() {
         MessageEnvelope request = new MessageEnvelope(
-                MessageEnvelope.CURRENT_VERSION + 1,
+                MessageEnvelope.CURRENT_VERSION - 1,
                 MessageType.HEARTBEAT,
                 "unsupported-version",
                 null,
@@ -53,6 +54,10 @@ class RequestValidatorTest {
         );
 
         assertEquals("UNSUPPORTED_PROTOCOL_VERSION", error.errorCode());
+        assertTrue(error.getMessage().contains(
+                "Tracker supports protocol version " + MessageEnvelope.CURRENT_VERSION));
+        assertTrue(error.getMessage().contains(
+                "received " + (MessageEnvelope.CURRENT_VERSION - 1)));
     }
 
     @Test

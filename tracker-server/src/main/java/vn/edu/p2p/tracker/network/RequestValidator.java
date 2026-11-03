@@ -26,7 +26,8 @@ final class RequestValidator {
         if (request.version() != MessageEnvelope.CURRENT_VERSION) {
             throw new RequestValidationException(
                     "UNSUPPORTED_PROTOCOL_VERSION",
-                    "Unsupported protocol version: " + request.version()
+                    "Tracker supports protocol version " + MessageEnvelope.CURRENT_VERSION
+                            + ", received " + request.version()
             );
         }
         if (request.requestId() == null || request.requestId().isBlank()) {
