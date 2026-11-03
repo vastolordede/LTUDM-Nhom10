@@ -198,7 +198,8 @@ public final class LoginController {
         PeerIdentity identity = identityStore.loadOrCreate();
         trackerConnection = new TrackerConnection(config);
         authClientService = new AuthClientService(trackerConnection, identityStore, identity);
-        heartbeatCoordinator = new HeartbeatCoordinator(authClientService::heartbeat, new UiHeartbeatListener());
+        heartbeatCoordinator = new HeartbeatCoordinator(authClientService::heartbeat,
+                new UiHeartbeatListener(), authClientService.ticketRevocations());
         initializationError = null;
         loginButton.setDisable(false);
         registerButton.setDisable(false);
@@ -381,7 +382,8 @@ public final class LoginController {
                 transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
                 transferDashboard.setOnLogoutRequested(this::onLogout);
             }
-            transferDashboard.show(trackerConnection, session.sessionId(), session.peerId());
+            transferDashboard.show(trackerConnection, session.sessionId(), session.peerId(),
+                    authClientService.ticketRevocations());
         } catch (Exception e) {
             closeTransferDashboard();
             statusLabel.setText("Peer Center cannot start (check upload port): " + e.getMessage());

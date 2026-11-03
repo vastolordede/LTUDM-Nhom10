@@ -10,7 +10,11 @@ import vn.edu.p2p.common.dto.SearchResultItem;
 import vn.edu.p2p.common.dto.ShareFileRequest;
 import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.common.dto.UnshareFileRequest;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -42,6 +46,7 @@ class FileCatalogServiceIntegrationTest {
 
     private InMemoryCatalog catalog;
     private FileCatalogService service;
+    private TicketRevocationRegistry revocations;
 
     @BeforeEach
     void setUp() {
@@ -50,7 +55,9 @@ class FileCatalogServiceIntegrationTest {
             assertEquals(SESSION_ID, sessionId, "test only wires up one active session");
             return PEER_ID;
         };
-        service = new FileCatalogService(resolver, catalog, catalog, catalog);
+        revocations = new TicketRevocationRegistry(
+                Clock.fixed(Instant.parse("2026-11-03T00:00:00Z"), ZoneOffset.UTC));
+        service = new FileCatalogService(resolver, catalog, catalog, catalog, revocations);
     }
 
     @Test
@@ -116,6 +123,8 @@ class FileCatalogServiceIntegrationTest {
         assertEquals(1, beforeUnshare.results().get(0).sourceCount());
 
         service.unshare(new UnshareFileRequest(SESSION_ID.toString(), shareResponse.fileId()));
+        assertEquals(1, revocations.size());
+        assertEquals(PEER_ID.toString(), revocations.entriesAfter(0).get(0).uploaderPeerId());
 
         SearchResponse afterUnshare = service.search(
                 new SearchRequest(SESSION_ID.toString(), "temp-share")

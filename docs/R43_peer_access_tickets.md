@@ -1,9 +1,11 @@
 # R43 - signed P2P piece access tickets (PR review required)
 
-Upload peers require a Tracker-issued Ed25519 bearer ticket for GET_BITFIELD,
-METADATA_PAGE and REQUEST_PIECE. Tickets are signed only by Tracker and bind
-fileId, intended uploading Peer ID, reader Peer ID and time. Each ticket expires
-in 60 minutes. Never commit the Tracker private key or secret values.
+Upload peers require a Tracker-issued Ed25519 ticket for GET_BITFIELD,
+METADATA_PAGE and REQUEST_PIECE. Bitfield and piece requests also require a
+requester proof-of-possession. Tickets bind fileId, intended uploading Peer ID,
+reader Peer ID, time, requester public key, and signing key ID. TTL defaults to
+15 minutes and is configurable from 60 to 3600 seconds. Never commit the Tracker
+private key or secret values.
 
 ## Configure on local development machines
 
@@ -32,10 +34,20 @@ These env variables can be supplied through your existing local `.env` file,
 which must not be committed. In normal mode, Tracker fails startup if its
 signing key is absent; upload peers deny requests if their public key is absent.
 
-Limitations: bearer tickets can be replayed by anyone who obtains one until
-expiration; peer-to-peer TLS is recommended and public deployment is blocked
-until TLS identity, token refresh for downloads >60 min, and session revocation
-are separately tested. This implementation deliberately does NOT ship keys.
+Configure `P2P_TICKET_TTL_SECONDS` on Tracker to change the lifetime; invalid
+values fall back to 900 seconds with a warning. A downloader refreshes tickets
+through Tracker before a P2P request when 60 seconds or less remain.
+`P2P_TICKET_KEY_ID` labels the active Tracker key (default `default`). Peers can
+trust multiple public keys through `P2P_TICKET_PUBLIC_KEY_FILES` entries in
+`keyId=path;keyId=path` form. During rotation, distribute the new public key
+alongside the old one before switching Tracker, and retain the old public key
+for at least the maximum ticket lifetime.
+
+Logout, unshare, and session expiry revocations propagate over heartbeat
+(near-immediate, up to the heartbeat interval plus network delay). The Tracker
+revocation registry is in memory; after a Tracker restart, outstanding tickets
+remain bounded by their expiry. This implementation deliberately does NOT ship
+keys.
 
 Regression checks: valid, invalid signature, wrong file, wrong intended uploader,
 expired, missing, and cross-account source discovery; run an actual 3-peer LAN

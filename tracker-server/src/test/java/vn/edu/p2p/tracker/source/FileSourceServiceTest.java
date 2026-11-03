@@ -19,6 +19,7 @@ import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,7 +68,7 @@ class FileSourceServiceTest {
                 sources,
                 new PeerSessionService(sessions),
                 peers,
-                trackerKeys.getPrivate()
+                trackerKeys.getPrivate(), "test-key", 120, Clock.systemUTC()
         );
 
         FileSourcesResponse response = service.findSources(
@@ -79,9 +80,13 @@ class FileSourceServiceTest {
         assertEquals(1, response.sources().size());
         assertEquals(sourcePeer.toString(), response.sources().getFirst().peerId());
         assertEquals(requesterPeer, sources.excludedPeer);
-        assertEquals(requesterKeys.getPublic(), PeerAccessTickets.verifyClaims(
-                trackerKeys.getPublic(), response.sources().getFirst().accessTicket(), 11L,
-                sourcePeer.toString(), Instant.now()).requesterPublicKey());
+        var claims = PeerAccessTickets.verifyClaims(
+                Map.of("test-key", trackerKeys.getPublic()),
+                response.sources().getFirst().accessTicket(), 11L,
+                sourcePeer.toString(), Instant.now());
+        assertEquals(requesterKeys.getPublic(), claims.requesterPublicKey());
+        assertEquals("test-key", claims.keyId());
+        assertEquals(120L, claims.expiresAtEpochSecond() - claims.issuedAtEpochSecond());
     }
 
     @Test
@@ -102,6 +107,39 @@ class FileSourceServiceTest {
 
         assertEquals("REQUESTER_KEY_MISSING", error.errorCode());
         assertEquals("Peer public key is missing; please log in again.", error.getMessage());
+    }
+
+    @Test
+    void shouldRejectOfflineRequesterAndIssueNoTicketForUnsharedFile() throws Exception {
+        UUID requesterPeer = UUID.randomUUID();
+        UUID sessionId = UUID.randomUUID();
+        PeerSessionRecord offline = new PeerSessionRecord(
+                sessionId, requesterPeer, "127.0.0.1", 7001, PeerStatus.LOGGED_OUT,
+                OffsetDateTime.now(ZoneOffset.UTC), OffsetDateTime.now(ZoneOffset.UTC),
+                OffsetDateTime.now(ZoneOffset.UTC));
+        KeyPair trackerKeys = PeerRequestProof.generateKeyPair();
+        FileSourceService offlineService = new FileSourceService(
+                new FakeSourceRepository(List.of()),
+                new PeerSessionService(new FakeSessionRepository(offline)),
+                new FakePeerRepository(), trackerKeys.getPrivate());
+
+        FileSourceException offlineError = assertThrows(FileSourceException.class,
+                () -> offlineService.findSources(new FileSourcesRequest(sessionId.toString(), 11L)));
+        assertEquals("SESSION_NOT_ONLINE", offlineError.errorCode());
+
+        PeerSessionRecord online = new PeerSessionRecord(
+                sessionId, requesterPeer, "127.0.0.1", 7001, PeerStatus.ONLINE,
+                OffsetDateTime.now(ZoneOffset.UTC), OffsetDateTime.now(ZoneOffset.UTC), null);
+        FakePeerRepository peers = new FakePeerRepository();
+        peers.publicKeys.put(requesterPeer,
+                PeerRequestProof.encodePublicKey(PeerRequestProof.generateKeyPair().getPublic()));
+        FileSourceService unsharedService = new FileSourceService(
+                new FakeSourceRepository(List.of()),
+                new PeerSessionService(new FakeSessionRepository(online)),
+                peers, trackerKeys.getPrivate());
+
+        assertEquals(List.of(), unsharedService.findSources(
+                new FileSourcesRequest(sessionId.toString(), 11L)).sources());
     }
 
     private static final class FakePeerRepository implements PeerRepository {

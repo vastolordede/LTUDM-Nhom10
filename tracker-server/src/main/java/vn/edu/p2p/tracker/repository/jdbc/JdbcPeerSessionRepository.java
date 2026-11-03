@@ -13,6 +13,8 @@ import java.sql.Timestamp;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Optional;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public final class JdbcPeerSessionRepository implements PeerSessionRepository {
@@ -192,6 +194,50 @@ public final class JdbcPeerSessionRepository implements PeerSessionRepository {
              PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setObject(1, staleBefore);
             return statement.executeUpdate();
+        }
+    }
+
+    @Override
+    public List<PeerSessionRecord> expireStaleSessionsAndFind(OffsetDateTime staleBefore)
+            throws SQLException {
+        String selectSql = """
+                SELECT session_id, peer_id, ip_address, listening_port,
+                       status, login_at, last_seen, logout_at
+                FROM peer_sessions
+                WHERE status = 'ONLINE' AND last_seen < ?
+                FOR UPDATE
+                """;
+        String updateSql = """
+                UPDATE peer_sessions
+                SET status = 'EXPIRED'
+                WHERE session_id = ? AND status = 'ONLINE'
+                """;
+        try (Connection connection = connectionFactory.open()) {
+            boolean previousAutoCommit = connection.getAutoCommit();
+            connection.setAutoCommit(false);
+            try {
+                List<PeerSessionRecord> expired = new ArrayList<>();
+                try (PreparedStatement select = connection.prepareStatement(selectSql)) {
+                    select.setObject(1, staleBefore);
+                    try (ResultSet rs = select.executeQuery()) {
+                        while (rs.next()) expired.add(map(rs));
+                    }
+                }
+                try (PreparedStatement update = connection.prepareStatement(updateSql)) {
+                    for (PeerSessionRecord session : expired) {
+                        update.setObject(1, session.sessionId());
+                        update.addBatch();
+                    }
+                    update.executeBatch();
+                }
+                connection.commit();
+                return List.copyOf(expired);
+            } catch (SQLException e) {
+                connection.rollback();
+                throw e;
+            } finally {
+                connection.setAutoCommit(previousAutoCommit);
+            }
         }
     }
 

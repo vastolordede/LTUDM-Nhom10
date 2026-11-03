@@ -12,7 +12,11 @@ import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
+import java.util.OptionalLong;
+import java.util.logging.Logger;
 
 /**
  * Tracker-issued Ed25519 authorization tickets for P2P pieces and metadata.
@@ -20,11 +24,16 @@ import java.util.Objects;
  * The file ID and intended uploading peer are cryptographically bound.
  */
 public final class PeerAccessTickets {
-    public static final long TTL_SECONDS = 3600;
+    public static final long DEFAULT_TTL_SECONDS = 900;
+    public static final long MAX_TTL_SECONDS = 3600;
+    /** Kept as the protocol's maximum ticket lifetime. */
+    public static final long TTL_SECONDS = MAX_TTL_SECONDS;
+    public static final String DEFAULT_KEY_ID = "default";
     private static final long CLOCK_SKEW_SECONDS = 90;
     private static final int MAX_TICKET_LENGTH = 2048;
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final String CLAIMS_VERSION = "2";
+    private static final String CLAIMS_VERSION = "3";
+    private static final Logger LOG = Logger.getLogger(PeerAccessTickets.class.getName());
 
     private PeerAccessTickets() {}
 
@@ -35,8 +44,16 @@ public final class PeerAccessTickets {
             long issuedAtEpochSecond,
             long expiresAtEpochSecond,
             String nonce,
-            PublicKey requesterPublicKey
-    ) {}
+            PublicKey requesterPublicKey,
+            String keyId
+    ) {
+        public TicketClaims(long fileId, String requesterId, String uploaderId,
+                            long issuedAtEpochSecond, long expiresAtEpochSecond,
+                            String nonce, PublicKey requesterPublicKey) {
+            this(fileId, requesterId, uploaderId, issuedAtEpochSecond, expiresAtEpochSecond,
+                    nonce, requesterPublicKey, DEFAULT_KEY_ID);
+        }
+    }
 
     public static PrivateKey decodePrivateKey(String encoded) {
         try {
@@ -72,12 +89,13 @@ public final class PeerAccessTickets {
         PrivateKey key = decodePrivateKey(base64);
         // When a companion public key is present, detect accidental key-pair mismatch at startup
         // rather than allowing peers to fail with ACCESS_DENIED after successful login.
-        PublicKey publicKey = optionalPeerKey();
+        PublicKey publicKey = optionalPeerKeys().get(activeKeyId());
         if (publicKey != null) {
             java.security.KeyPair requester = PeerRequestProof.generateKeyPair();
-            String startupTicket = issue(key, 1L, "startup-check", "startup-check",
-                    requester.getPublic(), Instant.now());
-            if (verifyClaims(publicKey, startupTicket, 1L, "startup-check", Instant.now()) == null) {
+            String startupTicket = issue(key, activeKeyId(), 1L, "startup-check",
+                    "startup-check", requester.getPublic(), Instant.now(), configuredTtlSeconds());
+            if (verifyClaims(Map.of(activeKeyId(), publicKey), startupTicket, 1L,
+                    "startup-check", Instant.now()) == null) {
                 throw new IllegalStateException(
                         "Tracker signing key does not match configured public key");
             }
@@ -87,13 +105,80 @@ public final class PeerAccessTickets {
 
     /** A missing key makes the upload server deny requests, not silently allow them. */
     public static PublicKey optionalPeerKey() {
-        String file = setting("P2P_TICKET_PUBLIC_KEY_FILE");
-        String base64 = file != null ? readKeyFile(file) : setting("P2P_TICKET_PUBLIC_KEY_B64");
-        if (base64 == null) {
-            java.nio.file.Path fallback = defaultKeyDirectory().resolve("tracker-public.key.b64");
-            if (java.nio.file.Files.exists(fallback)) base64 = readKeyFile(fallback);
+        return optionalPeerKeys().get(activeKeyId());
+    }
+
+    /** Loads the legacy single key plus optional id=path entries for key rotation. */
+    public static Map<String, PublicKey> optionalPeerKeys() {
+        Map<String, PublicKey> keys = new LinkedHashMap<>();
+        String rotationFiles = setting("P2P_TICKET_PUBLIC_KEY_FILES");
+        if (rotationFiles != null) {
+            for (String item : rotationFiles.split(";")) {
+                int separator = item.indexOf('=');
+                if (separator <= 0 || separator == item.length() - 1) {
+                    throw new IllegalStateException(
+                            "P2P_TICKET_PUBLIC_KEY_FILES entries must be keyId=path");
+                }
+                String keyId = item.substring(0, separator).trim();
+                if (!safeKeyId(keyId)) {
+                    throw new IllegalStateException("Invalid ticket keyId in public-key list");
+                }
+                PublicKey parsed = decodePublicKey(
+                        readKeyFile(item.substring(separator + 1).trim()));
+                PublicKey previous = keys.putIfAbsent(keyId, parsed);
+                if (previous != null && !java.util.Arrays.equals(
+                        previous.getEncoded(), parsed.getEncoded())) {
+                    throw new IllegalStateException("Duplicate ticket keyId in public-key list");
+                }
+            }
+            return Map.copyOf(keys);
         }
-        return base64 == null ? null : decodePublicKey(base64);
+
+        String file = setting("P2P_TICKET_PUBLIC_KEY_FILE");
+        String base64 = setting("P2P_TICKET_PUBLIC_KEY_B64");
+        if (file != null) {
+            keys.put(activeKeyId(), decodePublicKey(readKeyFile(file)));
+        } else if (file == null && base64 != null) {
+            keys.put(activeKeyId(), decodePublicKey(base64));
+        } else if (file == null && base64 == null) {
+            java.nio.file.Path fallback = defaultKeyDirectory().resolve("tracker-public.key.b64");
+            if (java.nio.file.Files.exists(fallback)) {
+                keys.put(activeKeyId(), decodePublicKey(readKeyFile(fallback)));
+            }
+        }
+        return Map.copyOf(keys);
+    }
+
+    public static String activeKeyId() {
+        String value = setting("P2P_TICKET_KEY_ID");
+        if (value == null) return DEFAULT_KEY_ID;
+        if (!safeKeyId(value)) throw new IllegalStateException("Invalid P2P_TICKET_KEY_ID");
+        return value;
+    }
+
+    public static long configuredTtlSeconds() {
+        String value = System.getenv("P2P_TICKET_TTL_SECONDS");
+        if (value == null) value = LocalEnv.load().get("P2P_TICKET_TTL_SECONDS");
+        if (value == null) return DEFAULT_TTL_SECONDS;
+        value = value.trim();
+        try {
+            long ttl = Long.parseLong(value);
+            if (ttl >= 60 && ttl <= MAX_TTL_SECONDS) return ttl;
+        } catch (NumberFormatException ignored) {
+        }
+        LOG.warning("Invalid P2P_TICKET_TTL_SECONDS; using default "
+                + DEFAULT_TTL_SECONDS + " seconds");
+        return DEFAULT_TTL_SECONDS;
+    }
+
+    public static long resolveTtlSeconds(String value) {
+        if (value == null || value.isBlank()) return DEFAULT_TTL_SECONDS;
+        try {
+            long ttl = Long.parseLong(value.trim());
+            return ttl >= 60 && ttl <= MAX_TTL_SECONDS ? ttl : DEFAULT_TTL_SECONDS;
+        } catch (NumberFormatException ignored) {
+            return DEFAULT_TTL_SECONDS;
+        }
     }
 
     private static java.nio.file.Path defaultKeyDirectory() {
@@ -127,26 +212,36 @@ public final class PeerAccessTickets {
 
     public static String issue(PrivateKey key, long fileId, String requesterId,
                                String uploaderId, PublicKey requesterPublicKey, Instant now) {
+        return issue(key, DEFAULT_KEY_ID, fileId, requesterId, uploaderId,
+                requesterPublicKey, now, configuredTtlSeconds());
+    }
+
+    public static String issue(PrivateKey key, String keyId, long fileId, String requesterId,
+                               String uploaderId, PublicKey requesterPublicKey, Instant now,
+                               long ttlSeconds) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(requesterPublicKey, "requesterPublicKey");
         Objects.requireNonNull(now, "now");
-        if (fileId <= 0 || !safeId(requesterId) || !safeId(uploaderId)) {
+        if (fileId <= 0 || !safeId(requesterId) || !safeId(uploaderId)
+                || !safeKeyId(keyId) || ttlSeconds < 60 || ttlSeconds > MAX_TTL_SECONDS) {
             throw new IllegalArgumentException("Invalid ticket claims");
         }
         byte[] nonce = new byte[16];
         RANDOM.nextBytes(nonce);
         String encodedPublicKey = PeerRequestProof.encodePublicKey(requesterPublicKey);
         String claimString = claims(CLAIMS_VERSION, fileId, requesterId, uploaderId,
-                now, Base64.getUrlEncoder().withoutPadding().encodeToString(nonce), encodedPublicKey);
+                now, Base64.getUrlEncoder().withoutPadding().encodeToString(nonce),
+                encodedPublicKey, keyId, ttlSeconds);
         return signClaims(key, claimString);
     }
 
     private static String claims(String version, long fileId, String requesterId,
                                  String uploaderId, Instant now, String nonce,
-                                 String requesterPublicKey) {
+                                 String requesterPublicKey, String keyId, long ttlSeconds) {
         String base = version + ":" + fileId + ":" + requesterId + ":" + uploaderId + ":"
-                + now.getEpochSecond() + ":" + (now.getEpochSecond() + TTL_SECONDS) + ":" + nonce;
-        return base + ":" + Objects.requireNonNull(requesterPublicKey, "requesterPublicKey");
+                + now.getEpochSecond() + ":" + (now.getEpochSecond() + ttlSeconds) + ":" + nonce;
+        return base + ":" + Objects.requireNonNull(requesterPublicKey, "requesterPublicKey")
+                + ":" + keyId;
     }
 
     private static String signClaims(PrivateKey key, String claims) {
@@ -165,34 +260,58 @@ public final class PeerAccessTickets {
 
     public static TicketClaims verifyClaims(PublicKey key, String token, long fileId,
                                             String uploaderId, Instant now) {
-        return verifyInternal(key, token, fileId, uploaderId, now);
+        return key == null ? null : verifyInternal(
+                Map.of(DEFAULT_KEY_ID, key), token, fileId, uploaderId, now);
     }
 
-    private static TicketClaims verifyInternal(PublicKey key, String token, long fileId,
+    public static TicketClaims verifyClaims(Map<String, PublicKey> keys, String token, long fileId,
+                                            String uploaderId, Instant now) {
+        return verifyInternal(keys, token, fileId, uploaderId, now);
+    }
+
+    public static OptionalLong readExpiryEpochSecondUntrusted(String token) {
+        if (token == null || token.length() > MAX_TICKET_LENGTH) return OptionalLong.empty();
+        try {
+            String[] parts = token.split("\\.", -1);
+            if (parts.length != 2) return OptionalLong.empty();
+            String[] claims = new String(Base64.getUrlDecoder().decode(parts[0]),
+                    StandardCharsets.US_ASCII).split(":", -1);
+            if (claims.length != 9 || !CLAIMS_VERSION.equals(claims[0])) {
+                return OptionalLong.empty();
+            }
+            return OptionalLong.of(Long.parseLong(claims[5]));
+        } catch (RuntimeException e) {
+            return OptionalLong.empty();
+        }
+    }
+
+    private static TicketClaims verifyInternal(Map<String, PublicKey> keys, String token, long fileId,
                                                String uploaderId, Instant now) {
-        if (key == null || token == null || token.length() > MAX_TICKET_LENGTH
+        if (keys == null || keys.isEmpty() || token == null || token.length() > MAX_TICKET_LENGTH
                 || now == null || fileId <= 0 || !safeId(uploaderId)) return null;
         try {
             String[] parts = token.split("\\.", -1);
             if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) return null;
+            String claims = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.US_ASCII);
+            String[] c = claims.split(":", -1);
+            if (c.length != 9 || !CLAIMS_VERSION.equals(c[0]) || !safeKeyId(c[8])) return null;
+            PublicKey key = keys.get(c[8]);
+            if (key == null) return null;
             Signature verifier = Signature.getInstance("Ed25519");
             verifier.initVerify(key);
             verifier.update(parts[0].getBytes(StandardCharsets.US_ASCII));
             if (!verifier.verify(Base64.getUrlDecoder().decode(parts[1]))) return null;
-            String claims = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.US_ASCII);
-            String[] c = claims.split(":", -1);
-            if (c.length != 8 || !CLAIMS_VERSION.equals(c[0])
-                    || Long.parseLong(c[1]) != fileId || !safeId(c[2])
+            if (Long.parseLong(c[1]) != fileId || !safeId(c[2])
                     || !uploaderId.equals(c[3]) || !isValidNonce(c[6])) return null;
             long issued = Long.parseLong(c[4]);
             long expires = Long.parseLong(c[5]);
             long current = now.getEpochSecond();
             if (!(issued <= current + CLOCK_SKEW_SECONDS && expires >= current
-                    && expires > issued && expires - issued <= TTL_SECONDS
-                    && expires <= current + TTL_SECONDS + CLOCK_SKEW_SECONDS)) return null;
+                    && expires > issued && expires - issued <= MAX_TTL_SECONDS
+                    && expires <= current + MAX_TTL_SECONDS + CLOCK_SKEW_SECONDS)) return null;
             PublicKey requesterPublicKey = PeerRequestProof.decodePublicKey(c[7]);
             return new TicketClaims(Long.parseLong(c[1]), c[2], c[3], issued, expires,
-                    c[6], requesterPublicKey);
+                    c[6], requesterPublicKey, c[8]);
         } catch (RuntimeException | java.security.GeneralSecurityException e) {
             return null;
         }
@@ -209,5 +328,10 @@ public final class PeerAccessTickets {
 
     private static boolean safeId(String id) {
         return id != null && id.length() > 0 && id.length() <= 80 && id.matches("[A-Za-z0-9_-]+");
+    }
+
+    private static boolean safeKeyId(String id) {
+        return id != null && id.length() > 0 && id.length() <= 64
+                && id.matches("[A-Za-z0-9_-]+");
     }
 }

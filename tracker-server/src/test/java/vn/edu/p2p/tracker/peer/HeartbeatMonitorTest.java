@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -13,6 +14,7 @@ import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,7 +44,8 @@ class HeartbeatMonitorTest {
                 sessions,
                 Duration.ofSeconds(30),
                 Duration.ofSeconds(10),
-                Clock.fixed(now, ZoneOffset.UTC)
+                Clock.fixed(now, ZoneOffset.UTC),
+                new TicketRevocationRegistry(Clock.fixed(now, ZoneOffset.UTC))
         );
 
         int expired = monitor.scanOnce();
@@ -50,6 +53,29 @@ class HeartbeatMonitorTest {
         assertEquals(1, expired);
         assertEquals(PeerStatus.EXPIRED, sessions.sessions.get(staleId).status());
         assertEquals(PeerStatus.ONLINE, sessions.sessions.get(freshId).status());
+        monitor.close();
+    }
+
+    @Test
+    void expiringHeartbeatSessionRevokesItsRequesterTickets() throws Exception {
+        Instant now = Instant.parse("2026-09-24T00:00:00Z");
+        FakeSessionRepository sessions = new FakeSessionRepository();
+        UUID staleId = UUID.randomUUID();
+        UUID peerId = UUID.randomUUID();
+        sessions.sessions.put(staleId, new PeerSessionRecord(staleId, peerId, "127.0.0.1",
+                7001, PeerStatus.ONLINE, now.minusSeconds(60).atOffset(ZoneOffset.UTC),
+                now.minusSeconds(31).atOffset(ZoneOffset.UTC), null));
+        TicketRevocationRegistry registry =
+                new TicketRevocationRegistry(Clock.fixed(now, ZoneOffset.UTC));
+        HeartbeatMonitor monitor = new HeartbeatMonitor(sessions, Duration.ofSeconds(30),
+                Duration.ofSeconds(10), Clock.fixed(now, ZoneOffset.UTC), registry);
+
+        assertEquals(1, monitor.scanOnce());
+
+        var revocation = registry.entriesAfter(0).get(0);
+        assertEquals(vn.edu.p2p.common.dto.TicketRevocation.Type.REQUESTER, revocation.type());
+        assertEquals(peerId.toString(), revocation.requesterPeerId());
+        assertEquals(now.toEpochMilli(), revocation.revokedBeforeEpochMillis());
         monitor.close();
     }
 
@@ -119,6 +145,16 @@ class HeartbeatMonitorTest {
                 }
             }
             return count;
+        }
+
+        @Override
+        public List<PeerSessionRecord> expireStaleSessionsAndFind(OffsetDateTime staleBefore) {
+            List<PeerSessionRecord> expired = sessions.values().stream()
+                    .filter(current -> current.status() == PeerStatus.ONLINE
+                            && current.lastSeen().isBefore(staleBefore))
+                    .toList();
+            expireStaleSessions(staleBefore);
+            return expired;
         }
     }
 }

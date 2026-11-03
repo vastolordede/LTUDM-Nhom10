@@ -5,6 +5,7 @@ import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
 import vn.edu.p2p.tracker.repository.PeerSessionRepository;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.sql.SQLException;
 import java.time.Clock;
@@ -15,14 +16,43 @@ import java.util.UUID;
 public final class PeerSessionService {
     private final PeerSessionRepository sessionRepository;
     private final Clock clock;
+    private final TicketRevocationRegistry revocationRegistry;
+    private final String trackerInstanceId;
 
     public PeerSessionService(PeerSessionRepository sessionRepository) {
-        this(sessionRepository, Clock.systemUTC());
+        this(sessionRepository, Clock.systemUTC(), new TicketRevocationRegistry(),
+                UUID.randomUUID().toString());
     }
 
     PeerSessionService(PeerSessionRepository sessionRepository, Clock clock) {
+        this(sessionRepository, clock, new TicketRevocationRegistry(clock),
+                UUID.randomUUID().toString());
+    }
+
+    public PeerSessionService(PeerSessionRepository sessionRepository,
+                              TicketRevocationRegistry revocationRegistry) {
+        this(sessionRepository, Clock.systemUTC(), revocationRegistry,
+                UUID.randomUUID().toString());
+    }
+
+    PeerSessionService(PeerSessionRepository sessionRepository, Clock clock,
+                       TicketRevocationRegistry revocationRegistry) {
+        this(sessionRepository, clock, revocationRegistry, UUID.randomUUID().toString());
+    }
+
+    public PeerSessionService(PeerSessionRepository sessionRepository,
+                              TicketRevocationRegistry revocationRegistry,
+                              String trackerInstanceId) {
+        this(sessionRepository, Clock.systemUTC(), revocationRegistry, trackerInstanceId);
+    }
+
+    PeerSessionService(PeerSessionRepository sessionRepository, Clock clock,
+                       TicketRevocationRegistry revocationRegistry, String trackerInstanceId) {
         this.sessionRepository = sessionRepository;
         this.clock = clock;
+        this.revocationRegistry = revocationRegistry;
+        this.trackerInstanceId = java.util.Objects.requireNonNull(
+                trackerInstanceId, "trackerInstanceId");
     }
 
     public HeartbeatResponse heartbeat(HeartbeatRequest request) throws SessionException {
@@ -41,7 +71,14 @@ public final class PeerSessionService {
                         "Session is no longer online."
                 );
             }
-            return new HeartbeatResponse(clock.instant().toEpochMilli());
+            long cursor = request.lastRevocationSeq();
+            if (request.lastTrackerInstanceId() != null
+                    && !request.lastTrackerInstanceId().equals(trackerInstanceId)) {
+                cursor = 0L;
+            }
+            TicketRevocationRegistry.Batch revocations = revocationRegistry.snapshotAfter(cursor);
+            return new HeartbeatResponse(clock.instant().toEpochMilli(),
+                    revocations.revocations(), revocations.latestSequence(), trackerInstanceId);
         } catch (SessionException e) {
             throw e;
         } catch (SQLException e) {

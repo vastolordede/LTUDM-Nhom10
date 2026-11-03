@@ -6,6 +6,8 @@ import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.GetBitfieldRequest;
 import vn.edu.p2p.common.dto.PieceRequest;
 import vn.edu.p2p.common.dto.PieceResponseHeader;
+import vn.edu.p2p.common.dto.TicketRevocation;
+import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
@@ -13,10 +15,12 @@ import vn.edu.p2p.common.protocol.ResponseStatus;
 import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.common.security.PeerRequestProof;
 import vn.edu.p2p.common.security.RequestReplayGuard;
+import vn.edu.p2p.peer.auth.TicketRevocationList;
 import vn.edu.p2p.peer.share.FileHashUtil;
 import vn.edu.p2p.peer.share.FileMetadataBuilder;
 
 import java.net.Socket;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
@@ -26,11 +30,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PeerUploadProofIntegrationTest {
@@ -164,26 +170,138 @@ class PeerUploadProofIntegrationTest {
         }
     }
 
+    @Test
+    void expiredTicketRemainsRejectedByUploader() throws Exception {
+        Fixture fixture = createFixture();
+        PeerUploadServer server = fixture.server();
+        String expired = PeerAccessTickets.issue(fixture.trackerKeys().getPrivate(),
+                PeerAccessTickets.DEFAULT_KEY_ID, FILE_ID, REQUESTER_ID, UPLOADER_ID,
+                fixture.requesterKeys().getPublic(),
+                NOW.minusSeconds(PeerAccessTickets.DEFAULT_TTL_SECONDS + 1),
+                PeerAccessTickets.DEFAULT_TTL_SECONDS);
+        try (server) {
+            MessageEnvelope request = bitfieldRequest(fixture,
+                    fixture.requesterKeys().getPrivate(), UPLOADER_ID, FILE_ID, expired);
+            assertDenied(exchange(fixture, request, false));
+            assertEquals(0L, server.totalBytesUploaded());
+        }
+    }
+
+    @Test
+    void uploaderAcceptsOverlappingKeyIdsAndRejectsRemovedKey() throws Exception {
+        Path file = tempDir.resolve("rotating-key-content.bin");
+        Files.write(file, new byte[]{4, 5, 6});
+        FileMetadata metadata = new FileMetadataBuilder(3).build(file);
+        LocalFileRegistry registry = new LocalFileRegistry();
+        registry.registerCompleteFile(FILE_ID, file, metadata);
+        KeyPair oldTrackerKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair newTrackerKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        KeyPair requesterKey = PeerRequestProof.generateKeyPair();
+        PeerP2pSocketFactory sockets =
+                new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
+        PeerUploadServer overlapping = new PeerUploadServer(0, registry, sockets, 2,
+                Map.of("key-a", oldTrackerKey.getPublic(), "key-b", newTrackerKey.getPublic()),
+                false);
+        overlapping.setUploaderPeerId(UPLOADER_ID);
+        overlapping.start();
+        try (overlapping) {
+            PeerDownloadClient client = new PeerDownloadClient(sockets, requesterKey.getPrivate());
+            String oldTicket = PeerAccessTickets.issue(oldTrackerKey.getPrivate(), "key-a",
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, requesterKey.getPublic(),
+                    Instant.now(), 900);
+            String newTicket = PeerAccessTickets.issue(newTrackerKey.getPrivate(), "key-b",
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, requesterKey.getPublic(),
+                    Instant.now(), 900);
+
+            assertNotNull(client.fetchBitfield("127.0.0.1", overlapping.listeningPort(),
+                    UPLOADER_ID, FILE_ID, oldTicket));
+            assertNotNull(client.fetchBitfield("127.0.0.1", overlapping.listeningPort(),
+                    UPLOADER_ID, FILE_ID, newTicket));
+        }
+
+        PeerUploadServer newKeyOnly = new PeerUploadServer(0, registry, sockets, 1,
+                Map.of("key-b", newTrackerKey.getPublic()), false);
+        newKeyOnly.setUploaderPeerId(UPLOADER_ID);
+        newKeyOnly.start();
+        try (newKeyOnly) {
+            PeerDownloadClient client = new PeerDownloadClient(sockets, requesterKey.getPrivate());
+            String oldTicket = PeerAccessTickets.issue(oldTrackerKey.getPrivate(), "key-a",
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, requesterKey.getPublic(),
+                    Instant.now(), 900);
+            assertThrows(IOException.class, () -> client.fetchBitfield("127.0.0.1",
+                    newKeyOnly.listeningPort(), UPLOADER_ID, FILE_ID, oldTicket));
+        }
+    }
+
+    @Test
+    void logoutRevocationIsAppliedOnHeartbeatAndLaterTicketRemainsValid() throws Exception {
+        Fixture fixture = createFixture();
+        PeerUploadServer server = fixture.server();
+        try (server) {
+            PeerDownloadClient client = new PeerDownloadClient(fixture.socketFactory(),
+                    fixture.requesterKeys().getPrivate(), fixture.clock());
+            assertNotNull(client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                    UPLOADER_ID, FILE_ID, fixture.ticket()));
+
+            fixture.ticketRevocations().apply(new HeartbeatResponse(NOW.toEpochMilli(),
+                    java.util.List.of(new TicketRevocation(1, TicketRevocation.Type.REQUESTER,
+                            REQUESTER_ID, null, 0, NOW.plusSeconds(1).toEpochMilli())), 1L));
+            org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () ->
+                    client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                            UPLOADER_ID, FILE_ID, fixture.ticket()));
+
+            String renewed = PeerAccessTickets.issue(fixture.trackerKeys().getPrivate(),
+                    FILE_ID, REQUESTER_ID, UPLOADER_ID, fixture.requesterKeys().getPublic(),
+                    NOW.plusSeconds(2));
+            assertNotNull(client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                    UPLOADER_ID, FILE_ID, renewed));
+        }
+    }
+
+    @Test
+    void fileRevocationIsScopedToTheUnsharedFile() throws Exception {
+        Fixture fixture = createFixture();
+        PeerUploadServer server = fixture.server();
+        try (server) {
+            fixture.ticketRevocations().apply(new HeartbeatResponse(NOW.toEpochMilli(),
+                    java.util.List.of(new TicketRevocation(1, TicketRevocation.Type.FILE,
+                            null, UPLOADER_ID, FILE_ID, NOW.plusSeconds(1).toEpochMilli())), 1L));
+
+            PeerDownloadClient client = new PeerDownloadClient(fixture.socketFactory(),
+                    fixture.requesterKeys().getPrivate(), fixture.clock());
+            org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () ->
+                    client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                            UPLOADER_ID, FILE_ID, fixture.ticket()));
+            String otherFileTicket = PeerAccessTickets.issue(fixture.trackerKeys().getPrivate(),
+                    FILE_ID + 1, REQUESTER_ID, UPLOADER_ID, fixture.requesterKeys().getPublic(),
+                    NOW.plusSeconds(2));
+            assertNotNull(client.fetchBitfield("127.0.0.1", server.listeningPort(),
+                    UPLOADER_ID, FILE_ID + 1, otherFileTicket));
+        }
+    }
+
     private Fixture createFixture() throws Exception {
         Path file = tempDir.resolve("proof-content.bin");
         Files.write(file, new byte[]{1, 2, 3, 4, 5, 6});
         FileMetadata metadata = new FileMetadataBuilder(3).build(file);
         LocalFileRegistry registry = new LocalFileRegistry();
         registry.registerCompleteFile(FILE_ID, file, metadata);
+        registry.registerCompleteFile(FILE_ID + 1, file, metadata);
         KeyPair trackerKeys = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
         KeyPair requesterKeys = PeerRequestProof.generateKeyPair();
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         RequestReplayGuard guard = new RequestReplayGuard(clock, Duration.ofSeconds(60), 8);
+        TicketRevocationList ticketRevocations = new TicketRevocationList(clock);
         PeerP2pSocketFactory socketFactory =
                 new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
         PeerUploadServer server = new PeerUploadServer(0, registry, socketFactory, 2,
-                trackerKeys.getPublic(), false, clock, guard);
+                trackerKeys.getPublic(), false, clock, guard, ticketRevocations);
         server.setUploaderPeerId(UPLOADER_ID);
         server.start();
         String ticket = PeerAccessTickets.issue(trackerKeys.getPrivate(), FILE_ID, REQUESTER_ID,
                 UPLOADER_ID, requesterKeys.getPublic(), NOW);
         return new Fixture(file, metadata, trackerKeys, requesterKeys, ticket, clock, guard,
-                socketFactory, server);
+                ticketRevocations, socketFactory, server);
     }
 
     private static MessageEnvelope bitfieldRequest(Fixture fixture, java.security.PrivateKey signer,
@@ -264,7 +382,8 @@ class PeerUploadProofIntegrationTest {
 
     private record Fixture(Path file, FileMetadata metadata, KeyPair trackerKeys,
                            KeyPair requesterKeys, String ticket, Clock clock,
-                           RequestReplayGuard replayGuard, PeerP2pSocketFactory socketFactory,
+                           RequestReplayGuard replayGuard, TicketRevocationList ticketRevocations,
+                           PeerP2pSocketFactory socketFactory,
                            PeerUploadServer server) {}
 
     private record Exchange(MessageEnvelope response, byte[] pieceBytes) {}

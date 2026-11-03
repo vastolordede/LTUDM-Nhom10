@@ -12,6 +12,7 @@ import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ResponseStatus;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.peer.auth.TicketRevocationList;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.session.ClientSession;
 
@@ -24,6 +25,7 @@ public final class AuthClientService implements AutoCloseable {
     private final PeerIdentity peerIdentity;
     private final PeerIdentityStore identityStore;
     private final PeerKeyStore peerKeyStore;
+    private final TicketRevocationList ticketRevocations;
     private ClientSession currentSession;
 
     public AuthClientService(
@@ -34,21 +36,29 @@ public final class AuthClientService implements AutoCloseable {
         this.peerIdentity = peerIdentity;
         this.identityStore = null;
         this.peerKeyStore = PeerKeyStore.defaultStore();
+        this.ticketRevocations = new TicketRevocationList();
     }
 
     /** Desktop account switching: resolve identity per user, preserving legacy peer.id. */
     public AuthClientService(TrackerConnection connection, PeerIdentityStore identityStore,
                              PeerIdentity initialIdentity) {
         this(connection, identityStore, initialIdentity,
-                new PeerKeyStore(identityStore.directory()));
+                new PeerKeyStore(identityStore.directory()), new TicketRevocationList());
     }
 
     public AuthClientService(TrackerConnection connection, PeerIdentityStore identityStore,
                              PeerIdentity initialIdentity, PeerKeyStore peerKeyStore) {
+        this(connection, identityStore, initialIdentity, peerKeyStore, new TicketRevocationList());
+    }
+
+    public AuthClientService(TrackerConnection connection, PeerIdentityStore identityStore,
+                             PeerIdentity initialIdentity, PeerKeyStore peerKeyStore,
+                             TicketRevocationList ticketRevocations) {
         this.connection = connection;
         this.identityStore = identityStore;
         this.peerIdentity = initialIdentity;
         this.peerKeyStore = peerKeyStore;
+        this.ticketRevocations = ticketRevocations;
     }
 
     public synchronized ClientSession login(
@@ -174,7 +184,9 @@ public final class AuthClientService implements AutoCloseable {
                 MessageType.HEARTBEAT,
                 UUID.randomUUID().toString(),
                 ProtocolCodec.toPayload(
-                        new HeartbeatRequest(currentSession.sessionId())
+                        new HeartbeatRequest(currentSession.sessionId(),
+                                ticketRevocations.latestSequence(),
+                                ticketRevocations.trackerInstanceId())
                 )
         );
 
@@ -193,6 +205,7 @@ public final class AuthClientService implements AutoCloseable {
                         "Tracker returned an empty heartbeat response."
                 );
             }
+            ticketRevocations.apply(heartbeatResponse);
             return heartbeatResponse;
         } catch (IOException e) {
             throw new AuthClientException(
@@ -205,6 +218,10 @@ public final class AuthClientService implements AutoCloseable {
 
     public synchronized ClientSession currentSession() {
         return currentSession;
+    }
+
+    public TicketRevocationList ticketRevocations() {
+        return ticketRevocations;
     }
 
     public synchronized void invalidateLocalSession() {

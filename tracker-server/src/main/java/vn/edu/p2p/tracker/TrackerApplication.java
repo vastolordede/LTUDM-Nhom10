@@ -40,6 +40,7 @@ import vn.edu.p2p.tracker.statistics.TrackerStatisticsMonitor;
 import vn.edu.p2p.tracker.statistics.TrackerStatisticsService;
 import vn.edu.p2p.tracker.transfer.JdbcTransferHistoryRepository;
 import vn.edu.p2p.tracker.transfer.TransferHistoryService;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -81,15 +82,20 @@ public final class TrackerApplication {
         PeerFileRepository peerFiles = new JdbcPeerFileRepository(connectionFactory);
         ShareEventRepository shareEvents = new JdbcShareEventRepository(connectionFactory);
         SessionPeerResolver sessionPeerResolver = new JdbcSessionPeerResolver(connectionFactory);
+        TicketRevocationRegistry revocationRegistry = new TicketRevocationRegistry();
+        String trackerInstanceId = java.util.UUID.randomUUID().toString();
 
         DefaultAuthService authService = new DefaultAuthService(
                 users,
                 peers,
                 sessions,
                 new BCryptPasswordService(),
-                settings.heartbeatIntervalSeconds()
+                settings.heartbeatIntervalSeconds(),
+                revocationRegistry,
+                java.time.Clock.systemUTC()
         );
-        PeerSessionService peerSessionService = new PeerSessionService(sessions);
+        PeerSessionService peerSessionService =
+                new PeerSessionService(sessions, revocationRegistry, trackerInstanceId);
 
         FileSourceService fileSourceService = new FileSourceService(
                 fileSources,
@@ -102,7 +108,8 @@ public final class TrackerApplication {
                 sessionPeerResolver,
                 files,
                 peerFiles,
-                shareEvents
+                shareEvents,
+                revocationRegistry
         );
 
         TransferHistoryService transferHistoryService = new TransferHistoryService(
@@ -157,7 +164,8 @@ public final class TrackerApplication {
         HeartbeatMonitor heartbeatMonitor = new HeartbeatMonitor(
                 sessions,
                 Duration.ofSeconds(settings.heartbeatTimeoutSeconds()),
-                Duration.ofSeconds(settings.heartbeatIntervalSeconds())
+                Duration.ofSeconds(settings.heartbeatIntervalSeconds()),
+                revocationRegistry
         );
         TrackerStatisticsMonitor statisticsMonitor = new TrackerStatisticsMonitor(
                 new TrackerStatisticsService(statistics),

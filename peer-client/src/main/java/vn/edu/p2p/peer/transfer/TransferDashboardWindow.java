@@ -25,6 +25,7 @@ import vn.edu.p2p.peer.share.FolderController;
 import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.peer.network.RendezvousClient;
 import vn.edu.p2p.peer.auth.PeerKeyStore;
+import vn.edu.p2p.peer.auth.TicketRevocationList;
 
 import java.io.IOException;
 import java.security.KeyPair;
@@ -74,7 +75,8 @@ public final class TransferDashboardWindow implements AutoCloseable {
         this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
     }
 
-    public void show(TrackerConnection connection, String sessionId, String peerId) throws IOException {
+    public void show(TrackerConnection connection, String sessionId, String peerId,
+                     TicketRevocationList ticketRevocations) throws IOException {
         if (stage != null && !closed) {
             stage.show();
             stage.toFront();
@@ -84,6 +86,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             throw new IllegalStateException("Dashboard was closed; create a new instance");
         }
         uploadServer.setUploaderPeerId(peerId);
+        uploadServer.setTicketRevocationList(ticketRevocations);
         KeyPair peerKeys = PeerKeyStore.defaultStore().loadOrCreate(peerId);
         uploadServer.start();
         try {

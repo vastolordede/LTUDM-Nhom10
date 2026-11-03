@@ -4,12 +4,17 @@ import vn.edu.p2p.common.dto.BitfieldResponse;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.common.dto.PieceInfo;
+import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.peer.share.FileHashUtil;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.BitSet;
@@ -25,6 +30,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * S09-S12, S17-S19, S23-S34, S41, S43:
@@ -39,6 +45,9 @@ public final class MultiSourceDownloadEngine {
     private final PeerDownloadClient downloadClient;
     private final int maxWorkerThreads;
     private final PieceScheduler.Strategy schedulingStrategy;
+    private final TicketProvider ticketProvider;
+    private final Clock clock;
+    private final Duration ticketRefreshSafetyWindow;
 
     public MultiSourceDownloadEngine(
             LocalFileRegistry fileRegistry,
@@ -58,13 +67,43 @@ public final class MultiSourceDownloadEngine {
             int maxWorkerThreads,
             PieceScheduler.Strategy schedulingStrategy
     ) {
+        this(fileRegistry, downloadClient, maxWorkerThreads, schedulingStrategy,
+                null, Clock.systemUTC(), Duration.ofSeconds(60));
+    }
+
+    public MultiSourceDownloadEngine(
+            LocalFileRegistry fileRegistry,
+            PeerDownloadClient downloadClient,
+            int maxWorkerThreads,
+            PieceScheduler.Strategy schedulingStrategy,
+            TicketProvider ticketProvider
+    ) {
+        this(fileRegistry, downloadClient, maxWorkerThreads, schedulingStrategy,
+                ticketProvider, Clock.systemUTC(), Duration.ofSeconds(60));
+    }
+
+    public MultiSourceDownloadEngine(
+            LocalFileRegistry fileRegistry,
+            PeerDownloadClient downloadClient,
+            int maxWorkerThreads,
+            PieceScheduler.Strategy schedulingStrategy,
+            TicketProvider ticketProvider,
+            Clock clock,
+            Duration ticketRefreshSafetyWindow
+    ) {
         if (maxWorkerThreads <= 0) {
             throw new IllegalArgumentException("maxWorkerThreads must be > 0");
+        }
+        if (ticketRefreshSafetyWindow == null || ticketRefreshSafetyWindow.isNegative()) {
+            throw new IllegalArgumentException("ticketRefreshSafetyWindow must be non-negative");
         }
         this.fileRegistry = Objects.requireNonNull(fileRegistry, "fileRegistry");
         this.downloadClient = Objects.requireNonNull(downloadClient, "downloadClient");
         this.maxWorkerThreads = maxWorkerThreads;
         this.schedulingStrategy = Objects.requireNonNull(schedulingStrategy, "schedulingStrategy");
+        this.ticketProvider = ticketProvider;
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.ticketRefreshSafetyWindow = ticketRefreshSafetyWindow;
     }
 
     /**
@@ -120,17 +159,23 @@ public final class MultiSourceDownloadEngine {
         Map<String, BitSet> discoveredBitfields = new ConcurrentHashMap<>();
         Map<String, MutableSourceStat> sourceStatsMap = new ConcurrentHashMap<>();
         List<FileSourceInfo> reachableSources = new ArrayList<>();
+        Map<String, FileSourceInfo> currentSources = new ConcurrentHashMap<>();
+        candidateSources.forEach(source -> currentSources.put(source.peerId(), source));
+        java.util.Set<String> refreshFailedSources = ConcurrentHashMap.newKeySet();
+        AtomicReference<String> refreshFailure = new AtomicReference<>();
 
         for (FileSourceInfo source : candidateSources) {
             MutableSourceStat stat = new MutableSourceStat(source.peerId(), Instant.now());
             sourceStatsMap.put(source.peerId(), stat);
             try {
+                FileSourceInfo requestSource = sourceForRequest(fileId, source, currentSources,
+                        refreshFailedSources);
                 BitfieldResponse bf = downloadClient.fetchBitfield(
-                        source.ipAddress(),
-                        source.listeningPort(),
-                        source.peerId(),
+                        requestSource.ipAddress(),
+                        requestSource.listeningPort(),
+                        requestSource.peerId(),
                         fileId,
-                        source.accessTicket()
+                        requestSource.accessTicket()
                 );
                 if (bf.metadata() == null) throw new IOException("Peer did not provide file metadata");
                 if (expectedCatalogHash != null && !bf.metadata().fileHash().equalsIgnoreCase(expectedCatalogHash)) {
@@ -144,7 +189,14 @@ public final class MultiSourceDownloadEngine {
                     throw new IOException("Conflicting peer file metadata");
                 }
                 discoveredBitfields.put(source.peerId(), bf.toBitSet());
-                reachableSources.add(source);
+                reachableSources.add(requestSource);
+            } catch (TicketRefreshException e) {
+                refreshFailure.compareAndSet(null, e.getMessage());
+                stat.markStatus("FAILED");
+                if (progressListener != null) {
+                    progressListener.onSourceStatusChanged(source.peerId(),
+                            "TICKET_REFRESH_FAILED", e.getMessage());
+                }
             } catch (IOException e) {
                 stat.markStatus("DISCONNECTED");
                 if (progressListener != null) {
@@ -156,9 +208,11 @@ public final class MultiSourceDownloadEngine {
         }
 
         if (discoveredMetadata == null || reachableSources.isEmpty()) {
+            String reason = refreshFailure.get();
             return failedResult(
                     transferId, fileId, targetFilePath, startedAt, 0L,
-                    "Could not fetch bitfield/metadata from any peer source",
+                    reason == null ? "Could not fetch bitfield/metadata from any peer source"
+                            : "Download incomplete: " + reason,
                     buildSourceStats(sourceStatsMap)
             );
         }
@@ -173,8 +227,11 @@ public final class MultiSourceDownloadEngine {
                     try {
                         List<PieceInfo> allPieces = new ArrayList<>(header.pieceCount());
                         for (int offset = 0; offset < header.pieceCount(); offset += 400) {
-                            var page = downloadClient.fetchMetadataPage(source.ipAddress(),
-                                    source.listeningPort(), fileId, offset, 400, source.accessTicket());
+                            FileSourceInfo requestSource = sourceForRequest(fileId, source,
+                                    currentSources, refreshFailedSources);
+                            var page = downloadClient.fetchMetadataPage(requestSource.ipAddress(),
+                                    requestSource.listeningPort(), fileId, offset, 400,
+                                    requestSource.accessTicket());
                             if (page.pieces().isEmpty()) throw new IOException("Empty metadata page");
                             for (PieceInfo piece : page.pieces()) {
                                 if (piece.pieceIndex() != allPieces.size() || piece.pieceLength() <= 0
@@ -189,15 +246,25 @@ public final class MultiSourceDownloadEngine {
                                 header.pieceSize(), header.pieceCount(), allPieces);
                         break;
                     } catch (IOException ex) {
+                        if (ex instanceof TicketRefreshException) {
+                            refreshFailure.compareAndSet(null, ex.getMessage());
+                        }
                         if (progressListener != null) progressListener.onSourceStatusChanged(
                                 source.peerId(), "METADATA_ERROR", ex.getMessage());
                     }
                 }
-                if (complete == null) throw new IOException("No source supplied complete metadata");
+                if (complete == null) {
+                    String reason = refreshFailure.get();
+                    throw new IOException(reason == null ? "No source supplied complete metadata"
+                            : reason);
+                }
                 discoveredMetadata = complete;
             } catch (IOException e) {
+                String refreshReason = refreshFailure.get();
                 return failedResult(transferId, fileId, targetFilePath, startedAt, 0L,
-                        e.getMessage(), buildSourceStats(sourceStatsMap));
+                        refreshReason == null ? e.getMessage()
+                                : "Download incomplete: " + refreshReason,
+                        buildSourceStats(sourceStatsMap));
             }
         }
         final FileMetadata metadata = discoveredMetadata;
@@ -270,7 +337,10 @@ public final class MultiSourceDownloadEngine {
                             totalBytesReceived,
                             startNano,
                             progressListener,
-                            cancelSignal
+                            cancelSignal,
+                            currentSources,
+                            refreshFailedSources,
+                            refreshFailure
                     )));
                 }
 
@@ -299,10 +369,15 @@ public final class MultiSourceDownloadEngine {
             }
 
             if (!scheduler.isAllCompleted()) {
+                String refreshReason = refreshFailure.get();
                 return failedResult(
                         transferId, fileId, targetFilePath, startedAt, totalBytesReceived.get(),
-                        "Download incomplete: completed " + scheduler.completedCount()
-                                + "/" + metadata.pieceCount() + " pieces",
+                        refreshReason == null
+                                ? "Download incomplete: completed " + scheduler.completedCount()
+                                        + "/" + metadata.pieceCount() + " pieces"
+                                : "Download incomplete: " + refreshReason + " (completed "
+                                        + scheduler.completedCount() + "/" + metadata.pieceCount()
+                                        + " pieces)",
                         buildSourceStats(sourceStatsMap)
                 );
             }
@@ -352,7 +427,10 @@ public final class MultiSourceDownloadEngine {
             AtomicLong totalBytesReceived,
             long startNano,
             DownloadProgressListener progressListener,
-            AtomicBoolean cancelSignal
+            AtomicBoolean cancelSignal,
+            Map<String, FileSourceInfo> currentSources,
+            java.util.Set<String> refreshFailedSources,
+            AtomicReference<String> refreshFailure
     ) {
         int idleSpins = 0;
 
@@ -379,13 +457,15 @@ public final class MultiSourceDownloadEngine {
             MutableSourceStat sourceStat = sourceStatsMap.get(source.peerId());
 
             try {
+                FileSourceInfo requestSource = sourceForRequest(fileId, source, currentSources,
+                        refreshFailedSources);
                 PeerDownloadClient.DownloadedPiece downloaded = downloadClient.downloadPiece(
-                        source.ipAddress(),
-                        source.listeningPort(),
-                        source.peerId(),
+                        requestSource.ipAddress(),
+                        requestSource.listeningPort(),
+                        requestSource.peerId(),
                         fileId,
                         pieceIndex,
-                        source.accessTicket()
+                        requestSource.accessTicket()
                 );
 
                 // S31 & S43: Kiểm tra SHA-256 của từng piece ngay khi nhận
@@ -426,6 +506,15 @@ public final class MultiSourceDownloadEngine {
                             speed
                     );
                 }
+            } catch (TicketRefreshException e) {
+                refreshFailure.compareAndSet(null, e.getMessage());
+                scheduler.markSourceDisconnected(source.peerId());
+                scheduler.releasePieceToPending(pieceIndex);
+                if (sourceStat != null) sourceStat.markStatus("FAILED");
+                if (progressListener != null) {
+                    progressListener.onSourceStatusChanged(source.peerId(),
+                            "TICKET_REFRESH_FAILED", e.getMessage());
+                }
             } catch (IOException e) {
                 // S32-S34: Peer nguồn bị ngắt kết nối -> trả piece về PENDING và tự động thử nguồn khác
                 scheduler.markSourceDisconnected(source.peerId());
@@ -439,6 +528,72 @@ public final class MultiSourceDownloadEngine {
                     );
                 }
             }
+        }
+    }
+
+    private FileSourceInfo sourceForRequest(long fileId, FileSourceInfo assignedSource,
+                                            Map<String, FileSourceInfo> currentSources,
+                                            java.util.Set<String> refreshFailedSources)
+            throws TicketRefreshException {
+        synchronized (currentSources) {
+            FileSourceInfo source = currentSources.getOrDefault(
+                    assignedSource.peerId(), assignedSource);
+            if (refreshFailedSources.contains(source.peerId())) {
+                throw new TicketRefreshException(
+                        "Tracker ticket refresh failed; log in again and confirm the file is shared");
+            }
+            if (source.accessTicket() == null && isTicketlessLoopbackDemo(source)) {
+                return source;
+            }
+            var expiry = PeerAccessTickets.readExpiryEpochSecondUntrusted(source.accessTicket());
+            long nowEpochSecond = clock.instant().getEpochSecond();
+            long refreshWindowSeconds = ticketRefreshSafetyWindow.toSeconds();
+            if (expiry.isPresent() && expiry.getAsLong() - nowEpochSecond > refreshWindowSeconds) {
+                return source;
+            }
+            if (ticketProvider == null) {
+                refreshFailedSources.add(source.peerId());
+                throw new TicketRefreshException("Ticket refresh failed: no Tracker provider is configured");
+            }
+            final String refreshedTicket;
+            try {
+                refreshedTicket = ticketProvider.refresh(fileId, source);
+            } catch (IOException | RuntimeException e) {
+                refreshFailedSources.add(source.peerId());
+                throw new TicketRefreshException(
+                        "Tracker ticket refresh failed; log in again and confirm the file is shared", e);
+            }
+            var refreshedExpiry = PeerAccessTickets.readExpiryEpochSecondUntrusted(refreshedTicket);
+            if (refreshedExpiry.isEmpty()
+                    || refreshedExpiry.getAsLong() - nowEpochSecond <= refreshWindowSeconds) {
+                refreshFailedSources.add(source.peerId());
+                throw new TicketRefreshException(
+                        "Ticket refresh failed: Tracker did not return a valid ticket with sufficient remaining lifetime");
+            }
+            FileSourceInfo refreshedSource = new FileSourceInfo(source.peerId(),
+                    source.availabilityStatus(), source.ipAddress(), source.listeningPort(),
+                    source.lastSeenEpochMillis(), refreshedTicket);
+            currentSources.put(source.peerId(), refreshedSource);
+            return refreshedSource;
+        }
+    }
+
+    private static boolean isTicketlessLoopbackDemo(FileSourceInfo source) {
+        if (!PeerAccessTickets.localInsecureDemoEnabled()) return false;
+        try {
+            return InetAddress.getByName(source.ipAddress()).isLoopbackAddress();
+        } catch (UnknownHostException e) {
+            return false;
+        }
+    }
+
+    private static final class TicketRefreshException extends IOException {
+        private TicketRefreshException(String message) {
+            super(message);
+        }
+
+        private TicketRefreshException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 
