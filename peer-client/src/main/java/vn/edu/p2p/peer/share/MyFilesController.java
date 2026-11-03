@@ -8,10 +8,13 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.transfer.LocalFileRegistry;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * My Files screen (T21): lists files this peer is currently sharing and
@@ -40,6 +43,8 @@ public final class MyFilesController {
         thread.setDaemon(true);
         return thread;
     });
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final Object executorLock = new Object();
 
     private ShareFileClientService shareFileClientService;
     private String sessionId;
@@ -85,6 +90,7 @@ public final class MyFilesController {
     /** T22: stop sharing the selected file. */
     @FXML
     private void onStopSharing() {
+        if (closed.get()) return;
         SharedFileEntry selected = myFilesListView.getSelectionModel().getSelectedItem();
         if (selected == null || shareFileClientService == null) {
             return;
@@ -92,15 +98,29 @@ public final class MyFilesController {
 
         statusLabel.setText("Đang ngừng chia sẻ \"" + selected.fileName() + "\"...");
 
-        ioExecutor.submit(() -> {
+        long generation = AuthClientService.sessionGeneration();
+        submitIfOpen(() -> {
             try {
                 shareFileClientService.unshare(sessionId, selected.fileId());
-                Platform.runLater(() -> onStopSuccess(selected));
+                postToCurrentSession(generation, () -> onStopSuccess(selected));
             } catch (Exception e) {
-                Platform.runLater(() ->
+                postToCurrentSession(generation, () ->
                         statusLabel.setText("Lỗi khi ngừng chia sẻ: " + e.getMessage())
                 );
             }
+        });
+    }
+
+    private void submitIfOpen(Runnable task) {
+        synchronized (executorLock) {
+            if (!closed.get()) ioExecutor.submit(task);
+        }
+    }
+
+    private void postToCurrentSession(long generation, Runnable action) {
+        if (closed.get() || !AuthClientService.isCurrentGeneration(generation)) return;
+        Platform.runLater(() -> {
+            if (!closed.get() && AuthClientService.isCurrentGeneration(generation)) action.run();
         });
     }
 
@@ -122,6 +142,16 @@ public final class MyFilesController {
     }
 
     public void shutdown() {
-        ioExecutor.shutdownNow();
+        synchronized (executorLock) {
+            if (!closed.compareAndSet(false, true)) return;
+            ioExecutor.shutdownNow();
+        }
+        try {
+            ioExecutor.awaitTermination(250, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
+
+    boolean executorTerminated() { return ioExecutor.isTerminated(); }
 }

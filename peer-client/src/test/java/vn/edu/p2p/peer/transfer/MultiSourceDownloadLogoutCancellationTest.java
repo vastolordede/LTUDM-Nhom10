@@ -26,6 +26,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -87,6 +88,7 @@ class MultiSourceDownloadLogoutCancellationTest {
                     throw new AssertionError("download ended before the piece request: "
                             + earlyResult.status() + " / " + earlyResult.failureReason());
                 }
+
                 cancel.set(true);
                 client.cancelActiveRequests();
 
@@ -107,11 +109,83 @@ class MultiSourceDownloadLogoutCancellationTest {
         }
     }
 
+    @Test
+    void peerServerClosingDuringPieceKeepsPartialFileAndNeverCompletes() throws Exception {
+            byte[] sourceBytes = new byte[256 * 1024];
+            java.util.Arrays.fill(sourceBytes, (byte) 0x6A);
+            Path seedFile = tempDir.resolve("server-close-seed.bin");
+            Files.write(seedFile, sourceBytes);
+            FileMetadata metadata = new FileMetadataBuilder(128 * 1024).build(seedFile);
+
+            byte[] partialBytes = new byte[sourceBytes.length];
+            java.util.Arrays.fill(partialBytes, (byte) 0x2B);
+            System.arraycopy(sourceBytes, 0, partialBytes, 0, 128 * 1024);
+            Path target = tempDir.resolve("server-close-partial.bin");
+            Files.write(target, partialBytes);
+
+            CountDownLatch pieceRequested = new CountDownLatch(1);
+            CountDownLatch releaseSeed = new CountDownLatch(1);
+            AtomicReference<Socket> activePeerSocket = new AtomicReference<>();
+            try (ServerSocket seed = new ServerSocket(0)) {
+                Thread seedThread = new Thread(() -> serveBitfieldThenBlock(
+                        seed, metadata, pieceRequested, releaseSeed, activePeerSocket), "test-closing-seed");
+                seedThread.setDaemon(true);
+                seedThread.start();
+
+                PeerP2pSocketFactory sockets =
+                        new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp());
+                var trackerKeys = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+                String ticket = PeerTestTickets.issue(trackerKeys.getPrivate(), FILE_ID,
+                        "server-close-reader", PEER_ID, Instant.now());
+                PeerDownloadClient client = new PeerDownloadClient(
+                        sockets, PeerTestTickets.requesterPrivateKey());
+                MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
+                        new LocalFileRegistry(), client, 2, PieceScheduler.Strategy.RANKED,
+                        null, Clock.systemUTC(), Duration.ZERO);
+                FileSourceInfo source = new FileSourceInfo(PEER_ID, "COMPLETE",
+                        "127.0.0.1", seed.getLocalPort(), System.currentTimeMillis(), ticket);
+                ExecutorService caller = Executors.newSingleThreadExecutor();
+                try {
+                    Future<DownloadSessionResult> result = caller.submit(() -> engine.downloadFile(
+                            FILE_ID, List.of(source), target, null, new AtomicBoolean(), UUID.randomUUID(),
+                            metadata.fileHash()));
+
+                    assertTrue(pieceRequested.await(2, TimeUnit.SECONDS),
+                            "download did not reach the blocked piece request");
+                    Socket active = activePeerSocket.get();
+                    assertTrue(active != null);
+                    active.close();
+                    seed.close();
+
+                    DownloadSessionResult failed = result.get(2, TimeUnit.SECONDS);
+                    assertFalse("COMPLETED".equals(failed.status()));
+                    assertTrue(Files.exists(target));
+                    assertArrayEquals(partialBytes, Files.readAllBytes(target));
+                    assertNoDownloadWorker(FILE_ID);
+                } finally {
+                    releaseSeed.countDown();
+                    caller.shutdownNow();
+                    caller.awaitTermination(1, TimeUnit.SECONDS);
+                    seedThread.join(1_000);
+            }
+        }
+    }
+
     private static void serveBitfieldThenBlock(
             ServerSocket seed,
             FileMetadata metadata,
             CountDownLatch pieceRequested,
             CountDownLatch releaseSeed
+    ) {
+        serveBitfieldThenBlock(seed, metadata, pieceRequested, releaseSeed, new AtomicReference<>());
+    }
+
+    private static void serveBitfieldThenBlock(
+            ServerSocket seed,
+            FileMetadata metadata,
+            CountDownLatch pieceRequested,
+            CountDownLatch releaseSeed,
+            AtomicReference<Socket> activePeerSocket
     ) {
         try {
             try (Socket bitfieldSocket = seed.accept()) {
@@ -123,6 +197,7 @@ class MultiSourceDownloadLogoutCancellationTest {
                         ProtocolCodec.toPayload(new BitfieldResponse(FILE_ID, available.toByteArray(), metadata))));
             }
             try (Socket pieceSocket = seed.accept()) {
+                activePeerSocket.set(pieceSocket);
                 MessageEnvelope request = ProtocolCodec.read(pieceSocket.getInputStream());
                 assertEquals(MessageType.REQUEST_PIECE, request.type());
                 pieceRequested.countDown();

@@ -25,8 +25,9 @@ import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Optional;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -45,6 +46,7 @@ public final class PeerUploadServer implements AutoCloseable {
 
     private static final Logger LOG = Logger.getLogger(PeerUploadServer.class.getName());
     private static final int DEFAULT_MAX_UPLOAD_WORKERS = 16;
+    private static final long SHUTDOWN_TIMEOUT_MILLIS = 750;
 
     private final int listeningPort;
     private final LocalFileRegistry fileRegistry;
@@ -52,15 +54,17 @@ public final class PeerUploadServer implements AutoCloseable {
     private final boolean allowInsecureLoopbackDemo;
     private final Clock clock;
     private final RequestReplayGuard replayGuard;
+    private final int maxUploadWorkers;
     private volatile TicketRevocationList ticketRevocations;
     private volatile String uploaderPeerId;
     private final PeerP2pSocketFactory socketFactory;
-    private final ExecutorService clientWorkers;
+    private volatile ThreadPoolExecutor clientWorkers;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicLong totalBytesUploaded = new AtomicLong(0);
+    private final Set<Socket> activeSockets = ConcurrentHashMap.newKeySet();
 
-    private ServerSocket serverSocket;
-    private Thread acceptThread;
+    private volatile ServerSocket serverSocket;
+    private volatile Thread acceptThread;
 
     public PeerUploadServer(
             int listeningPort,
@@ -133,7 +137,12 @@ public final class PeerUploadServer implements AutoCloseable {
         this.ticketRevocations = java.util.Objects.requireNonNull(ticketRevocations, "ticketRevocations");
         this.socketFactory = socketFactory;
         if (maxUploadWorkers <= 0) throw new IllegalArgumentException("maxUploadWorkers must be > 0");
-        this.clientWorkers = new ThreadPoolExecutor(maxUploadWorkers, maxUploadWorkers,
+        this.maxUploadWorkers = maxUploadWorkers;
+        this.clientWorkers = newClientWorkers();
+    }
+
+    private ThreadPoolExecutor newClientWorkers() {
+        return new ThreadPoolExecutor(maxUploadWorkers, maxUploadWorkers,
                 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(128), runnable -> {
                     Thread thread = new Thread(runnable, "peer-upload-worker");
                     thread.setDaemon(true);
@@ -150,6 +159,9 @@ public final class PeerUploadServer implements AutoCloseable {
             throw new IOException("Missing Tracker Ed25519 PUBLIC key for Peer upload server. "
                     + "Copy tracker-public.key.b64 to ~/.fileshare-p2p or set "
                     + "P2P_TICKET_PUBLIC_KEY_FILE; do not disable ticket checks on LAN.");
+        }
+        if (clientWorkers.isShutdown()) {
+            clientWorkers = newClientWorkers();
         }
         serverSocket = socketFactory.openServerSocket(listeningPort);
         running.set(true);
@@ -198,40 +210,78 @@ public final class PeerUploadServer implements AutoCloseable {
             }
             return;
         }
-        try {
-            clientWorkers.submit(() -> {
-                try {
-                    handlePeerConnection(socketFactory.wrapServer(socket));
-                } catch (IOException e) {
-                    try { socket.close(); } catch (IOException ignored) { }
-                }
-            });
-        } catch (RejectedExecutionException rejected) {
-            try { socket.close(); } catch (IOException ignored) { }
-        }
+        submitPeerSocket(socket, true);
     }
 
     private void acceptLoop() {
         while (running.get()) {
+            Socket peerSocket = null;
             try {
-                Socket peerSocket = serverSocket.accept();
+                ServerSocket listener = serverSocket;
+                if (listener == null) break;
+                peerSocket = listener.accept();
                 peerSocket.setTcpNoDelay(true);
                 peerSocket.setSoTimeout(socketFactory.readTimeoutMillis());
-                try {
-                    clientWorkers.submit(() -> handlePeerConnection(peerSocket));
-                } catch (RejectedExecutionException rejected) {
-                    peerSocket.close();
-                }
+                submitPeerSocket(peerSocket, false);
+                peerSocket = null;
             } catch (SocketException e) {
+                closeQuietly(peerSocket);
                 if (running.get()) {
                     LOG.log(Level.WARNING, "Upload server socket error", e);
                 }
                 break;
             } catch (IOException e) {
+                closeQuietly(peerSocket);
                 if (running.get()) {
                     LOG.log(Level.WARNING, "Failed to accept peer connection", e);
                 }
             }
+        }
+    }
+
+    private void submitPeerSocket(Socket socket, boolean wrapRelayedSocket) {
+        if (!running.get()) {
+            closeQuietly(socket);
+            return;
+        }
+        activeSockets.add(socket);
+        if (!running.get()) {
+            activeSockets.remove(socket);
+            closeQuietly(socket);
+            return;
+        }
+        ThreadPoolExecutor workers = clientWorkers;
+        try {
+            workers.submit(() -> {
+                Socket serving = socket;
+                try {
+                    if (wrapRelayedSocket) {
+                        serving = socketFactory.wrapServer(socket);
+                        activeSockets.add(serving);
+                    }
+                    if (running.get()) {
+                        handlePeerConnection(serving);
+                    }
+                } catch (IOException e) {
+                    LOG.log(Level.FINE, "Peer connection ended during shutdown or setup", e);
+                } finally {
+                    activeSockets.remove(serving);
+                    activeSockets.remove(socket);
+                    closeQuietly(serving);
+                    if (serving != socket) closeQuietly(socket);
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            activeSockets.remove(socket);
+            closeQuietly(socket);
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+            // best effort during teardown
         }
     }
 
@@ -485,13 +535,50 @@ public final class PeerUploadServer implements AutoCloseable {
     @Override
     public synchronized void close() {
         running.set(false);
-        if (serverSocket != null) {
+        ServerSocket listener = serverSocket;
+        serverSocket = null;
+        if (listener != null) {
             try {
-                serverSocket.close();
+                listener.close();
             } catch (IOException ignored) {
             }
-            serverSocket = null;
         }
-        clientWorkers.shutdownNow();
+        for (Socket socket : activeSockets) closeQuietly(socket);
+        activeSockets.clear();
+        ThreadPoolExecutor workers = clientWorkers;
+        workers.shutdownNow();
+        Thread acceptor = acceptThread;
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SHUTDOWN_TIMEOUT_MILLIS);
+        if (acceptor != null && acceptor != Thread.currentThread()) {
+            acceptor.interrupt();
+            joinUntil(acceptor, deadline);
+        }
+        long remaining = deadline - System.nanoTime();
+        if (remaining > 0) {
+            try {
+                workers.awaitTermination(remaining, TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
+
+    private static void joinUntil(Thread thread, long deadline) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) return;
+        try {
+            long millis = TimeUnit.NANOSECONDS.toMillis(remaining);
+            int nanos = (int) (remaining - TimeUnit.MILLISECONDS.toNanos(millis));
+            thread.join(millis, nanos);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    int activeSocketCount() { return activeSockets.size(); }
+    boolean acceptThreadAlive() {
+        Thread current = acceptThread;
+        return current != null && current.isAlive();
+    }
+    boolean workersTerminated() { return clientWorkers.isTerminated(); }
 }
