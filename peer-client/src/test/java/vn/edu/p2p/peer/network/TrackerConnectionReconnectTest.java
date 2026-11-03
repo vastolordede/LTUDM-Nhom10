@@ -5,6 +5,7 @@ import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
+import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ResponseStatus;
 
 import java.net.ServerSocket;
@@ -16,6 +17,65 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** R40: stale sockets must not permanently break login after Tracker timeout. */
 class TrackerConnectionReconnectTest {
+    @Test
+    void rejectsTrackerResponseWithUnsupportedProtocolVersion() throws Exception {
+        try (ServerSocket server = new ServerSocket(0)) {
+            CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                try (Socket socket = server.accept()) {
+                    MessageEnvelope request = ProtocolCodec.read(socket.getInputStream());
+                    ProtocolCodec.write(socket.getOutputStream(), new MessageEnvelope(
+                            MessageEnvelope.CURRENT_VERSION - 1,
+                            MessageType.LOGIN_RESPONSE,
+                            request.requestId(),
+                            ResponseStatus.SUCCESS,
+                            null,
+                            null,
+                            ProtocolCodec.toPayload(java.util.Map.of())
+                    ));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            TrackerConnectionConfig cfg = new TrackerConnectionConfig("127.0.0.1",
+                    server.getLocalPort(), false, null, null, null);
+            try (TrackerConnection client = new TrackerConnection(cfg)) {
+                ProtocolCompatibilityException error = assertThrows(
+                        ProtocolCompatibilityException.class, () -> client.request(login()));
+                assertTrue(error.getMessage().contains("Tracker"));
+                assertTrue(error.getMessage().contains("compatible"));
+            }
+            backend.get(5, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void mapsTrackerUnsupportedProtocolErrorToCompatibilityFailure() throws Exception {
+        try (ServerSocket server = new ServerSocket(0)) {
+            CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                try (Socket socket = server.accept()) {
+                    MessageEnvelope request = ProtocolCodec.read(socket.getInputStream());
+                    ProtocolCodec.write(socket.getOutputStream(), MessageEnvelope.error(
+                            MessageType.LOGIN_RESPONSE,
+                            request.requestId(),
+                            "UNSUPPORTED_PROTOCOL_VERSION",
+                            "Unsupported protocol version"
+                    ));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            TrackerConnectionConfig cfg = new TrackerConnectionConfig("127.0.0.1",
+                    server.getLocalPort(), false, null, null, null);
+            try (TrackerConnection client = new TrackerConnection(cfg)) {
+                ProtocolCompatibilityException error = assertThrows(
+                        ProtocolCompatibilityException.class, () -> client.request(login()));
+                assertTrue(error.getMessage().contains("Tracker"));
+                assertTrue(error.getMessage().contains("compatible"));
+            }
+            backend.get(5, TimeUnit.SECONDS);
+        }
+    }
+
     @Test
     void nextLoginRecoversFromRemoteCloseAfterInvalidCredentials() throws Exception {
         try (ServerSocket server = new ServerSocket(0)) {

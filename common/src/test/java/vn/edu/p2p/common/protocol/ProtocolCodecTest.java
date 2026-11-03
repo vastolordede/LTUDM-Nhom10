@@ -1,14 +1,17 @@
 package vn.edu.p2p.common.protocol;
 
 import org.junit.jupiter.api.Test;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import vn.edu.p2p.common.dto.LoginRequest;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ProtocolCodecTest {
 
@@ -47,4 +50,20 @@ class ProtocolCodecTest {
 
         assertEquals(login, decodedLogin);
     }
+
+    @Test
+    void shouldRejectUnknownDtoFieldsWhenDeserializingPayload() throws Exception {
+        MessageEnvelope response = ProtocolCodec.fromJson(
+                "{\"version\":" + MessageEnvelope.CURRENT_VERSION
+                        + ",\"type\":\"FILE_SOURCES_RESPONSE\","
+                        + "\"requestId\":\"legacy-client\","
+                        + "\"payload\":{\"fileId\":7,\"sources\":[],"
+                        + "\"fileHash\":\"" + "a".repeat(64) + "\"}}"
+        );
+
+        assertThrows(UnrecognizedPropertyException.class,
+                () -> ProtocolCodec.fromPayload(response.payload(), LegacyFileSourcesResponse.class));
+    }
+
+    private record LegacyFileSourcesResponse(long fileId, List<Object> sources) {}
 }

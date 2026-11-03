@@ -9,9 +9,11 @@ import vn.edu.p2p.common.dto.PieceResponseHeader;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
+import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ResponseStatus;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.Socket;
 import java.util.Objects;
 import java.util.UUID;
@@ -66,7 +68,7 @@ public final class PeerDownloadClient {
 
         try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
-            MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+            MessageEnvelope response = readResponse(socket.getInputStream());
 
             if (response.status() == ResponseStatus.ERROR) {
                 throw new IOException("Peer returned error for GET_BITFIELD: "
@@ -94,7 +96,7 @@ public final class PeerDownloadClient {
         );
         try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
-            MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+            MessageEnvelope response = readResponse(socket.getInputStream());
             if (response.status() == ResponseStatus.ERROR || response.type() != MessageType.METADATA_PAGE_RESPONSE) {
                 throw new IOException("Peer metadata request failed: " + response.errorCode() + ": " + response.message());
             }
@@ -130,7 +132,7 @@ public final class PeerDownloadClient {
 
         try (Socket socket = open(host, port)) {
             ProtocolCodec.write(socket.getOutputStream(), request);
-            MessageEnvelope response = ProtocolCodec.read(socket.getInputStream());
+            MessageEnvelope response = readResponse(socket.getInputStream());
 
             if (response.status() == ResponseStatus.ERROR) {
                 throw new IOException("Peer returned error for REQUEST_PIECE(" + pieceIndex + "): "
@@ -150,5 +152,11 @@ public final class PeerDownloadClient {
 
             return new DownloadedPiece(header, bytes);
         }
+    }
+
+    private static MessageEnvelope readResponse(InputStream input) throws IOException {
+        MessageEnvelope response = ProtocolCodec.read(input);
+        ProtocolCompatibilityException.validateResponse(response, "Peer upload server");
+        return response;
     }
 }

@@ -193,7 +193,8 @@ public final class PeerUploadServer implements AutoCloseable {
                 if (request.version() != MessageEnvelope.CURRENT_VERSION) {
                     ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
                             MessageType.ERROR, request.requestId(), "UNSUPPORTED_PROTOCOL_VERSION",
-                            "Peer supports protocol version " + MessageEnvelope.CURRENT_VERSION + " only"));
+                            "Peer upload server supports protocol version "
+                                    + MessageEnvelope.CURRENT_VERSION + ", received " + request.version()));
                     continue;
                 }
 
