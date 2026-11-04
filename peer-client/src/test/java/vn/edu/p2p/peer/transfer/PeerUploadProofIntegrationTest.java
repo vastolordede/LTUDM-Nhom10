@@ -37,6 +37,12 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -328,6 +334,41 @@ class PeerUploadProofIntegrationTest {
 
             assertEquals(0, fixture.replayGuard().size());
             assertEquals(0L, server.totalBytesUploaded());
+        }
+    }
+
+    @Test
+    @Timeout(value = 3, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void deniedTicketAndProofAreNotWrittenToPeerLogs() throws Exception {
+            Fixture fixture = createFixture();
+            Logger logger = Logger.getLogger(PeerUploadServer.class.getName());
+            List<LogRecord> records = new ArrayList<>();
+            Handler handler = new Handler() {
+                @Override public void publish(LogRecord record) { records.add(record); }
+                @Override public void flush() {}
+                @Override public void close() {}
+            };
+            Level previousLevel = logger.getLevel();
+            boolean previousParentHandlers = logger.getUseParentHandlers();
+            logger.setLevel(Level.ALL);
+            logger.setUseParentHandlers(false);
+            logger.addHandler(handler);
+            String secretTicket = "ticket-secret-marker-R61";
+            try (PeerUploadServer server = fixture.server()) {
+                MessageEnvelope request = bitfieldRequest(fixture, fixture.requesterKeys().getPrivate(),
+                        UPLOADER_ID, FILE_ID, secretTicket);
+                var payload = ProtocolCodec.fromPayload(request.payload(), GetBitfieldRequest.class);
+                assertDenied(exchange(fixture, request, false));
+                String logText = records.stream().map(LogRecord::getMessage)
+                        .reduce("", (left, right) -> left + "\n" + right);
+                assertFalse(logText.contains(secretTicket));
+                assertFalse(logText.contains(payload.proofSignature()));
+                assertFalse(logText.contains(payload.proofNonce()));
+                assertTrue(records.stream().allMatch(record -> record.getThrown() == null));
+            } finally {
+                logger.removeHandler(handler);
+                logger.setUseParentHandlers(previousParentHandlers);
+                logger.setLevel(previousLevel);
         }
     }
 

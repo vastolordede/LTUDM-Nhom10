@@ -275,8 +275,7 @@ public final class LoginController {
 
                         if (throwable != null) {
                             Throwable cause = unwrap(throwable);
-                            LOG.log(Level.WARNING, "Tracker login failed: "
-                                    + TrackerConnectionDiagnostics.classify(cause, attemptConfig), cause);
+                            logAuthFailure("login", cause, attemptConfig);
                             statusLabel.setText("Đăng nhập thất bại: "
                                     + safeAuthFailure(cause, attemptConfig, true));
                             connectionStatusLabel.setText("Tracker: OFFLINE");
@@ -320,8 +319,7 @@ public final class LoginController {
                 setBusy(false);
                 if (throwable != null) {
                     Throwable cause = unwrap(throwable);
-                    LOG.log(Level.WARNING, "Tracker registration failed: "
-                            + TrackerConnectionDiagnostics.classify(cause, attemptConfig), cause);
+                    logAuthFailure("registration", cause, attemptConfig);
                     statusLabel.setText("Đăng ký thất bại: "
                             + safeAuthFailure(cause, attemptConfig, false));
                     return;
@@ -498,7 +496,14 @@ public final class LoginController {
                 || current instanceof AuthOperationRuntimeException)) {
             current = current.getCause();
         }
+
         return current;
+    }
+
+    static void logAuthFailure(String operation, Throwable cause,
+                               TrackerConnectionConfig attemptConfig) {
+        LOG.log(Level.WARNING, "Tracker " + operation + " failed: "
+                + TrackerConnectionDiagnostics.classify(cause, attemptConfig));
     }
 
     private static String safeAuthFailure(Throwable failure, TrackerConnectionConfig config,

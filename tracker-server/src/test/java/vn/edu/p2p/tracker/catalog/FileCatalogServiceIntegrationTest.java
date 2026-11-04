@@ -13,6 +13,7 @@ import vn.edu.p2p.common.dto.SearchResultItem;
 import vn.edu.p2p.common.dto.ShareFileRequest;
 import vn.edu.p2p.common.dto.ShareFileResponse;
 import vn.edu.p2p.common.dto.TransferHistoryItemDto;
+import vn.edu.p2p.common.dto.TransferHistoryRequest;
 import vn.edu.p2p.common.dto.TransferSourceRecordDto;
 import vn.edu.p2p.common.dto.UnshareFileRequest;
 import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
@@ -218,6 +219,44 @@ class FileCatalogServiceIntegrationTest {
                 List.of("SHARE_START", "SHARE_STOP"),
                 catalog.eventTypesFor(shareResponse.fileId())
         );
+    }
+
+    @Test
+    void transferHistoryReturnsOnlyTheAuthenticatedPeersRows() throws Exception {
+        UUID otherSession = UUID.randomUUID();
+        UUID otherPeer = UUID.randomUUID();
+        TransferHistoryItemDto ownItem = new TransferHistoryItemDto(
+                UUID.randomUUID().toString(), 1, "own.txt", 1, "COMPLETED", 1,
+                1L, 2L, null, 1);
+        TransferHistoryItemDto otherItem = new TransferHistoryItemDto(
+                UUID.randomUUID().toString(), 2, "other-private.txt", 2, "FAILED", 0,
+                3L, null, "private failure", 1);
+        TransferHistoryRepository history = new TransferHistoryRepository() {
+            @Override
+            public void upsertTransferSession(UUID transferId, long fileId, UUID destinationPeerId,
+                                              String status, long bytesReceived, Instant startedAt,
+                                              Instant completedAt, String failureReason) {}
+
+            @Override
+            public void upsertTransferSources(UUID transferId,
+                                              List<TransferSourceRecordDto> sources) {}
+
+            @Override
+            public List<TransferHistoryItemDto> findByDestinationPeer(UUID destinationPeerId) {
+                return destinationPeerId.equals(PEER_ID) ? List.of(ownItem) : List.of(otherItem);
+            }
+        };
+        TransferHistoryService historyService = new TransferHistoryService(sessionId -> {
+            if (sessionId.equals(SESSION_ID)) return PEER_ID;
+            if (sessionId.equals(otherSession)) return otherPeer;
+            throw new FileCatalogException("Unknown test session");
+        }, history, null);
+
+        var response = historyService.getHistory(
+                new TransferHistoryRequest(SESSION_ID.toString()));
+
+        assertEquals(List.of(ownItem), response.items());
+        assertFalse(response.items().contains(otherItem));
     }
 
     @Test

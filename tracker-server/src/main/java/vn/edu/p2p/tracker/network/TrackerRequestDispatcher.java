@@ -183,7 +183,8 @@ public final class TrackerRequestDispatcher {
                     request, "FILE_CATALOG_ERROR", e.getMessage()
             );
         } catch (Exception e) {
-            LOG.log(Level.SEVERE, "Unhandled Tracker request failure", e);
+            LOG.log(Level.SEVERE, "Unhandled Tracker request failure: "
+                    + e.getClass().getSimpleName());
             return TrackerErrorResponses.forRequest(
                     request,
                     "SERVER_ERROR",
