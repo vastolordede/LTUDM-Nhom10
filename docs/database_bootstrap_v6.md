@@ -34,3 +34,47 @@ Tracker startup uses `DatabaseConnectionFactory.verify()` and fails fast unless 
 - Check Search/Download and folder workflows after the schema upgrade.
 - Check `file_aliases`, `file_groups`, `group_files`, `folder_download_sessions`, indexes, `v_file_sources` and sample Search/Download.
 - Protocol 3 login registers the Peer Ed25519 public key; apply migration v9 and have existing Peers log in again before requesting sources.
+
+## Backup, restore, and rollback (R55)
+
+Install PostgreSQL client tools (`pg_dump`, `pg_restore`, and `psql`) on the operator
+machine and provide `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`
+through the current process environment or an approved secret manager. The script
+never accepts a password argument or writes it to a file or log. Its default backup
+location is `$HOME/fileshare-backups`, outside the repository. Keep backups encrypted
+and access-restricted; never commit them.
+
+```powershell
+.\tools\postgres_backup_restore.ps1 -Operation Backup
+.\tools\postgres_backup_restore.ps1 -Operation Restore -BackupPath 'D:\secure-backups\fileshare.dump'
+```
+
+Backups use PostgreSQL custom format. Restore validates the archive and database
+connection before changing the target, and refuses a non-empty database by default.
+Restore into a newly-created empty database for routine recovery. `-AllowNonEmpty`
+is an explicit destructive confirmation that asks `pg_restore` to clean objects
+included in the archive; it is not a substitute for an exact rollback because objects
+created after the backup may not be present in that archive.
+
+There are **no down migrations**. To roll back, stop Tracker, restore the pre-upgrade
+backup into a separate empty database, set Tracker's `DB_NAME` to that database, and
+run the matching previous Tracker build. Run `database/verify_schema.sql` and confirm
+its version is supported by that build before starting Tracker. Do not expect the
+current v9 Tracker to accept a pre-v9 snapshot.
+
+For a small deployment, take a backup daily while the service is in use and before
+every schema change. Keep a documented rotation (for example, 7 daily and 4 weekly
+copies) on protected storage separate from the database host. At least monthly, restore
+a copy to a disposable database, compare important row counts/records, and run
+`database/verify_schema.sql`; record the result and restore duration. Rehearse a full
+Tracker restart against the restored database before relying on the backup.
+
+The real PostgreSQL recovery integration can be run on Windows with Docker:
+
+```powershell
+.\tracker-server\src\test\run_postgres_recovery_acceptance.ps1
+```
+
+It creates a uniquely named disposable `postgres:16-alpine` container with a random
+process-only password and dynamic localhost port, and removes that container and its
+anonymous volume on completion. It does not use or inspect existing database volumes.
