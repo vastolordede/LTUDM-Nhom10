@@ -1,6 +1,7 @@
 package vn.edu.p2p.tracker.source;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
 import vn.edu.p2p.common.security.PeerAccessTickets;
@@ -20,6 +21,7 @@ import java.security.KeyPairGenerator;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +31,9 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Timeout(value = 10, unit = java.util.concurrent.TimeUnit.SECONDS)
 class FileSourceServiceTest {
     @Test
     void shouldReturnOnlineSourcesAndExcludeRequester() throws Exception {
@@ -142,6 +146,86 @@ class FileSourceServiceTest {
                 new FileSourcesRequest(sessionId.toString(), 11L)).sources());
     }
 
+    @Test
+    void returnsBothPeerSourcesAndKeepsSecondAfterFirstUnshares() throws Exception {
+        UUID requesterPeer = UUID.randomUUID();
+        UUID sessionId = UUID.randomUUID();
+        PeerSessionRecord requesterSession = onlineSession(sessionId, requesterPeer, 7001);
+        KeyPair requesterKeys = PeerRequestProof.generateKeyPair();
+        KeyPair trackerKeys = PeerRequestProof.generateKeyPair();
+        FakePeerRepository peers = new FakePeerRepository();
+        peers.publicKeys.put(requesterPeer, PeerRequestProof.encodePublicKey(requesterKeys.getPublic()));
+        UUID peerA = UUID.randomUUID();
+        UUID peerB = UUID.randomUUID();
+        FakeSourceRepository sources = new FakeSourceRepository(List.of(
+                sourceRecord(peerA, 7002),
+                sourceRecord(peerB, 7003)));
+        FileSourceService service = new FileSourceService(
+                sources, new PeerSessionService(new FakeSessionRepository(requesterSession)),
+                peers, trackerKeys.getPrivate(), "test-key", 120,
+                Clock.fixed(Instant.parse("2026-11-04T00:00:00Z"), ZoneOffset.UTC));
+
+        FileSourcesResponse beforeUnshare = service.findSources(
+                new FileSourcesRequest(sessionId.toString(), 11L));
+        assertEquals(java.util.Set.of(peerA.toString(), peerB.toString()),
+                beforeUnshare.sources().stream().map(source -> source.peerId())
+                        .collect(java.util.stream.Collectors.toSet()));
+        assertEquals("a".repeat(64), beforeUnshare.fileHash());
+
+        sources.removeSource(peerA);
+        FileSourcesResponse afterUnshare = service.findSources(
+                new FileSourcesRequest(sessionId.toString(), 11L));
+        assertEquals(List.of(peerB.toString()),
+                afterUnshare.sources().stream().map(source -> source.peerId()).toList());
+    }
+
+    @Test
+    void trackerServiceRestartReturnsSourceAfterPeerRegistersAgain() throws Exception {
+        FakeSourceRepository persistedRepository = new FakeSourceRepository(List.of());
+        UUID requesterPeer = UUID.randomUUID();
+        UUID sessionId = UUID.randomUUID();
+        KeyPair requesterKeys = PeerRequestProof.generateKeyPair();
+        KeyPair trackerKeys = PeerRequestProof.generateKeyPair();
+        FakePeerRepository peers = new FakePeerRepository();
+        peers.publicKeys.put(requesterPeer, PeerRequestProof.encodePublicKey(requesterKeys.getPublic()));
+        FileSourceService oldTrackerInstance = new FileSourceService(
+                persistedRepository,
+                new PeerSessionService(new FakeSessionRepository(
+                        onlineSession(sessionId, requesterPeer, 7004))),
+                peers, trackerKeys.getPrivate(), "test-key", 120,
+                Clock.fixed(Instant.parse("2026-11-04T00:00:00Z"), ZoneOffset.UTC));
+        assertTrue(oldTrackerInstance.findSources(
+                new FileSourcesRequest(sessionId.toString(), 11L)).sources().isEmpty());
+
+        UUID restoredPeer = UUID.randomUUID();
+        persistedRepository.registerSource(sourceRecord(restoredPeer, 7002));
+        UUID restartedSessionId = UUID.randomUUID();
+        FileSourceService restartedTrackerInstance = new FileSourceService(
+                persistedRepository,
+                new PeerSessionService(new FakeSessionRepository(
+                        onlineSession(restartedSessionId, requesterPeer, 7004))),
+                peers, trackerKeys.getPrivate(), "test-key", 120,
+                Clock.fixed(Instant.parse("2026-11-04T00:00:00Z"), ZoneOffset.UTC));
+
+        FileSourcesResponse response = restartedTrackerInstance.findSources(
+                new FileSourcesRequest(restartedSessionId.toString(), 11L));
+        assertEquals(List.of(restoredPeer.toString()),
+                response.sources().stream().map(source -> source.peerId()).toList());
+        assertEquals("a".repeat(64), response.fileHash());
+    }
+
+    private static PeerSessionRecord onlineSession(UUID sessionId, UUID peerId, int port) {
+        OffsetDateTime now = OffsetDateTime.ofInstant(
+                Instant.parse("2026-11-04T00:00:00Z"), ZoneOffset.UTC);
+        return new PeerSessionRecord(sessionId, peerId, "127.0.0.1", port,
+                PeerStatus.ONLINE, now, now, null);
+    }
+
+    private static FileSourceRecord sourceRecord(UUID peerId, int port) {
+        return new FileSourceRecord(11L, peerId, "COMPLETE", "127.0.0.1", port,
+                OffsetDateTime.ofInstant(Instant.parse("2026-11-04T00:00:00Z"), ZoneOffset.UTC));
+    }
+
     private static final class FakePeerRepository implements PeerRepository {
         private final Map<UUID, String> publicKeys = new HashMap<>();
 
@@ -172,7 +256,7 @@ class FileSourceServiceTest {
         private UUID excludedPeer;
 
         private FakeSourceRepository(List<FileSourceRecord> result) {
-            this.result = result;
+            this.result = new ArrayList<>(result);
         }
 
         @Override
@@ -181,7 +265,18 @@ class FileSourceServiceTest {
         @Override
         public List<FileSourceRecord> findOnlineSources(long fileId, UUID excludingPeerId) {
             this.excludedPeer = excludingPeerId;
-            return result;
+            return result.stream().filter(source -> source.fileId() == fileId)
+                    .filter(source -> !source.peerId().equals(excludingPeerId)).toList();
+        }
+
+        private void removeSource(UUID peerId) {
+            result.removeIf(source -> source.peerId().equals(peerId));
+        }
+
+        private void registerSource(FileSourceRecord source) {
+            result.removeIf(existing -> existing.fileId() == source.fileId()
+                    && existing.peerId().equals(source.peerId()));
+            result.add(source);
         }
     }
 

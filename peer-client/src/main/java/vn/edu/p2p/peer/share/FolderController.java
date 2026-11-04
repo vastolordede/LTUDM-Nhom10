@@ -18,7 +18,7 @@ import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.transfer.DownloadPreflight;
 import vn.edu.p2p.peer.transfer.DownloadSessionResult;
-import vn.edu.p2p.peer.transfer.FolderPathResolver;
+import vn.edu.p2p.peer.transfer.FolderDownloadPlan;
 import vn.edu.p2p.peer.transfer.LocalFileRegistry;
 import vn.edu.p2p.peer.transfer.MultiSourceDownloadEngine;
 import vn.edu.p2p.peer.transfer.PeerDownloadClient;
@@ -29,6 +29,7 @@ import vn.edu.p2p.peer.transfer.TransferHistoryClientService;
 import vn.edu.p2p.peer.transfer.ConnectionPlanner;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.PrivateKey;
@@ -225,9 +226,10 @@ public final class FolderController {
         String group = SafeFileName.validate(currentGroupName) == null
                 ? currentGroupName : SafeFileName.sanitize(currentGroupName);
         Path root = outputDir.resolve(group);
+        List<FolderFileInfo> filesToDownload = List.copyOf(files);
+        List<String> directoriesToCreate = fullFolder ? List.copyOf(currentDirectories) : List.of();
         final long targetGroupId = currentGroupId;
         final UUID groupTransferId = UUID.randomUUID();
-        final List<String> selectedDirectories = fullFolder ? List.copyOf(currentDirectories) : List.of();
         cancelSignal = new AtomicBoolean(false);
         AtomicBoolean cancel = cancelSignal;
         setBusy(true);
@@ -238,11 +240,21 @@ public final class FolderController {
             StringBuilder errors = new StringBuilder();
             List<String> completedEvidence = new ArrayList<>();
             List<String> renamedFiles = new ArrayList<>();
+            final FolderDownloadPlan plan;
             try {
-                Files.createDirectories(root);
-                for (String dir : selectedDirectories) {
-                    Files.createDirectories(FolderPathResolver.resolve(root, dir));
-                }
+                plan = fullFolder
+                        ? FolderDownloadPlan.full(root, filesToDownload, directoriesToCreate)
+                        : FolderDownloadPlan.selected(root, filesToDownload);
+            } catch (IOException invalidPath) {
+                postToUi(generation, () -> {
+                    statusLabel.setText("Invalid folder path: " + invalidPath.getMessage());
+                    setBusy(false);
+                });
+                return;
+            }
+            try {
+                Files.createDirectories(plan.root());
+                for (Path dir : plan.directories()) Files.createDirectories(dir);
             } catch (Exception directoryFailure) {
                 postToUi(generation, () -> {
                     statusLabel.setText("Cannot create folder structure: " + directoryFailure.getMessage());
@@ -259,15 +271,16 @@ public final class FolderController {
                     (refreshFileId, source) -> sourceClient.refreshTicket(
                             sessionId, refreshFileId, source.peerId()));
 
-            for (int i = 0; i < files.size() && !cancel.get(); i++) {
-                FolderFileInfo f = files.get(i);
+            for (int i = 0; i < plan.files().size() && !cancel.get(); i++) {
+                FolderDownloadPlan.FileTarget planned = plan.files().get(i);
+                FolderFileInfo f = planned.file();
+                Path target = planned.target();
                 final int index = i;
                 postToUi(generation, () -> {
-                    progressBar.setProgress((double) index / files.size());
-                    statusLabel.setText("Đang tải " + (index + 1) + "/" + files.size() + ": " + f.relativePath());
+                    progressBar.setProgress((double) index / plan.files().size());
+                    statusLabel.setText("Đang tải " + (index + 1) + "/" + plan.files().size() + ": " + f.relativePath());
                 });
                 try {
-                    Path target = FolderPathResolver.resolve(root, f.relativePath());
                     Files.createDirectories(target.getParent());
 
                     if (Files.isRegularFile(target) && Files.size(target) == f.fileSize()
@@ -340,7 +353,7 @@ public final class FolderController {
             }
             activeDownloadClient = null;
 
-            if (fullFolder && !cancel.get() && failed == 0 && ok == files.size()) {
+            if (fullFolder && !cancel.get() && failed == 0 && ok == filesToDownload.size()) {
                 try {
                     folderClient.reportCompletedDownload(sessionId, groupTransferId,
                             targetGroupId, completedEvidence);

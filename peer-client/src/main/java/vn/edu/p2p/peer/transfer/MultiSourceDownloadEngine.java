@@ -541,8 +541,11 @@ public final class MultiSourceDownloadEngine {
         if (!Files.isRegularFile(targetFilePath)) {
             throw new IOException("Download target exists and is not a regular file");
         }
-        if (Files.size(targetFilePath) != metadata.fileSize()
-                || inspectExistingPiecesForResume(targetFilePath, metadata).isEmpty()) {
+        boolean reusable = Files.size(targetFilePath) == metadata.fileSize()
+                && (metadata.fileSize() == 0L
+                ? FileHashUtil.sha256(targetFilePath).equalsIgnoreCase(metadata.fileHash())
+                : !inspectExistingPiecesForResume(targetFilePath, metadata).isEmpty());
+        if (!reusable) {
             return FolderPathResolver.uniquify(targetFilePath);
         }
         return targetFilePath;

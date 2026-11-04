@@ -4,22 +4,27 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import vn.edu.p2p.common.dto.FileMetadata;
 import vn.edu.p2p.common.dto.FileSourceInfo;
+import vn.edu.p2p.common.dto.SearchResultItem;
 import vn.edu.p2p.peer.share.FileHashUtil;
 import vn.edu.p2p.peer.share.FileMetadataBuilder;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -99,6 +104,39 @@ class MultiSourceDownloadFailoverIntegrationTest {
         }
     }
 
+    @Test
+    @org.junit.jupiter.api.Timeout(value = 20, unit = TimeUnit.SECONDS)
+    void trustedCatalogHashAcceptsAliasAndRejectsMismatchWithoutWritingTarget() throws Exception {
+        Scenario scenario = createScenario("catalog-alias.bin");
+        try (Seeds seeds = createSeeds(scenario, false)) {
+            MultiSourceDownloadEngine engine = engine(new LocalFileRegistry());
+            SearchResultItem aliasSearchResult = new SearchResultItem(
+                    FILE_ID, "catalog-visible-alias.bin", scenario.metadata().fileSize(),
+                    scenario.metadata().fileHash(), 1);
+            assertEquals("catalog-visible-alias.bin", aliasSearchResult.fileName());
+            Path acceptedTarget = tempDir.resolve("accepted-alias.bin");
+            DownloadSessionResult accepted = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
+                    engine.downloadFile(FILE_ID, seeds.sources(), acceptedTarget, null,
+                            new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                            aliasSearchResult.fileHash()));
+
+            assertEquals("COMPLETED", accepted.status());
+            assertEquals(scenario.metadata().fileHash(), FileHashUtil.sha256(accepted.outputFile()));
+            assertTrue(Files.exists(accepted.outputFile()));
+
+            Path rejectedTarget = tempDir.resolve("rejected-alias.bin");
+            String wrongHash = (scenario.metadata().fileHash().charAt(0) == '0' ? "1" : "0")
+                    + scenario.metadata().fileHash().substring(1);
+            DownloadSessionResult rejected = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
+                    engine.downloadFile(FILE_ID, seeds.sources(), rejectedTarget, null,
+                            new AtomicBoolean(false), java.util.UUID.randomUUID(), wrongHash));
+
+            assertEquals("FAILED", rejected.status());
+            assertFalse(Files.exists(rejectedTarget),
+                    "A catalog hash mismatch must not leave a file at the requested destination");
+        }
+    }
+
     private Scenario createScenario(String targetName) throws Exception {
         Path sourceFile = tempDir.resolve("source-" + targetName);
         byte[] content = new byte[PIECE_SIZE * (PIECE_COUNT - 1) + 37];
@@ -150,7 +188,8 @@ class MultiSourceDownloadFailoverIntegrationTest {
                 new PeerDownloadClient(new PeerP2pSocketFactory(PeerP2pSocketConfig.plainTcp()),
                         PeerTestTickets.requesterPrivateKey()),
                 1,
-                PieceScheduler.Strategy.ROUND_ROBIN);
+                PieceScheduler.Strategy.ROUND_ROBIN, null,
+                Clock.fixed(Instant.now(), ZoneOffset.UTC), Duration.ofSeconds(60));
     }
 
     private static int piecesReceivedFrom(DownloadSessionResult result, String peerId) {

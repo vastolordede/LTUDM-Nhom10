@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
+@Timeout(value = 2, unit = java.util.concurrent.TimeUnit.SECONDS)
 class SharedFilesStoreTest {
 
     @Test
@@ -22,15 +25,18 @@ class SharedFilesStoreTest {
 
     @Test
     void dropsMissingOrChangedFiles(@TempDir Path dir) throws Exception {
-        Path file = dir.resolve("a.txt");
-        Files.writeString(file, "hello");
+        Path missing = dir.resolve("missing.txt");
+        Path resized = dir.resolve("resized.txt");
+        Files.writeString(missing, "hello");
+        Files.writeString(resized, "world");
         SharedFilesStore store = new SharedFilesStore(dir.resolve("store.json"));
-        store.add(new SharedFilesStore.Entry(file.toString(), "a.txt", 5, "AA"));
+        store.add(new SharedFilesStore.Entry(missing.toString(), "missing.txt", 5, "AA"));
+        store.add(new SharedFilesStore.Entry(resized.toString(), "resized.txt", 5, "BB"));
 
-        Files.writeString(file, "hello world"); // đổi kích thước
-        assertTrue(store.loadValid().isEmpty());
+        Files.delete(missing);
+        assertEquals(1, store.loadValid().size(), "A missing entry is dropped independently");
 
-        Files.delete(file);
+        Files.writeString(resized, "hello world");
         assertTrue(store.loadValid().isEmpty());
     }
 
@@ -46,11 +52,12 @@ class SharedFilesStoreTest {
     }
 
     @Test
-    void removeAndDuplicateHash(@TempDir Path dir) throws Exception {
+    void characterizationOnePeerStoresOnlyOneEntryPerHash(@TempDir Path dir) throws Exception {
         SharedFilesStore store = new SharedFilesStore(dir.resolve("store.json"));
         store.add(new SharedFilesStore.Entry("x", "x", 1, "AA"));
-        store.add(new SharedFilesStore.Entry("y", "y", 1, "aa")); // cùng hash: thay thế
-        assertEquals(1, store.load().size());
+        store.add(new SharedFilesStore.Entry("y", "y", 1, "aa"));
+        assertEquals(List.of(new SharedFilesStore.Entry("y", "y", 1, "aa")), store.load(),
+                "The current model keeps one shared path per hash on a peer");
         store.removeByHash("AA");
         assertTrue(store.load().isEmpty());
     }
