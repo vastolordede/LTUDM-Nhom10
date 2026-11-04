@@ -74,7 +74,9 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
             DownloadSessionResult result = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
                     engine.downloadFile(FILE_ID, List.of(
                                     badPeer.source(), goodPeerSource(goodPeer, keys)),
-                            scenario.target(), verifyCompletedPieces, new java.util.concurrent.atomic.AtomicBoolean(false)));
+                            scenario.target(), verifyCompletedPieces,
+                            new java.util.concurrent.atomic.AtomicBoolean(false),
+                            java.util.UUID.randomUUID(), scenario.metadata().fileHash()));
 
             assertEquals("COMPLETED", result.status());
             assertEquals(PIECE_COUNT, totalPiecesReceived(result));
@@ -100,7 +102,8 @@ class MultiSourceDownloadCorruptPeerIntegrationTest {
 
             DownloadSessionResult result = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
                     engine.downloadFile(FILE_ID, List.of(badPeer.source()), scenario.target(),
-                            null, new java.util.concurrent.atomic.AtomicBoolean(false)));
+                            null, new java.util.concurrent.atomic.AtomicBoolean(false),
+                            java.util.UUID.randomUUID(), scenario.metadata().fileHash()));
 
             assertEquals("FAILED", result.status());
             assertTrue(result.failureReason().contains("incomplete"));

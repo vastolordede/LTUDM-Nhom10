@@ -111,7 +111,8 @@ class MultiSourcePartialSeedingIntegrationTest {
                                                     "Interrupted while Peer B was paused", e);
                                         }
                                     }
-                                }, new AtomicBoolean(false)));
+                                }, new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                                metadata.fileHash()));
 
                 try {
                     assertTrue(bPausedAtThreePieces.await(10, TimeUnit.SECONDS),
