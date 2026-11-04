@@ -1,18 +1,35 @@
 package vn.edu.p2p.peer.network;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ProtocolException;
+import vn.edu.p2p.peer.security.TlsTestCertificates;
 import javax.net.ssl.SSLHandshakeException;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.io.EOFException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
+import java.nio.file.Path;
 import java.security.cert.CertificateExpiredException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class TrackerConnectionDiagnosticsTest {
+    @TempDir
+    Path tempDir;
+
     @Test void descriptionsAreActionable() {
         assertTrue(TrackerConnectionDiagnostics.explain(new SSLHandshakeException("bad cert")).contains("TLS"));
         assertTrue(TrackerConnectionDiagnostics.explain(new UnknownHostException()).contains("DNS"));
@@ -67,5 +84,53 @@ class TrackerConnectionDiagnosticsTest {
                         new TrackerConnectionConfig("127.0.0.1", 9000, true,
                                 java.nio.file.Path.of("unused"), java.util.UUID.randomUUID().toString(),
                                 "PKCS12")));
+    }
+
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    void tlsDiagnosticLogDoesNotExposeTrustStorePathOrPassword() throws Exception {
+        var material = TlsTestCertificates.create(tempDir, "IP:127.0.0.1", null);
+        Logger logger = Logger.getLogger(TrackerConnectionDiagnostics.class.getName());
+        List<LogRecord> records = new ArrayList<>();
+        Handler handler = new Handler() {
+            @Override public void publish(LogRecord record) { records.add(record); }
+            @Override public void flush() {}
+            @Override public void close() {}
+        };
+        Level previousLevel = logger.getLevel();
+        boolean previousParentHandlers = logger.getUseParentHandlers();
+        logger.setLevel(Level.ALL);
+        logger.setUseParentHandlers(false);
+        logger.addHandler(handler);
+        try (ServerSocket plaintextEndpoint = new ServerSocket(0)) {
+            CompletableFuture<Void> backend = CompletableFuture.runAsync(() -> {
+                try (Socket socket = plaintextEndpoint.accept()) {
+                    socket.setSoTimeout(2_000);
+                    assertTrue(socket.getInputStream().readNBytes(5).length > 0);
+                    socket.getOutputStream().write(
+                            "HTTP/1.1 400 Bad Request\r\n\r\n".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+                    socket.getOutputStream().flush();
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            TrackerConnectionConfig config = new TrackerConnectionConfig("127.0.0.1",
+                    plaintextEndpoint.getLocalPort(), true, material.trustStore(),
+                    material.password(), "PKCS12");
+            String result = TrackerConnectionDiagnostics.probe(config);
+            backend.get(3, TimeUnit.SECONDS);
+            assertTrue(result.contains("TLS"));
+        } finally {
+            logger.removeHandler(handler);
+            logger.setUseParentHandlers(previousParentHandlers);
+            logger.setLevel(previousLevel);
+        }
+
+        assertFalse(records.isEmpty());
+        assertTrue(records.stream().allMatch(record -> record.getThrown() == null));
+        String text = records.stream().map(LogRecord::getMessage).reduce("", String::concat);
+        assertFalse(text.contains(tempDir.toString()));
+        assertFalse(text.contains(material.password()));
+        assertFalse(text.contains("private-key"));
     }
 }

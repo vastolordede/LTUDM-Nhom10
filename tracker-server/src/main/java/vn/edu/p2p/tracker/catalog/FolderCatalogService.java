@@ -49,12 +49,12 @@ public final class FolderCatalogService {
         for (String directory : request.directories()) {
             if (!isSafeRelative(directory) || directory.length() > 1024
                     || !seen.add("dir:" + directory.toLowerCase(Locale.ROOT))) {
-                throw new FileCatalogException("Invalid or duplicate folder directory: " + directory);
+                throw new FileCatalogException("Invalid or duplicate folder directory");
             }
         }
         for (FolderEntryDto e : request.entries()) {
             if (!isSafeRelative(e.relativePath()) || !seen.add(e.relativePath().toLowerCase(Locale.ROOT))) {
-                throw new FileCatalogException("Invalid or duplicate path: " + e.relativePath());
+                throw new FileCatalogException("Invalid or duplicate folder path");
             }
         }
         try (Connection c = connectionFactory.open()) {
@@ -135,9 +135,15 @@ public final class FolderCatalogService {
         };
         String sql = """
                 SELECT g.group_id, g.group_name,
-                  (SELECT COUNT(*) FROM group_files x WHERE x.group_id = g.group_id) AS file_count,
-                  (SELECT COALESCE(SUM(f.file_size), 0) FROM group_files x
-                     JOIN files f ON f.file_id = x.file_id WHERE x.group_id = g.group_id) AS total_size,
+                  (SELECT COUNT(DISTINCT x.file_id) FROM group_files x
+                     JOIN peer_files pf ON pf.file_id = x.file_id AND pf.is_sharing = TRUE
+                     JOIN v_online_peers op ON op.peer_id = pf.peer_id
+                     WHERE x.group_id = g.group_id) AS file_count,
+                  (SELECT COALESCE(SUM(f.file_size), 0) FROM files f
+                    WHERE EXISTS (SELECT 1 FROM group_files x
+                      JOIN peer_files pf ON pf.file_id = x.file_id AND pf.is_sharing = TRUE
+                      JOIN v_online_peers op ON op.peer_id = pf.peer_id
+                      WHERE x.group_id = g.group_id AND x.file_id = f.file_id)) AS total_size,
                   (SELECT COUNT(*) FROM (
                      SELECT pf.peer_id FROM group_files x
                        JOIN peer_files pf ON pf.file_id = x.file_id AND pf.is_sharing = TRUE
@@ -145,12 +151,20 @@ public final class FolderCatalogService {
                       WHERE x.group_id = g.group_id
                       GROUP BY pf.peer_id
                      HAVING COUNT(DISTINCT x.file_id) =
-                            (SELECT COUNT(DISTINCT file_id) FROM group_files WHERE group_id = g.group_id)
+                            (SELECT COUNT(DISTINCT ax.file_id) FROM group_files ax
+                               JOIN peer_files apf ON apf.file_id = ax.file_id AND apf.is_sharing = TRUE
+                               JOIN v_online_peers aop ON aop.peer_id = apf.peer_id
+                              WHERE ax.group_id = g.group_id)
                    ) t) AS source_count,
                   (EXTRACT(EPOCH FROM g.created_at) * 1000)::bigint AS created_at_epoch,
                   (SELECT COUNT(*) FROM folder_download_sessions fd
                     WHERE fd.group_id = g.group_id) AS completed_downloads
-                FROM file_groups g WHERE g.group_name ILIKE ?
+                FROM file_groups g
+                WHERE g.group_name ILIKE ?
+                  AND EXISTS (SELECT 1 FROM group_files x
+                    JOIN peer_files pf ON pf.file_id = x.file_id AND pf.is_sharing = TRUE
+                    JOIN v_online_peers op ON op.peer_id = pf.peer_id
+                    WHERE x.group_id = g.group_id)
                 ORDER BY %s
                 LIMIT ? OFFSET ?""".formatted(orderBy);
         try (Connection c = connectionFactory.open(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -289,7 +303,11 @@ public final class FolderCatalogService {
             try (PreparedStatement ps = c.prepareStatement("""
                     SELECT x.file_id, x.relative_path, f.file_size, f.file_hash
                     FROM group_files x JOIN files f ON f.file_id = x.file_id
-                    WHERE x.group_id = ? ORDER BY x.relative_path""")) {
+                    WHERE x.group_id = ?
+                      AND EXISTS (SELECT 1 FROM peer_files pf
+                        JOIN v_online_peers op ON op.peer_id = pf.peer_id
+                        WHERE pf.file_id = x.file_id AND pf.is_sharing = TRUE)
+                    ORDER BY x.relative_path""")) {
                 ps.setLong(1, request.groupId());
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
@@ -298,13 +316,20 @@ public final class FolderCatalogService {
                     }
                 }
             }
+            if (files.isEmpty()) throw new FileCatalogException("Folder not found");
             List<String> directories = new ArrayList<>();
             try (PreparedStatement ps = c.prepareStatement("""
                     SELECT relative_path FROM folder_directories
                     WHERE group_id = ? ORDER BY relative_path""")) {
                 ps.setLong(1, request.groupId());
                 try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) directories.add(rs.getString(1));
+                    while (rs.next()) {
+                        String directory = rs.getString(1);
+                        if (files.stream().anyMatch(file ->
+                                file.relativePath().startsWith(directory + "/"))) {
+                            directories.add(directory);
+                        }
+                    }
                 }
             }
             return new FolderDetailResponse(request.groupId(), name, files, directories);

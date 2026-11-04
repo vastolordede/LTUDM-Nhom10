@@ -85,7 +85,7 @@ class MultiSourceTicketRefreshIntegrationTest {
                                                long bytesReceived, long totalBytes, double speed) {
                             clock.advance(Duration.ofSeconds(10));
                         }
-                    }, new AtomicBoolean(false));
+                    }, new AtomicBoolean(false), java.util.UUID.randomUUID(), metadata.fileHash());
 
             assertEquals("COMPLETED", result.status(), result.failureReason());
             assertEquals(FileHashUtil.sha256(seed),
@@ -128,7 +128,8 @@ class MultiSourceTicketRefreshIntegrationTest {
                     }, clock, Duration.ofSeconds(60));
 
             DownloadSessionResult result = engine.downloadFile(FILE_ID, List.of(source),
-                    tempDir.resolve("not-downloaded.bin"), null, new AtomicBoolean(false));
+                    tempDir.resolve("not-downloaded.bin"), null, new AtomicBoolean(false),
+                    java.util.UUID.randomUUID(), metadata.fileHash());
 
             assertEquals("FAILED", result.status());
             assertTrue(result.failureReason().startsWith("Download incomplete:"));

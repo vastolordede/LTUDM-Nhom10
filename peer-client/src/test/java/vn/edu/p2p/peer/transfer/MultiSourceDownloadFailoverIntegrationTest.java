@@ -57,7 +57,8 @@ class MultiSourceDownloadFailoverIntegrationTest {
 
             DownloadSessionResult result = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
                     engine.downloadFile(FILE_ID, seeds.sources(), scenario.target(),
-                            stopSeedAAfterK, new AtomicBoolean(false)));
+                            stopSeedAAfterK, new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                            scenario.metadata().fileHash()));
 
             assertEquals("COMPLETED", result.status());
             assertEquals(scenario.metadata().pieceCount(), result.sourceStats().stream()
@@ -89,7 +90,8 @@ class MultiSourceDownloadFailoverIntegrationTest {
 
             DownloadSessionResult result = assertTimeoutPreemptively(Duration.ofSeconds(10), () ->
                     engine.downloadFile(FILE_ID, seeds.sources(), scenario.target(),
-                            stopAfterK, new AtomicBoolean(false)));
+                            stopAfterK, new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                            scenario.metadata().fileHash()));
 
             assertEquals("FAILED", result.status());
             assertTrue(result.failureReason().contains("incomplete"));
@@ -135,6 +137,22 @@ class MultiSourceDownloadFailoverIntegrationTest {
             assertFalse(Files.exists(rejectedTarget),
                     "A catalog hash mismatch must not leave a file at the requested destination");
         }
+    }
+
+    @Test
+    @org.junit.jupiter.api.Timeout(value = 2, unit = TimeUnit.SECONDS)
+    void missingTrustedCatalogHashIsRejected() {
+        long downloadFileOverloads = java.util.Arrays.stream(
+                        MultiSourceDownloadEngine.class.getDeclaredMethods())
+                .filter(method -> method.getName().equals("downloadFile"))
+                .count();
+        assertEquals(1, downloadFileOverloads,
+                "Only the trusted-catalog-hash download entry point should be available");
+
+        MultiSourceDownloadEngine engine = engine(new LocalFileRegistry());
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> engine.downloadFile(FILE_ID, List.of(), tempDir.resolve("missing-hash.bin"),
+                        null, new AtomicBoolean(false), java.util.UUID.randomUUID(), null));
     }
 
     private Scenario createScenario(String targetName) throws Exception {

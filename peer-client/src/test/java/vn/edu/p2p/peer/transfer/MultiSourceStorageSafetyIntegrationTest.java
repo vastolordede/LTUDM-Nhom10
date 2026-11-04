@@ -113,7 +113,8 @@ class MultiSourceStorageSafetyIntegrationTest {
                                 }
                             }
                         },
-                        new AtomicBoolean(false)
+                        new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                        fixture.metadata().fileHash()
                 );
 
                 assertEquals("FAILED", result.status());
@@ -153,7 +154,7 @@ class MultiSourceStorageSafetyIntegrationTest {
                 server.listeningPort(), System.currentTimeMillis(),
                 PeerTestTickets.issue(trackerKeys.getPrivate(), FILE_ID, REQUESTER_ID,
                         UPLOADER_ID, Instant.now()));
-        return new TransferFixture(content, sourcePath, source, socketFactory, server);
+        return new TransferFixture(content, sourcePath, metadata, source, socketFactory, server);
     }
 
     private DownloadSessionResult download(TransferFixture fixture, Path target,
@@ -166,7 +167,8 @@ class MultiSourceStorageSafetyIntegrationTest {
                 PieceScheduler.Strategy.ROUND_ROBIN
         );
         return engine.downloadFile(FILE_ID, List.of(fixture.source()), target,
-                listener, new AtomicBoolean(false));
+                listener, new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                fixture.metadata().fileHash());
     }
 
     private void assertNoTemporaryFiles() throws IOException {
@@ -177,7 +179,7 @@ class MultiSourceStorageSafetyIntegrationTest {
         }
     }
 
-    private record TransferFixture(byte[] content, Path sourcePath, FileSourceInfo source,
+    private record TransferFixture(byte[] content, Path sourcePath, FileMetadata metadata, FileSourceInfo source,
                                    PeerP2pSocketFactory socketFactory, PeerUploadServer server) {
     }
 }

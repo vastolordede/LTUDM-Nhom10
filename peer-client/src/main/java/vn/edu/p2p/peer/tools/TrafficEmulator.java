@@ -131,8 +131,9 @@ public final class TrafficEmulator {
                         throw new java.io.IOException("Not all virtual peers published within 30 seconds");
                     }
                     FileSourceClientService sourceService = new FileSourceClientService(connection);
-                    var available = sourceService.findSources(
-                            session.sessionId(), commonFileId).sources();
+                    var sourceResponse = sourceService.findSources(
+                            session.sessionId(), commonFileId);
+                    var available = sourceResponse.sources();
                     if (available.isEmpty()) {
                         throw new java.io.IOException("No online peer source for emulator download");
                     }
@@ -146,7 +147,8 @@ public final class TrafficEmulator {
                             (refreshFileId, source) -> sourceService.refreshTicket(
                                     session.sessionId(), refreshFileId, source.peerId()));
                     var result = engine.downloadFile(commonFileId, available, target,
-                            null, new AtomicBoolean(false));
+                            null, new AtomicBoolean(false), java.util.UUID.randomUUID(),
+                            sourceResponse.fileHash());
                     if (!"COMPLETED".equals(result.status()) || !FileHashUtil.sha256(target)
                             .equalsIgnoreCase(FileHashUtil.sha256(common))) {
                         throw new java.io.IOException("Emulated download failed SHA/transfer check: "

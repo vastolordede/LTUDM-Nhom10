@@ -53,7 +53,8 @@ public final class TrackerConnectionDiagnostics {
                         + "). Hãy xác nhận hai đầu cùng cấu hình TCP/TLS.";
             }
         } catch (Exception e) {
-            LOG.log(Level.FINE, "Tracker TCP/TLS diagnostic failed", e);
+            LOG.log(Level.FINE, "Tracker TCP/TLS diagnostic failed: "
+                    + classify(e, config));
             return explain(e, config);
         }
     }

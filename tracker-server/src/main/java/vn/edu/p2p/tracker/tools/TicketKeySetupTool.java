@@ -26,7 +26,7 @@ public final class TicketKeySetupTool {
         Path publicPath = dir.resolve("tracker-public.key.b64");
         if (Files.exists(privatePath, LinkOption.NOFOLLOW_LINKS)
                 || Files.exists(publicPath, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IllegalStateException("Key files already exist; do not rotate keys implicitly: " + dir);
+            throw new IllegalStateException("Key files already exist; do not rotate keys implicitly.");
         }
         setPosixOwnerOnly(dir, true);
         KeyPair pair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
@@ -38,8 +38,8 @@ public final class TicketKeySetupTool {
         Files.writeString(publicPath, publicBase64 + System.lineSeparator(), StandardCharsets.US_ASCII,
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
         setPosixOwnerOnly(publicPath, false);
-        System.out.println("Tracker PRIVATE key stored (DO NOT share): " + privatePath);
-        System.out.println("Distribute ONLY the PUBLIC file to trusted Peer machines: " + publicPath);
+        System.out.println("Tracker PRIVATE key stored (DO NOT share): " + privatePath.getFileName());
+        System.out.println("Distribute ONLY the PUBLIC file to trusted Peer machines: " + publicPath.getFileName());
         System.out.println("Public key fingerprint SHA-256 (base64): " + fingerprint(pair.getPublic().getEncoded()));
         System.out.println("Copy public file to ~/.fileshare-p2p/tracker-public.key.b64 on each peer.");
         System.out.println("On Windows, verify that the private file ACL permits only your user.");

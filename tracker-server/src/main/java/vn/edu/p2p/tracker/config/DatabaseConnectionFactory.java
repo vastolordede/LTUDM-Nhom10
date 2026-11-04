@@ -39,8 +39,8 @@ public final class DatabaseConnectionFactory {
                 "users", "peers", "peer_sessions", "files", "file_pieces", "peer_files",
                 "share_events", "transfer_sessions", "transfer_sources", "file_aliases",
                 "file_groups", "group_files", "folder_download_sessions", "folder_download_evidence",
-                "folder_directories",
-                "v_online_peers", "v_file_sources"
+                "folder_directories", "schema_version",
+                "v_peer_ranking", "v_online_peers", "v_file_sources"
         };
         try (Connection connection = open();
              PreparedStatement query = connection.prepareStatement("SELECT to_regclass(?)")) {
@@ -48,9 +48,9 @@ public final class DatabaseConnectionFactory {
                 query.setString(1, "public." + table);
                 try (ResultSet rs = query.executeQuery()) {
                     if (!rs.next() || rs.getString(1) == null) {
-                        throw new SQLException("Database migration is missing: " + table
-                                + ". Apply schema.sql and migration_v2..v8 in order.\n"
-                                + "Do NOT re-run non-idempotent migrations on populated DBs.");
+                        throw new SQLException("Thiếu quan hệ schema bắt buộc: " + table
+                                + ". Chạy schema.sql và migration_v2..v9 theo thứ tự, "
+                                + "sau đó chạy verify_schema.sql.");
                     }
                 }
             }
@@ -60,9 +60,18 @@ public final class DatabaseConnectionFactory {
                       AND column_name = 'publish_status'""")) {
                 try (ResultSet rs = check.executeQuery()) {
                     if (!rs.next() || rs.getLong(1) != 1) {
-                        throw new SQLException("Migration v2 required: files.publish_status is missing");
+                        throw new SQLException("Thiếu cột files.publish_status (migration_v2).");
                     }
                 }
+            }
+        }
+        try (Connection connection = open();
+             PreparedStatement query = connection.prepareStatement(
+                     "SELECT version FROM public.schema_version WHERE singleton = TRUE");
+             ResultSet rs = query.executeQuery()) {
+            if (!rs.next() || rs.getInt(1) != 9) {
+                throw new SQLException("Schema database chưa được xác minh phiên bản 9. "
+                        + "Chạy schema.sql, migration_v2..v9 đúng thứ tự rồi chạy verify_schema.sql.");
             }
         }
     }

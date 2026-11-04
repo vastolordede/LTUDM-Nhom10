@@ -19,19 +19,24 @@ corresponding PUBLIC verifier key securely on every Peer.
    VPS secret manager or a private, untracked local environment.
 2. Start only DB: `docker compose -f infra/staging/compose.yml up -d postgres`.
 3. From repo root, pipe **each** `database/schema.sql`, then `migration_v2.sql`
-   through `migration_v8.sql` into `docker compose ... exec -T postgres
+   through `migration_v9.sql` into `docker compose ... exec -T postgres
    psql -v ON_ERROR_STOP=1 -U fileshare -d fileshare_p2p`. Stop immediately
    on an error. Run `database/verify_schema.sql` before first Tracker boot.
 4. `docker compose -f infra/staging/compose.yml up --build -d tracker`.
    Preserve logs, inspect TLS handshake, firewall and restart policy.
 
-**Existing DB:** do not rerun schema/migrations. Backup using `pg_dump -Fc`
-into a private directory with restricted permissions, rehearse `pg_restore`
-into a separate disposable DB, compare schema/data and test rollback.
-Do not expose backup files over HTTP or commit them. On rollback, restore
-previous tracker version and **compatible DB snapshot** together; older
-binaries may not support new columns. Keep each migration/backup aligned
-with the actual merged PR IDs in the checklist.
+**Existing DB:** do not rerun schema/migrations. Set `PGHOST`, `PGPORT`,
+`PGDATABASE`, `PGUSER`, and `PGPASSWORD` in the protected operator environment;
+use `tools/postgres_backup_restore.ps1 -Operation Backup` to create a custom-format
+backup outside the repository. Rehearse restore into a separate empty database and
+compare schema/data before maintenance.
+Do not expose backup files over HTTP or commit them. On rollback, restore the
+pre-upgrade backup into a separate empty database, point the previous Tracker
+version at that database, then run `database/verify_schema.sql` with the matching
+schema version. There are no down migrations; do not point the current v9 Tracker
+at a pre-v9 snapshot. Keep each migration/backup aligned with the actual merged
+PR IDs in the checklist. Schedule daily backups while the service is active and
+one before every migration; test a disposable restore at least monthly.
 
 Critical E2E before public exposure: trustworthy certificate/SAN on Tracker
 and Peer, wrong truststore refusal, two-network Direct/NAT/Relay with 3 Peers,

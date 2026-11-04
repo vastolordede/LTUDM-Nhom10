@@ -106,33 +106,6 @@ public final class MultiSourceDownloadEngine {
         this.ticketRefreshSafetyWindow = ticketRefreshSafetyWindow;
     }
 
-    /**
-     * Thực hiện phiên tải file từ 1 hoặc nhiều Peer nguồn song song.
-     */
-    public DownloadSessionResult downloadFile(
-            long fileId,
-            List<FileSourceInfo> candidateSources,
-            Path targetFilePath,
-            DownloadProgressListener progressListener,
-            AtomicBoolean cancelSignal
-    ) {
-        return downloadFile(fileId, candidateSources, targetFilePath, progressListener, cancelSignal,
-                UUID.randomUUID(), null);
-    }
-
-    /** Use the same ID for Tracker DOWNLOADING and the terminal transfer result. */
-    public DownloadSessionResult downloadFile(
-            long fileId,
-            List<FileSourceInfo> candidateSources,
-            Path targetFilePath,
-            DownloadProgressListener progressListener,
-            AtomicBoolean cancelSignal,
-            UUID transferId
-    ) {
-        return downloadFile(fileId, candidateSources, targetFilePath, progressListener,
-                cancelSignal, transferId, null);
-    }
-
     /** Strict entry point: expected SHA-256 is obtained from Tracker file catalog, not Peer. */
     public DownloadSessionResult downloadFile(
             long fileId, List<FileSourceInfo> candidateSources, Path targetFilePath,
@@ -140,7 +113,7 @@ public final class MultiSourceDownloadEngine {
             UUID transferId, String expectedCatalogHash
     ) {
         Objects.requireNonNull(transferId, "transferId");
-        if (expectedCatalogHash != null && !expectedCatalogHash.matches("[a-fA-F0-9]{64}")) {
+        if (expectedCatalogHash == null || !expectedCatalogHash.matches("[a-fA-F0-9]{64}")) {
             throw new IllegalArgumentException("Invalid Tracker catalog SHA-256");
         }
         Instant startedAt = Instant.now();

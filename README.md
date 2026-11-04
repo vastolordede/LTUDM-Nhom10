@@ -19,7 +19,7 @@ FileShare-P2P/
 ├── common/          # DTO, protocol, TLS helper
 ├── tracker-server/  # Tracker TCP server
 ├── peer-client/     # JavaFX GUI, upload server, downloader
-├── database/        # schema.sql, migration_v2..v9.sql
+├── database/        # schema.sql, migration_v2..v9.sql, verify_schema.sql
 └── docs/
 ```
 
@@ -49,7 +49,7 @@ psql -U postgres -d fileshare_p2p -f database/migration_v9.sql
 psql -U postgres -d fileshare_p2p -f database/verify_schema.sql
 ```
 
-Chạy `schema.sql` rồi `migration_v2.sql` đến `migration_v9.sql` **theo thứ tự** trên DB mới. Trên DB đã có dữ liệu, chỉ chạy migration **chưa được áp dụng**; trước tiên sao lưu dữ liệu.
+Chạy các script trên **theo thứ tự**. `verify_schema.sql` là bước cuối: kiểm tra bảng/cột/index/constraint và dữ liệu metadata, sau đó ghi `schema_version = 9`. Tracker từ chối khởi động nếu chưa có marker này. Với DB có dữ liệu, sao lưu trước và chỉ chạy migration còn thiếu; v2/v4 không an toàn để chạy lại. Xem [hướng dẫn setup/migration PostgreSQL](docs/database_bootstrap_v6.md) và lưu ý checksum manifest không chứng minh migration đã được áp dụng.
 
 ## Cấu hình
 

@@ -94,7 +94,9 @@ class MultiSourceDownloadResumeIntegrationTest {
                     List.of(source),
                     targetFile,
                     null,
-                    new AtomicBoolean(false)
+                    new AtomicBoolean(false),
+                    java.util.UUID.randomUUID(),
+                    metadata.fileHash()
             );
             return new ScenarioResult(session, metadata, targetFile, seed.totalBytesUploaded());
         }

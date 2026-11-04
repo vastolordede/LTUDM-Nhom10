@@ -11,21 +11,34 @@ import vn.edu.p2p.common.dto.FolderShareRequest;
 import vn.edu.p2p.common.dto.FolderShareResponse;
 import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
 import vn.edu.p2p.common.dto.RecordFolderDownloadResponse;
+import vn.edu.p2p.common.dto.UnshareFileRequest;
+import vn.edu.p2p.common.dto.UnshareFileResponse;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ResponseStatus;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.transfer.LocalFileRegistry;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 public final class FolderClientService {
-    private final TrackerConnection connection;
+    @FunctionalInterface
+    interface RequestSender {
+        MessageEnvelope request(MessageEnvelope request) throws IOException;
+    }
+
+    private final RequestSender requestSender;
 
     public FolderClientService(TrackerConnection connection) {
-        this.connection = connection;
+        this(connection::request);
+    }
+
+    FolderClientService(RequestSender requestSender) {
+        this.requestSender = requestSender;
     }
 
     public FolderShareResponse share(String sessionId, String groupName, List<FolderEntryDto> entries)
@@ -72,11 +85,42 @@ public final class FolderClientService {
                 FolderDetailResponse.class);
     }
 
+    /** Stops this peer's share of each file currently listed in the folder. */
+    public int unshareFolder(String sessionId, long groupId, LocalFileRegistry fileRegistry)
+            throws ShareFileClientException {
+        Objects.requireNonNull(fileRegistry, "fileRegistry");
+        FolderDetailResponse folder = detail(sessionId, groupId);
+        int unshared = 0;
+        for (long fileId : folder.files().stream().mapToLong(file -> file.fileId()).distinct().toArray()) {
+            unshareFile(sessionId, fileId);
+            var registered = fileRegistry.find(fileId);
+            if (registered.isPresent()) {
+                try {
+                    SharedFilesStore store = SharedFilesStore.current();
+                    if (store != null) store.removeByHash(registered.get().metadata().fileHash());
+                } catch (IOException e) {
+                    throw new ShareFileClientException(
+                            "File unshared, but local share state could not be removed.", e);
+                } finally {
+                    fileRegistry.unregisterFile(fileId);
+                }
+            }
+            unshared++;
+        }
+        return unshared;
+    }
+
+    private void unshareFile(String sessionId, long fileId) throws ShareFileClientException {
+        call(MessageType.UNSHARE_FILE_REQUEST, MessageType.UNSHARE_FILE_RESPONSE,
+                ProtocolCodec.toPayload(new UnshareFileRequest(sessionId, fileId)),
+                UnshareFileResponse.class);
+    }
+
     private <T> T call(MessageType reqType, MessageType respType, JsonNode payload, Class<T> cls)
             throws ShareFileClientException {
         MessageEnvelope request = MessageEnvelope.request(reqType, UUID.randomUUID().toString(), payload);
         try {
-            MessageEnvelope response = connection.request(request);
+            MessageEnvelope response = requestSender.request(request);
             if (response.status() == ResponseStatus.ERROR) {
                 throw new ShareFileClientException(response.errorCode() + ": " + response.message());
             }
@@ -88,4 +132,5 @@ public final class FolderClientService {
             throw new ShareFileClientException("Network error: " + e.getMessage(), e);
         }
     }
+
 }

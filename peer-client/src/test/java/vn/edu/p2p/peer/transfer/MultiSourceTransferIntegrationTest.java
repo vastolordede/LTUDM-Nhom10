@@ -103,7 +103,9 @@ class MultiSourceTransferIntegrationTest {
                     sources,
                     targetFile,
                     null,
-                    new AtomicBoolean(false)
+                    new AtomicBoolean(false),
+                    java.util.UUID.randomUUID(),
+                    metadata.fileHash()
             );
 
             assertEquals("COMPLETED", result.status());
