@@ -17,6 +17,7 @@ javafx {
 dependencies {
     implementation project(':common')
 
+    testImplementation project(':tracker-server')
     testImplementation platform('org.junit:junit-bom:5.10.3')
     testImplementation 'org.junit.jupiter:junit-jupiter'
 }
