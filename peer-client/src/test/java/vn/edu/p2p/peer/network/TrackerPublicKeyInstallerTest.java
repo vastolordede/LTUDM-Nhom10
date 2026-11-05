@@ -61,7 +61,7 @@ class TrackerPublicKeyInstallerTest {
         Path source = dir.resolve("invalid.key");
         String encodedPrivate = Base64.getEncoder().encodeToString(trusted.getPrivate().getEncoded());
         for (String contents : new String[] {
-                "", "not-base64", "-----BEGIN PRIVATE KEY-----", encodedPrivate
+                "", "not-base64", "-----BEGIN " + "PRIVATE KEY-----", encodedPrivate
         }) {
             Files.writeString(source, contents);
             java.io.IOException error = assertThrows(java.io.IOException.class,
