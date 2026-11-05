@@ -1,6 +1,8 @@
 package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.peer.network.RendezvousClient;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
+import vn.edu.p2p.peer.transfer.ConnectionPlanner.ConnectivityStatusModel;
 
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -11,6 +13,7 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -34,6 +37,7 @@ public final class RelayAgent implements AutoCloseable {
 
     private volatile Socket control;
     private volatile Thread thread;
+    private volatile BiConsumer<ConnectivityStatusModel.RelayState, String> statusListener;
 
     public RelayAgent(RendezvousClient client, String sessionId, PeerUploadServer uploadServer) {
         this.client = client;
@@ -41,11 +45,17 @@ public final class RelayAgent implements AutoCloseable {
         this.uploadServer = uploadServer;
     }
 
+    public void setStatusListener(
+            BiConsumer<ConnectivityStatusModel.RelayState, String> listener) {
+        statusListener = listener;
+    }
+
     public synchronized void start() {
         if (closed.get()) return;
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        report(ConnectivityStatusModel.RelayState.CONNECTING, "đang kết nối tới Tracker");
         thread = new Thread(this::runLoop, "peer-relay-agent");
         thread.setDaemon(true);
         thread.start();
@@ -60,6 +70,7 @@ public final class RelayAgent implements AutoCloseable {
                     control = channel;
                 }
                 delay = 3_000;
+                report(ConnectivityStatusModel.RelayState.READY, "Relay đã đăng ký với Tracker");
                 LOG.info("Relay channel registered with Tracker");
                 DataInputStream in = new DataInputStream(channel.getInputStream());
                 while (running.get()) {
@@ -77,6 +88,8 @@ public final class RelayAgent implements AutoCloseable {
                 }
             } catch (IOException e) {
                 if (running.get() && !closed.get()) {
+                    report(ConnectivityStatusModel.RelayState.ERROR,
+                            TrackerConnectionDiagnostics.explain(e));
                     LOG.log(Level.INFO, "Relay channel lost, retry in " + delay + " ms: " + e.getMessage());
                 }
             }
@@ -104,6 +117,8 @@ public final class RelayAgent implements AutoCloseable {
                 }
                 uploadServer.serveRelayedSocket(data); // upload server owns socket after handoff
                 data = null;
+                report(ConnectivityStatusModel.RelayState.READY,
+                        "Relay đã chuyển kết nối tới Peer upload");
             }
         } catch (IOException | RuntimeException e) {
             if (data != null) {
@@ -113,11 +128,17 @@ public final class RelayAgent implements AutoCloseable {
         }
     }
 
+    private void report(ConnectivityStatusModel.RelayState state, String reason) {
+        BiConsumer<ConnectivityStatusModel.RelayState, String> listener = statusListener;
+        if (listener != null) listener.accept(state, reason);
+    }
+
     @Override
     public void close() {
         synchronized (lifecycleLock) {
             if (!closed.compareAndSet(false, true)) return;
             running.set(false);
+            report(ConnectivityStatusModel.RelayState.STOPPED, "Relay đã dừng");
             client.close();
             Socket c = control;
             control = null;

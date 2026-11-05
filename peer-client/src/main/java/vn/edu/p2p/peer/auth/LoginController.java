@@ -27,13 +27,11 @@ import vn.edu.p2p.peer.session.HeartbeatCoordinator;
 import vn.edu.p2p.peer.session.HeartbeatListener;
 import vn.edu.p2p.peer.session.PeerConnectionState;
 import vn.edu.p2p.peer.transfer.PeerP2pSocketConfig;
+import vn.edu.p2p.peer.transfer.ConnectionPlanner.ConnectivityStatusModel;
 import vn.edu.p2p.peer.transfer.TransferDashboardWindow;
 import vn.edu.p2p.peer.share.SharedFilesStore;
 
-import java.time.Instant;
 import java.time.Duration;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -44,10 +42,6 @@ public final class LoginController {
     private static final Logger LOG = Logger.getLogger(LoginController.class.getName());
     private static final Duration TRACKER_LOGOUT_TIMEOUT = Duration.ofSeconds(3);
     private static final Duration APP_SHUTDOWN_TIMEOUT = Duration.ofSeconds(4);
-
-    private static final DateTimeFormatter TIME_FORMAT =
-            DateTimeFormatter.ofPattern("HH:mm:ss")
-                    .withZone(ZoneId.systemDefault());
 
     @FXML
     private TextField usernameField;
@@ -95,6 +89,8 @@ public final class LoginController {
     private String initializationError;
     private TrackerConnection trackerConnection;
     private TransferDashboardWindow transferDashboard;
+    private final ConnectivityStatusModel connectivityStatus = new ConnectivityStatusModel();
+    private ConnectivityStatusModel.Subscription connectivitySubscription;
     private boolean logoutInProgress;
     private boolean shuttingDown;
     private volatile long loggedInGeneration;
@@ -106,7 +102,14 @@ public final class LoginController {
     private void initialize() {
         listeningPortField.setText("7001");
         openDashboardButton.setDisable(true);
-        connectionStatusLabel.setText("Tracker: chưa đăng nhập");
+        connectivitySubscription = connectivityStatus.subscribe(snapshot ->
+                Platform.runLater(() -> {
+                    if (!shuttingDown && connectionStatusLabel != null) {
+                        connectionStatusLabel.setText(snapshot.trackerSummary());
+                    }
+                }));
+        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
+                "chưa đăng nhập");
 
         try {
             trackerDefaults = PeerSettings.load();
@@ -279,7 +282,8 @@ public final class LoginController {
 
         setBusy(true);
         statusLabel.setText("Đang kết nối Tracker...");
-        connectionStatusLabel.setText("Tracker: CONNECTING");
+        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.CHECKING,
+                "đang kết nối");
         long attemptGeneration = AuthClientService.sessionGeneration();
 
         CompletableFuture
@@ -310,7 +314,8 @@ public final class LoginController {
                             logAuthFailure("login", cause, attemptConfig);
                             statusLabel.setText("Đăng nhập thất bại: "
                                     + safeAuthFailure(cause, attemptConfig, true));
-                            connectionStatusLabel.setText("Tracker: OFFLINE");
+                            connectivityStatus.tracker(trackerFailureState(cause),
+                                    safeAuthFailure(cause, attemptConfig, true));
                             return;
                         }
 
@@ -406,7 +411,8 @@ public final class LoginController {
                 "Đăng nhập thành công. Peer=" + shortId(session.peerId())
                         + " | Session=" + shortId(session.sessionId())
         );
-        connectionStatusLabel.setText("Tracker: ONLINE");
+        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.ONLINE,
+                "đang hoạt động");
 
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.start(session);
@@ -428,7 +434,8 @@ public final class LoginController {
         try {
             if (transferDashboard == null) {
                 int port = Integer.parseInt(listeningPortField.getText().trim());
-                transferDashboard = new TransferDashboardWindow(port, PeerP2pSocketConfig.fromEnvironment());
+                transferDashboard = new TransferDashboardWindow(port,
+                        PeerP2pSocketConfig.fromEnvironment(), connectivityStatus);
                 transferDashboard.setOnLogoutRequested(this::onLogout);
             }
             transferDashboard.show(trackerConnection, session.sessionId(), session.peerId(),
@@ -457,7 +464,8 @@ public final class LoginController {
         registerButton.setDisable(false);
         openDashboardButton.setDisable(true);
         statusLabel.setText(message);
-        connectionStatusLabel.setText("Tracker: LOGGED OUT");
+        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
+                "đã đăng xuất");
     }
 
     private void onSessionExpired(String message) {
@@ -482,6 +490,11 @@ public final class LoginController {
     public void shutdown() {
         if (shuttingDown) return;
         shuttingDown = true;
+        ConnectivityStatusModel.Subscription subscription = connectivitySubscription;
+        connectivitySubscription = null;
+        if (subscription != null) subscription.close();
+        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
+                "ứng dụng đã đóng");
         long deadline = System.nanoTime() + APP_SHUTDOWN_TIMEOUT.toNanos();
         ClientSession session = beginLocalLogout();
         if (heartbeatCoordinator != null) {
@@ -503,6 +516,8 @@ public final class LoginController {
         if (authClientService != null) {
             authClientService.invalidateLocalSession();
         }
+        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
+                "đã đăng xuất");
         closeTransferDashboard();
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.stop();
@@ -566,6 +581,20 @@ public final class LoginController {
         };
     }
 
+    private static ConnectivityStatusModel.TrackerState trackerFailureState(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof AuthClientException authFailure) {
+                return switch (authFailure.errorCode()) {
+                    case "NETWORK_ERROR" -> ConnectivityStatusModel.TrackerState.OFFLINE;
+                    case "LOCAL_KEY_ERROR", "LOCAL_IDENTITY_ERROR" ->
+                            ConnectivityStatusModel.TrackerState.CHECKING;
+                    default -> ConnectivityStatusModel.TrackerState.ONLINE;
+                };
+            }
+        }
+        return ConnectivityStatusModel.TrackerState.OFFLINE;
+    }
+
     private static String shortId(String id) {
         return id == null || id.length() <= 8 ? id : id.substring(0, 8);
     }
@@ -575,8 +604,8 @@ public final class LoginController {
         public void onHeartbeat(HeartbeatResponse response) {
             long generation = loggedInGeneration;
             postToCurrentUi(generation, () -> {
-                connectionStatusLabel.setText("Tracker: ONLINE • heartbeat "
-                        + TIME_FORMAT.format(Instant.ofEpochMilli(response.serverTimeEpochMillis())));
+                connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.ONLINE,
+                        "đang hoạt động");
             });
         }
 
@@ -586,14 +615,15 @@ public final class LoginController {
             postToCurrentUi(generation, () -> {
                 switch (state) {
                     case ONLINE -> {
-                        if (!connectionStatusLabel.getText().startsWith("Tracker: ONLINE •")) {
-                            connectionStatusLabel.setText("Tracker: ONLINE");
-                        }
+                        connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.ONLINE,
+                                "đang hoạt động");
                     }
-                    case CONNECTION_LOST ->
-                            connectionStatusLabel.setText("Tracker: CONNECTION LOST");
+                    case CONNECTION_LOST -> connectivityStatus.tracker(
+                            ConnectivityStatusModel.TrackerState.OFFLINE,
+                            "mất kết nối; đang thử lại");
                     case SESSION_EXPIRED -> onSessionExpired(message);
-                    case LOGGED_OUT -> connectionStatusLabel.setText("Tracker: LOGGED OUT");
+                    case LOGGED_OUT -> connectivityStatus.tracker(
+                            ConnectivityStatusModel.TrackerState.LOGGED_OUT, "đã đăng xuất");
                 }
             });
         }

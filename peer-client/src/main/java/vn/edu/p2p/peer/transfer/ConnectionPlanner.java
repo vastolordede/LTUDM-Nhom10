@@ -2,6 +2,7 @@ package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.peer.network.RendezvousClient;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
 
 import java.io.IOException;
 import javax.net.ssl.SSLException;
@@ -10,12 +11,137 @@ import java.net.Socket;
 import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 /** D78-D80: thử kết nối trực tiếp, thất bại thì chuyển qua relay, báo chế độ kết nối. */
 public final class ConnectionPlanner {
     public enum Mode { LAN, DIRECT, RELAY }
+
+    /** Shared, observable connectivity state for one login session. */
+    public static final class ConnectivityStatusModel {
+        public enum TrackerState { CHECKING, ONLINE, OFFLINE, LOGGED_OUT }
+        public enum DirectState { CHECKING, LAN, INTERNET_DIRECT, UNAVAILABLE }
+        public enum RelayState { DISABLED, CONNECTING, READY, IN_USE, ERROR, STOPPED }
+
+        @FunctionalInterface
+        public interface Subscription extends AutoCloseable {
+            @Override
+            void close();
+        }
+
+        public record Snapshot(
+                TrackerState tracker,
+                DirectState direct,
+                RelayState relay,
+                String trackerReason,
+                String directReason,
+                String relayReason
+        ) {
+            public String summary() {
+                return "Tracker: " + trackerReason + " | LAN/Internet Direct: " + directReason
+                        + " | Relay: " + relayReason;
+            }
+
+            public String trackerSummary() {
+                return "Tracker: " + trackerReason;
+            }
+        }
+
+        private final java.util.concurrent.CopyOnWriteArrayList<Consumer<Snapshot>> listeners =
+                new java.util.concurrent.CopyOnWriteArrayList<>();
+        private volatile Snapshot current = new Snapshot(TrackerState.CHECKING,
+                DirectState.CHECKING, RelayState.DISABLED, "đang kiểm tra",
+                "đang kiểm tra", "đã tắt");
+
+        public Snapshot snapshot() {
+            return current;
+        }
+
+        public synchronized Subscription subscribe(Consumer<Snapshot> listener) {
+            Objects.requireNonNull(listener, "listener");
+            listeners.add(listener);
+            listener.accept(current);
+            return () -> listeners.remove(listener);
+        }
+
+        public void tracker(TrackerState state, String reason) {
+            Objects.requireNonNull(state, "state");
+            if (state == TrackerState.LOGGED_OUT) {
+                update(previous -> new Snapshot(state, DirectState.CHECKING, RelayState.STOPPED,
+                        safeReason(reason), "chưa đăng nhập", "đã dừng"));
+                return;
+            }
+            update(previous -> new Snapshot(state, previous.direct(), previous.relay(),
+                    safeReason(reason), previous.directReason(), previous.relayReason()));
+        }
+
+        public void directProbe(boolean reachable) {
+            update(previous -> new Snapshot(previous.tracker(),
+                    reachable ? DirectState.INTERNET_DIRECT : DirectState.UNAVAILABLE,
+                    previous.relay(), previous.trackerReason(),
+                    reachable ? "địa chỉ công khai có thể truy cập"
+                            : "NAT/firewall chưa cho phép kết nối trực tiếp",
+                    previous.relayReason()));
+        }
+
+        public void directChecking() {
+            update(previous -> new Snapshot(previous.tracker(), DirectState.CHECKING,
+                    previous.relay(), previous.trackerReason(), "đang kiểm tra",
+                    previous.relayReason()));
+        }
+
+        public void directMode(Mode mode) {
+            Objects.requireNonNull(mode, "mode");
+            update(previous -> {
+                DirectState state = switch (mode) {
+                    case LAN -> DirectState.LAN;
+                    case DIRECT -> DirectState.INTERNET_DIRECT;
+                    case RELAY -> previous.direct() == DirectState.CHECKING
+                            ? DirectState.UNAVAILABLE : previous.direct();
+                };
+                String reason = switch (mode) {
+                    case LAN -> "đã kết nối trong mạng LAN";
+                    case DIRECT -> "đã kết nối Internet Direct";
+                    case RELAY -> previous.directReason();
+                };
+                RelayState relay = mode == Mode.RELAY ? RelayState.IN_USE : previous.relay();
+                String relayReason = mode == Mode.RELAY
+                        ? "đang truyền qua Relay" : previous.relayReason();
+                return new Snapshot(previous.tracker(), state, relay,
+                        previous.trackerReason(), reason, relayReason);
+            });
+        }
+
+        public void directUnavailable(String reason) {
+            update(previous -> new Snapshot(previous.tracker(), DirectState.UNAVAILABLE,
+                    previous.relay(), previous.trackerReason(), safeReason(reason),
+                    previous.relayReason()));
+        }
+
+        public void relay(RelayState state, String reason) {
+            Objects.requireNonNull(state, "state");
+            update(previous -> new Snapshot(previous.tracker(), previous.direct(), state,
+                    previous.trackerReason(), previous.directReason(), safeReason(reason)));
+        }
+
+        private synchronized void update(UnaryOperator<Snapshot> transition) {
+            current = transition.apply(current);
+            for (Consumer<Snapshot> listener : listeners) {
+                listener.accept(current);
+            }
+        }
+
+        private static String safeReason(String reason) {
+            if (reason == null || reason.isBlank()) return "đang cập nhật";
+            return reason.length() <= 180 ? reason : reason.substring(0, 180);
+        }
+    }
 
     private static final long RELAY_PREFERENCE_MS = 60_000;
 
@@ -25,7 +151,10 @@ public final class ConnectionPlanner {
     private final Map<String, String> peerByEndpoint = new ConcurrentHashMap<>();
     private final Map<String, Long> relayUntil = new ConcurrentHashMap<>();
     private final Map<String, Mode> lastMode = new ConcurrentHashMap<>();
+    private final Set<Socket> activeRelaySockets = ConcurrentHashMap.newKeySet();
+    private final AtomicInteger activeRelayCount = new AtomicInteger();
     private volatile BiConsumer<String, Mode> listener;
+    private volatile ConnectivityStatusModel connectivityStatus;
 
     public ConnectionPlanner(PeerP2pSocketFactory direct, RendezvousClient rendezvous, String sessionId) {
         this.direct = direct;
@@ -35,6 +164,31 @@ public final class ConnectionPlanner {
 
     public void setListener(BiConsumer<String, Mode> listener) {
         this.listener = listener;
+    }
+
+    public void setConnectivityStatus(ConnectivityStatusModel connectivityStatus) {
+        this.connectivityStatus = connectivityStatus;
+    }
+
+    public void relayStatus(ConnectivityStatusModel.RelayState state, String reason) {
+        ConnectivityStatusModel status = connectivityStatus;
+        if (status == null) return;
+        if (state == ConnectivityStatusModel.RelayState.READY && activeRelayCount.get() > 0) {
+            status.relay(ConnectivityStatusModel.RelayState.IN_USE, "đang truyền qua Relay");
+        } else {
+            status.relay(state, reason);
+        }
+    }
+
+    public void connectionClosed(Socket socket) {
+        if (activeRelaySockets.remove(socket) && activeRelayCount.decrementAndGet() == 0) {
+            ConnectivityStatusModel status = connectivityStatus;
+            if (status != null
+                    && status.snapshot().relay() != ConnectivityStatusModel.RelayState.STOPPED
+                    && status.snapshot().relay() != ConnectivityStatusModel.RelayState.ERROR) {
+                status.relay(ConnectivityStatusModel.RelayState.READY, "Relay đã sẵn sàng");
+            }
+        }
     }
 
     /** Ghi nhớ peerId của từng endpoint để biết relay tới ai. */
@@ -58,13 +212,22 @@ public final class ConnectionPlanner {
             } catch (IOException e) {
                 // TLS certificate/identity failure is NOT a connectivity failure;
                 // trying Relay must never hide a failed authenticated handshake.
-                if (!mayRetryViaRelay(e)) throw e;
+                if (!mayRetryViaRelay(e)) {
+                    updateDirectFailure(TrackerConnectionDiagnostics.explain(e));
+                    throw e;
+                }
+                updateDirectFailure("Kết nối trực tiếp thất bại; đang thử đường kết nối thay thế.");
                 failure = e;
             }
         }
 
         String peerId = peerByEndpoint.get(key);
         if (rendezvous != null && peerId != null) {
+            ConnectivityStatusModel status = connectivityStatus;
+            if (status != null) {
+                status.relay(ConnectivityStatusModel.RelayState.CONNECTING,
+                        "đang thiết lập kết nối Relay");
+            }
             try {
                 Socket relay = rendezvous.connectViaRelay(sessionId, peerId, direct.readTimeoutMillis());
                 Socket socket;
@@ -75,10 +238,16 @@ public final class ConnectionPlanner {
                     throw tlsFail;
                 }
                 relayUntil.put(key, System.currentTimeMillis() + RELAY_PREFERENCE_MS);
+                activeRelaySockets.add(socket);
+                activeRelayCount.incrementAndGet();
                 report(key, Mode.RELAY);
                 return socket;
             } catch (IOException e) {
                 relayUntil.remove(key); // lần sau thử direct lại
+                if (status != null) {
+                    status.relay(ConnectivityStatusModel.RelayState.ERROR,
+                            TrackerConnectionDiagnostics.explain(e));
+                }
                 if (failure == null) {
                     failure = e;
                 } else {
@@ -106,6 +275,13 @@ public final class ConnectionPlanner {
             String peerId = peerByEndpoint.get(key);
             l.accept(peerId != null ? peerId : key, mode);
         }
+        ConnectivityStatusModel status = connectivityStatus;
+        if (status != null) status.directMode(mode);
+    }
+
+    private void updateDirectFailure(String reason) {
+        ConnectivityStatusModel status = connectivityStatus;
+        if (status != null) status.directUnavailable(reason);
     }
 
     public static boolean isPrivateAddress(String host) {

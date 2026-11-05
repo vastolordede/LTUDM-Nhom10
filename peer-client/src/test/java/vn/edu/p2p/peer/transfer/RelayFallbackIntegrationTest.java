@@ -78,6 +78,9 @@ class RelayFallbackIntegrationTest {
                     env.downloaderSession.toString(), env.targetPeer.toString(), FIXED_TIME);
             FileSourceInfo source = env.source(unusedPort(), ticket);
             ConnectionPlanner planner = env.newPlanner(env.peerSockets, env.downloaderSession);
+            ConnectionPlanner.ConnectivityStatusModel connectivity =
+                    new ConnectionPlanner.ConnectivityStatusModel();
+            planner.setConnectivityStatus(connectivity);
             planner.remember(List.of(source));
             AtomicReference<ConnectionPlanner.Mode> selectedMode = new AtomicReference<>();
             planner.setListener((peerId, mode) -> selectedMode.set(mode));
@@ -94,6 +97,8 @@ class RelayFallbackIntegrationTest {
 
             assertEquals("COMPLETED", result.status(), result.failureReason());
             assertEquals(ConnectionPlanner.Mode.RELAY, selectedMode.get());
+            assertEquals(ConnectionPlanner.ConnectivityStatusModel.RelayState.READY,
+                    connectivity.snapshot().relay());
             assertEquals(metadata.fileHash(), FileHashUtil.sha256(result.outputFile()));
             assertArrayEquals(content, Files.readAllBytes(result.outputFile()));
             assertEquals(0, activeSocketCount(downloadClient));
@@ -171,10 +176,15 @@ class RelayFallbackIntegrationTest {
             PeerP2pSocketFactory untrustedPeerSockets = new PeerP2pSocketFactory(
                     peerConfig(env.material, unrelated));
             ConnectionPlanner tlsPlanner = env.newPlanner(untrustedPeerSockets, env.downloaderSession);
+            ConnectionPlanner.ConnectivityStatusModel tlsConnectivity =
+                    new ConnectionPlanner.ConnectivityStatusModel();
+            tlsPlanner.setConnectivityStatus(tlsConnectivity);
             tlsPlanner.remember(List.of(validSource));
             IOException tlsFailure = assertThrows(IOException.class,
                     () -> tlsPlanner.open(validSource.ipAddress(), validSource.listeningPort()));
             assertTrue(hasCause(tlsFailure, SSLException.class), tlsFailure.toString());
+            assertEquals(ConnectionPlanner.ConnectivityStatusModel.RelayState.DISABLED,
+                    tlsConnectivity.snapshot().relay());
             assertRelayStateClean(env.rendezvousServer, env.initialRelaySlots);
 
             ConnectionPlanner ticketPlanner = env.newPlanner(env.peerSockets, env.downloaderSession);
