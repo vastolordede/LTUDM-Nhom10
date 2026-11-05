@@ -3,6 +3,8 @@ package vn.edu.p2p.common.security;
 import vn.edu.p2p.common.config.LocalEnv;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.PublicKey;
@@ -16,6 +18,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.OptionalLong;
+import java.util.Properties;
+import java.util.Locale;
 import java.util.logging.Logger;
 
 /**
@@ -33,6 +37,7 @@ public final class PeerAccessTickets {
     private static final int MAX_TICKET_LENGTH = 2048;
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String CLAIMS_VERSION = "3";
+    public static final String TRUSTED_FINGERPRINT_PROPERTY = "tracker.publicKeyFingerprint";
     private static final Logger LOG = Logger.getLogger(PeerAccessTickets.class.getName());
 
     private PeerAccessTickets() {}
@@ -66,11 +71,38 @@ public final class PeerAccessTickets {
 
     public static PublicKey decodePublicKey(String encoded) {
         try {
-            byte[] bytes = Base64.getDecoder().decode(Objects.requireNonNull(encoded));
+            String normalized = Objects.requireNonNull(encoded).strip()
+                    .replace('-', '+').replace('_', '/');
+            byte[] bytes = Base64.getDecoder().decode(normalized);
             return KeyFactory.getInstance("Ed25519").generatePublic(new X509EncodedKeySpec(bytes));
         } catch (Exception e) {
             throw new IllegalArgumentException("Invalid X509 Ed25519 public key", e);
         }
+    }
+
+    public static String fingerprint(PublicKey key) {
+        return PeerRequestProof.fingerprint(Objects.requireNonNull(key, "key"));
+    }
+
+    public static String formatFingerprint(String fingerprint) {
+        String normalized = normalizeFingerprint(fingerprint);
+        StringBuilder grouped = new StringBuilder(79);
+        for (int i = 0; i < normalized.length(); i += 4) {
+            if (i > 0) grouped.append(' ');
+            grouped.append(normalized, i, i + 4);
+        }
+        return grouped.toString().toUpperCase(Locale.ROOT);
+    }
+
+    public static String normalizeFingerprint(String fingerprint) {
+        if (fingerprint == null) {
+            throw new IllegalArgumentException("SHA-256 fingerprint is required");
+        }
+        String normalized = fingerprint.replaceAll("[\\s:-]", "").toLowerCase(Locale.ROOT);
+        if (!normalized.matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("Invalid SHA-256 fingerprint");
+        }
+        return normalized;
     }
 
     /** Only use for Tracker boot; fail fast before opening any sockets. */
@@ -89,7 +121,7 @@ public final class PeerAccessTickets {
         PrivateKey key = decodePrivateKey(base64);
         // When a companion public key is present, detect accidental key-pair mismatch at startup
         // rather than allowing peers to fail with ACCESS_DENIED after successful login.
-        PublicKey publicKey = optionalPeerKeys().get(activeKeyId());
+        PublicKey publicKey = loadOptionalPeerKeys(false).get(activeKeyId());
         if (publicKey != null) {
             java.security.KeyPair requester = PeerRequestProof.generateKeyPair();
             String startupTicket = issue(key, activeKeyId(), 1L, "startup-check",
@@ -110,6 +142,10 @@ public final class PeerAccessTickets {
 
     /** Loads the legacy single key plus optional id=path entries for key rotation. */
     public static Map<String, PublicKey> optionalPeerKeys() {
+        return loadOptionalPeerKeys(true);
+    }
+
+    private static Map<String, PublicKey> loadOptionalPeerKeys(boolean verifyDefaultPin) {
         Map<String, PublicKey> keys = new LinkedHashMap<>();
         String rotationFiles = setting("P2P_TICKET_PUBLIC_KEY_FILES");
         if (rotationFiles != null) {
@@ -141,12 +177,52 @@ public final class PeerAccessTickets {
         } else if (file == null && base64 != null) {
             keys.put(activeKeyId(), decodePublicKey(base64));
         } else if (file == null && base64 == null) {
-            java.nio.file.Path fallback = defaultKeyDirectory().resolve("tracker-public.key.b64");
-            if (java.nio.file.Files.exists(fallback)) {
-                keys.put(activeKeyId(), decodePublicKey(readKeyFile(fallback)));
+            Path fallback = defaultKeyDirectory().resolve("tracker-public.key.b64");
+            if (Files.exists(fallback)) {
+                PublicKey publicKey = verifyDefaultPin
+                        ? loadPinnedPublicKey(fallback,
+                                defaultKeyDirectory().resolve("tracker-public-key.properties"))
+                        : decodePublicKey(readKeyFile(fallback));
+                keys.put(activeKeyId(), publicKey);
             }
         }
         return Map.copyOf(keys);
+    }
+
+    public static PublicKey loadPinnedPublicKey(Path keyFile, Path trustSettingsFile) {
+        try {
+            if (Files.isSymbolicLink(trustSettingsFile)
+                    || (Files.exists(trustSettingsFile) && !Files.isRegularFile(trustSettingsFile))) {
+                throw new IllegalStateException("Unsafe Tracker public-key trust settings");
+            }
+            if (!Files.isRegularFile(trustSettingsFile)) {
+                throw new IllegalStateException("Chưa có fingerprint khóa Tracker được tin cậy; "
+                        + "hãy nhập khóa công khai và đối chiếu fingerprint.");
+            }
+            Properties settings = new Properties();
+            try (var input = Files.newInputStream(trustSettingsFile)) {
+                settings.load(input);
+            }
+            String expected = settings.getProperty(TRUSTED_FINGERPRINT_PROPERTY);
+            if (expected == null || expected.isBlank()) {
+                throw new IllegalStateException("Chưa có fingerprint khóa Tracker được tin cậy; "
+                        + "hãy nhập khóa công khai và đối chiếu fingerprint.");
+            }
+            PublicKey publicKey = decodePublicKey(readKeyFile(keyFile));
+            String pinned;
+            try {
+                pinned = normalizeFingerprint(expected);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalStateException("Fingerprint khóa Tracker đã lưu không hợp lệ", e);
+            }
+            if (!fingerprint(publicKey).equals(pinned)) {
+                throw new IllegalStateException("Khóa Tracker đã thay đổi so với fingerprint tin cậy; "
+                        + "hãy xác minh và nhập lại khóa.");
+            }
+            return publicKey;
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Không thể đọc cấu hình tin cậy của khóa Tracker", e);
+        }
     }
 
     public static String activeKeyId() {

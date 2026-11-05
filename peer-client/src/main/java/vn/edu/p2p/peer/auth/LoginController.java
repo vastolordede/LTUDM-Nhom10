@@ -8,6 +8,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.TextInputDialog;
 import javafx.stage.FileChooser;
 import java.io.File;
+import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.peer.network.TrackerPublicKeyInstaller;
 import vn.edu.p2p.common.security.PeerAccessTickets;
 import javafx.scene.control.PasswordField;
@@ -115,7 +116,17 @@ public final class LoginController {
             trackerTlsCheckBox.setSelected(saved.tls());
             trackerTrustStoreField.setText(saved.trustStorePath());
             applyTrackerConfig(saved);
-            statusLabel.setText("Tracker: " + saved.host() + ":" + saved.port());
+            try {
+                if (PeerAccessTickets.optionalPeerKeys().isEmpty()) {
+                    statusLabel.setText("Chưa có khóa Tracker được tin cậy. Hãy nhập public key "
+                            + "và đối chiếu fingerprint qua kênh tin cậy.");
+                } else {
+                    statusLabel.setText("Tracker: " + saved.host() + ":" + saved.port());
+                }
+            } catch (RuntimeException e) {
+                statusLabel.setText("Khóa Tracker chưa được tin cậy hoặc đã thay đổi. "
+                        + "Hãy xác minh fingerprint và nhập lại khóa.");
+            }
         } catch (Exception e) {
             initializationError = TrackerConnectionDiagnostics.explain(e, activeTrackerConfig);
             loginButton.setDisable(true);
@@ -149,28 +160,49 @@ public final class LoginController {
     @FXML
     private void onImportTrackerPublicKey() {
         if (authClientService != null && authClientService.currentSession() != null) {
-            statusLabel.setText("Please log out before switching Tracker trust settings.");
+            statusLabel.setText("Vui lòng đăng xuất trước khi thay đổi khóa Tracker được tin cậy.");
             return;
         }
         FileChooser chooser = new FileChooser();
-        chooser.setTitle("Select Tracker PUBLIC key (never private)");
+        chooser.setTitle("Chọn public key Tracker (không chọn private key)");
         File selected = chooser.showOpenDialog(importTrackerKeyButton.getScene().getWindow());
         if (selected == null) return;
         TextInputDialog dialog = new TextInputDialog();
-        dialog.setTitle("Verify Tracker identity");
-        dialog.setHeaderText("Compare with fingerprint from Tracker administrator");
-        dialog.setContentText("Trusted SHA-256 fingerprint:");
+        dialog.setTitle("Xác minh Tracker");
+        dialog.setHeaderText("Đối chiếu fingerprint do quản trị viên cung cấp qua kênh tin cậy");
+        dialog.setContentText("Fingerprint SHA-256:");
         dialog.showAndWait().ifPresent(expected -> {
             try {
-                var installed = TrackerPublicKeyInstaller.install(selected.toPath(),
+                TrackerPublicKeyInstaller.install(selected.toPath(),
                         TrackerPublicKeyInstaller.defaultDestination(), expected);
-                // Restart Peer app after key import so uploader reads the same trust material.
-                statusLabel.setText("Public key fingerprint OK: " + installed
-                        + ". Restart Peer Center/app before sharing.");
+                showImportedFingerprint(expected);
+            } catch (TrackerPublicKeyInstaller.ReplacementConfirmationRequiredException e) {
+                TextInputDialog confirmation = new TextInputDialog();
+                confirmation.setTitle("Xác nhận thay khóa Tracker");
+                confirmation.setHeaderText("Khóa hiện tại khác khóa mới. Chỉ tiếp tục nếu đã "
+                        + "xác minh fingerprint mới qua kênh tin cậy.");
+                confirmation.setContentText("Nhập lại fingerprint SHA-256 mới:");
+                confirmation.showAndWait().ifPresent(confirmed -> {
+                    try {
+                        TrackerPublicKeyInstaller.install(selected.toPath(),
+                                TrackerPublicKeyInstaller.defaultDestination(), expected, confirmed);
+                        showImportedFingerprint(expected);
+                    } catch (Exception replacementError) {
+                        statusLabel.setText("Không nhập được khóa Tracker: "
+                                + replacementError.getMessage());
+                    }
+                });
             } catch (Exception e) {
-                statusLabel.setText("Key import rejected: " + e.getMessage());
+                statusLabel.setText("Không nhập được khóa Tracker: " + e.getMessage());
             }
         });
+    }
+
+    private void showImportedFingerprint(String fingerprint) {
+        statusLabel.setText("Đã tin cậy khóa Tracker. Fingerprint: "
+                + PeerAccessTickets.formatFingerprint(
+                        PeerAccessTickets.normalizeFingerprint(fingerprint))
+                + ". Khởi động lại ứng dụng Peer để áp dụng.");
     }
 
     @FXML

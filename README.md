@@ -154,7 +154,7 @@ psql -U postgres -d fileshare_p2p -f database/verify_schema.sql
 
 ## Stabilization ZIP11-18: safety and release gates
 
-- One-time key generation: `gradlew.bat :tracker-server:generateTicketKeys`. Copy only the public `.b64` file to each Peer, or import it with fingerprint verification in the Login UI. Never ship private keys.
+- One-time key generation: `gradlew.bat :tracker-server:generateTicketKeys`. Send the public `.b64` file and its printed grouped-hex SHA-256 fingerprint to each Peer operator over a trusted channel; import it in the Login UI and compare the fingerprint. Copying the key file alone does not establish trust. Never ship private keys.
 - For LAN set `P2P_PROFILE=lan` for Tracker and Peers; demo bypass is forbidden outside localhost. For Internet set `P2P_PROFILE=production`, configure Tracker TLS, P2P TLS and certificate SAN/hostname verification.
 - File sources now include Tracker catalog SHA-256; upgrade Tracker and Peer clients together (ZIP14 wire format).
 - Static preflight: `python tools/check_repo_markers.py`, `python tools/check_db_migrations.py`, `python tools/check_docker_context.py`, `python tools/check_fxml_bindings.py`, `python tools/check_release_hygiene.py`.
