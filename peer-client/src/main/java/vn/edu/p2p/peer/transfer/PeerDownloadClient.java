@@ -73,6 +73,7 @@ public final class PeerDownloadClient {
         if (cancelled.get()) {
             activeSockets.remove(socket);
             socket.close();
+            if (planner != null) planner.connectionClosed(socket);
             throw new java.io.InterruptedIOException("Download client was cancelled");
         }
         return socket;
@@ -87,12 +88,14 @@ public final class PeerDownloadClient {
                 // best effort
             } finally {
                 activeSockets.remove(socket);
+                if (planner != null) planner.connectionClosed(socket);
             }
         }
     }
 
     private void release(Socket socket) {
         activeSockets.remove(socket);
+        if (planner != null) planner.connectionClosed(socket);
     }
 
     /**

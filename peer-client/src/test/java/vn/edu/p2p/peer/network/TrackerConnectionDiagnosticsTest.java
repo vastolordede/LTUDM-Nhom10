@@ -11,6 +11,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.io.EOFException;
 import java.net.ConnectException;
+import java.net.BindException;
+import java.net.NoRouteToHostException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
@@ -84,6 +86,52 @@ class TrackerConnectionDiagnosticsTest {
                         new TrackerConnectionConfig("127.0.0.1", 9000, true,
                                 java.nio.file.Path.of("unused"), java.util.UUID.randomUUID().toString(),
                                 "PKCS12")));
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    void categorizesPeerFirewallNatAndRelayFailuresWithSafeGuidance() {
+        var portFailure = TrackerConnectionDiagnostics.classify(new BindException("local-port-secret"));
+        var directFailure = TrackerConnectionDiagnostics.classifyDirectPeer(
+                new ConnectException("peer-ip-secret"), true);
+        var firewallFailure = TrackerConnectionDiagnostics.classifyDirectPeer(
+                new SocketTimeoutException("connect timed out: peer-ip-secret"), true);
+        var natFailure = TrackerConnectionDiagnostics.classifyNatProbe(
+                new NoRouteToHostException("tracker-ip-secret"));
+        var relayFailure = TrackerConnectionDiagnostics.classifyRelay(
+                new SocketTimeoutException("relay ticket-secret"));
+
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.PEER_PORT_UNAVAILABLE, portFailure);
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.DIRECT_PEER_UNREACHABLE, directFailure);
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.FIREWALL_SUSPECTED, firewallFailure);
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.NAT_PROBE_FAILED, natFailure);
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.RELAY_UNAVAILABLE, relayFailure);
+
+        for (var kind : List.of(portFailure, directFailure, firewallFailure, natFailure, relayFailure)) {
+            var diagnostic = TrackerConnectionDiagnostics.diagnostic(kind);
+            assertFalse(diagnostic.message().contains("secret"), diagnostic.message());
+            assertFalse(diagnostic.guidance().contains("secret"), diagnostic.guidance());
+            assertTrue(diagnostic.remediation().size() >= 2, diagnostic.guidance());
+            assertFalse(diagnostic.guidance().contains("peer-ip-secret"), diagnostic.guidance());
+        }
+        for (var kind : TrackerConnectionDiagnostics.FailureKind.values()) {
+            var diagnostic = TrackerConnectionDiagnostics.diagnostic(kind);
+            assertTrue(diagnostic.remediation().size() <= 3, kind.toString());
+            if (kind != TrackerConnectionDiagnostics.FailureKind.NONE) {
+                assertTrue(diagnostic.remediation().size() >= 2, kind.toString());
+            }
+            assertFalse(diagnostic.guidance().contains("127.0.0.1"), kind.toString());
+            assertFalse(diagnostic.guidance().contains("secret"), kind.toString());
+        }
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.TLS_HANDSHAKE_FAILED,
+                TrackerConnectionDiagnostics.classifyRelay(
+                        new SSLHandshakeException("private-endpoint-secret")));
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.TLS_HANDSHAKE_FAILED,
+                TrackerConnectionDiagnostics.classifyDirectPeer(
+                        new SSLHandshakeException("private-endpoint-secret"), true));
+        assertEquals(TrackerConnectionDiagnostics.FailureKind.DIRECT_PEER_UNREACHABLE,
+                TrackerConnectionDiagnostics.classifyDirectPeer(
+                        new ConnectException("peer-ip-secret"), false));
     }
 
     @Test

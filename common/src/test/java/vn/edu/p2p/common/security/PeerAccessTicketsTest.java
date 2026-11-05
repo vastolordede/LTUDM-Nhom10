@@ -1,14 +1,61 @@
 package vn.edu.p2p.common.security;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import java.security.KeyPairGenerator;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
+import java.util.Properties;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PeerAccessTicketsTest {
+    @Test
+    void fingerprintHasStableGroupedHexDisplay() throws Exception {
+        var key = KeyPairGenerator.getInstance("Ed25519").generateKeyPair().getPublic();
+        String fingerprint = PeerAccessTickets.fingerprint(key);
+        String display = PeerAccessTickets.formatFingerprint(fingerprint);
+
+        assertEquals(16, display.split(" ").length);
+        assertEquals(fingerprint, PeerAccessTickets.normalizeFingerprint(display));
+    }
+
+    @Test
+    void pinnedPublicKeyIsVerifiedBeforeItCanValidateTickets(@TempDir Path directory)
+            throws Exception {
+        var tracker = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        var requester = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        Path keyFile = directory.resolve("tracker-public.key.b64");
+        Path settingsFile = directory.resolve("tracker-public-key.properties");
+        Files.writeString(keyFile, Base64.getEncoder().encodeToString(
+                tracker.getPublic().getEncoded()));
+        assertThrows(IllegalStateException.class,
+                () -> PeerAccessTickets.loadPinnedPublicKey(keyFile, settingsFile));
+        Properties trust = new Properties();
+        trust.setProperty(PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY,
+                PeerAccessTickets.formatFingerprint(
+                        PeerAccessTickets.fingerprint(tracker.getPublic())));
+        try (var output = Files.newOutputStream(settingsFile)) {
+            trust.store(output, "test trust");
+        }
+
+        var pinned = PeerAccessTickets.loadPinnedPublicKey(keyFile, settingsFile);
+        Instant now = Instant.parse("2026-11-01T00:00:00Z");
+        String ticket = PeerAccessTickets.issue(tracker.getPrivate(), 17L,
+                "reader", "uploader", requester.getPublic(), now);
+        assertNotNull(PeerAccessTickets.verifyClaims(pinned, ticket, 17L,
+                "uploader", now));
+
+        var replacement = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        Files.writeString(keyFile, Base64.getEncoder().encodeToString(
+                replacement.getPublic().getEncoded()));
+        assertThrows(IllegalStateException.class,
+                () -> PeerAccessTickets.loadPinnedPublicKey(keyFile, settingsFile));
+    }
+
     @Test
     void signedTicketChecksAudienceFileAndExpiryAndTamper() throws Exception {
         var pair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();

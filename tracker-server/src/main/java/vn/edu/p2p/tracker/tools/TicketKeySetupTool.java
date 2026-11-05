@@ -1,5 +1,7 @@
 package vn.edu.p2p.tracker.tools;
 
+import vn.edu.p2p.common.security.PeerAccessTickets;
+
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -40,14 +42,10 @@ public final class TicketKeySetupTool {
         setPosixOwnerOnly(publicPath, false);
         System.out.println("Tracker PRIVATE key stored (DO NOT share): " + privatePath.getFileName());
         System.out.println("Distribute ONLY the PUBLIC file to trusted Peer machines: " + publicPath.getFileName());
-        System.out.println("Public key fingerprint SHA-256 (base64): " + fingerprint(pair.getPublic().getEncoded()));
+        System.out.println("Public key fingerprint SHA-256 (grouped hex): "
+                + PeerAccessTickets.formatFingerprint(PeerAccessTickets.fingerprint(pair.getPublic())));
         System.out.println("Copy public file to ~/.fileshare-p2p/tracker-public.key.b64 on each peer.");
         System.out.println("On Windows, verify that the private file ACL permits only your user.");
-    }
-
-    private static String fingerprint(byte[] encoded) throws Exception {
-        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(encoded);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
     }
 
     private static void setPosixOwnerOnly(Path path, boolean directory) throws Exception {

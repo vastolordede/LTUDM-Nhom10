@@ -5,6 +5,7 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import java.util.LinkedHashMap;
@@ -24,6 +25,8 @@ import vn.edu.p2p.peer.share.ShareController;
 import vn.edu.p2p.peer.share.FolderController;
 import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.peer.network.RendezvousClient;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
+import vn.edu.p2p.peer.transfer.ConnectionPlanner.ConnectivityStatusModel;
 import vn.edu.p2p.peer.auth.PeerKeyStore;
 import vn.edu.p2p.peer.auth.TicketRevocationList;
 
@@ -45,13 +48,15 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private Stage stage;
     private volatile boolean closed;
     private volatile Thread natProbeThread;
-    private final boolean p2pTls;
     private RelayAgent relayAgent;
     private volatile RendezvousClient rendezvousClient;
     private FolderController folderController;
     private Runnable onLogoutRequested;
     private Button logoutButton;
     private Label dashboardMessage;
+    private Label sidebarStatus;
+    private final ConnectivityStatusModel connectivityStatus;
+    private ConnectivityStatusModel.Subscription connectivitySubscription;
     private StackPane contentPane;
     private Map<String, Parent> views;
     private Map<String, Button> navButtons;
@@ -71,7 +76,12 @@ public final class TransferDashboardWindow implements AutoCloseable {
 
 
     public TransferDashboardWindow(int listeningPort, PeerP2pSocketConfig p2pConfig) {
-        this.p2pTls = p2pConfig.tlsEnabled();
+        this(listeningPort, p2pConfig, new ConnectivityStatusModel());
+    }
+
+    public TransferDashboardWindow(int listeningPort, PeerP2pSocketConfig p2pConfig,
+                                   ConnectivityStatusModel connectivityStatus) {
+        this.connectivityStatus = connectivityStatus;
         this.fileRegistry = new LocalFileRegistry();
         this.socketFactory = new PeerP2pSocketFactory(p2pConfig);
         this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
@@ -152,9 +162,10 @@ public final class TransferDashboardWindow implements AutoCloseable {
             Region sideSpacer = new Region();
             VBox.setVgrow(sideSpacer, Priority.ALWAYS);
             sidebar.getChildren().add(sideSpacer);
-            Label sidebarFooter = new Label("Tracker  •  Session online");
-            sidebarFooter.getStyleClass().add("sidebar-footer");
-            sidebar.getChildren().add(sidebarFooter);
+            sidebarStatus = new Label(connectivityStatus.snapshot().summary());
+            sidebarStatus.getStyleClass().add("sidebar-footer");
+            sidebarStatus.setWrapText(true);
+            sidebar.getChildren().add(sidebarStatus);
             HBox body = new HBox(sidebar, contentPane);
             HBox.setHgrow(contentPane, Priority.ALWAYS);
 
@@ -173,7 +184,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             logoutButton.setOnAction(event -> {
                 if (onLogoutRequested != null) onLogoutRequested.run();
             });
-            dashboardMessage = new Label("Tracker: phiên đăng nhập đang hoạt động");
+            dashboardMessage = new Label(connectivityStatus.snapshot().summary());
             dashboardMessage.getStyleClass().add("connection-label");
             HBox toolbar = new HBox(12);
             toolbar.setAlignment(Pos.CENTER_LEFT);
@@ -203,6 +214,19 @@ public final class TransferDashboardWindow implements AutoCloseable {
                 stage.hide();
             });
             stage.show();
+            connectivitySubscription = connectivityStatus.subscribe(snapshot ->
+                    Platform.runLater(() -> {
+                        if (!closed && dashboardMessage != null) {
+                            dashboardMessage.setText(snapshot.summary());
+                            dashboardMessage.setTooltip(snapshot.guidance().isBlank() ? null
+                                    : new Tooltip(snapshot.guidance()));
+                        }
+                        if (!closed && sidebarStatus != null) {
+                            sidebarStatus.setText(snapshot.summary());
+                            sidebarStatus.setTooltip(snapshot.guidance().isBlank() ? null
+                                    : new Tooltip(snapshot.guidance()));
+                        }
+                    }));
             configureConnectivity(connection, sessionId);
         } catch (IOException | RuntimeException e) {
             close();
@@ -242,42 +266,41 @@ public final class TransferDashboardWindow implements AutoCloseable {
             boolean relayAllowed = relayWanted;
             ConnectionPlanner planner = new ConnectionPlanner(
                     socketFactory, relayAllowed ? rendezvous : null, sessionId);
+            planner.setConnectivityStatus(connectivityStatus);
             downloadController.setConnectionPlanner(planner);
             folderController.setConnectionPlanner(planner);
             if (relayAllowed) {
                 relayAgent = new RelayAgent(rendezvous, sessionId, uploadServer);
+                relayAgent.setStatusListener(planner::relayStatus);
                 relayAgent.start();
+            } else {
+                connectivityStatus.relay(ConnectivityStatusModel.RelayState.DISABLED,
+                        "Relay đã tắt trong cấu hình");
             }
-            String baseTitle = stage.getTitle();
-            String relayNote = relayAllowed
-                    ? (p2pTls ? " | Relay dang ky (P2P TLS)" : " | Relay dang ky (TCP)") : "";
+            connectivityStatus.directChecking();
             Thread probe = new Thread(() -> {
-                String status;
                 try {
                     RendezvousClient.Probe p = rendezvous.probe(sessionId, uploadServer.listeningPort());
-                    status = p.reachable()
-                            ? "Truy cap duoc tu ngoai (" + p.observedIp() + ")"
-                            : "Khong truy cap duoc tu ngoai (NAT/firewall)";
-                } catch (IOException e) {
-                    status = "Chua kiem tra duoc ket noi ngoai";
-                }
-                String title = baseTitle + " | " + status + relayNote;
-                final String display = status + (relayAllowed
-                        ? " | Relay: requested, check Tracker connection" : " | Relay: disabled");
-                Platform.runLater(() -> {
-                    if (stage != null && !closed) {
-                        stage.setTitle(title);
-                        if (dashboardMessage != null) dashboardMessage.setText(display);
+                    if (p.reachable()) {
+                        connectivityStatus.directProbe(true);
+                    } else {
+                        var diagnostic = TrackerConnectionDiagnostics.diagnostic(
+                                TrackerConnectionDiagnostics.FailureKind.NAT_PROBE_FAILED);
+                        connectivityStatus.directUnavailable(diagnostic.kind(), diagnostic.message());
                     }
-                });
+                } catch (IOException e) {
+                    var kind = TrackerConnectionDiagnostics.classifyNatProbe(e);
+                    connectivityStatus.directUnavailable(kind,
+                            TrackerConnectionDiagnostics.diagnostic(kind).message());
+                }
             }, "peer-nat-probe");
             probe.setDaemon(true);
             natProbeThread = probe;
             probe.start();
         } catch (RuntimeException e) {
-            if (dashboardMessage != null) {
-                dashboardMessage.setText("Cannot configure Direct/Relay: " + e.getMessage());
-            }
+            var kind = TrackerConnectionDiagnostics.classifyNatProbe(e);
+            connectivityStatus.directUnavailable(kind,
+                    TrackerConnectionDiagnostics.diagnostic(kind).message());
         }
     }
 
@@ -288,6 +311,9 @@ public final class TransferDashboardWindow implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
+        ConnectivityStatusModel.Subscription subscription = connectivitySubscription;
+        connectivitySubscription = null;
+        if (subscription != null) subscription.close();
         Thread probe = natProbeThread;
         if (probe != null) probe.interrupt();
         RendezvousClient rendezvous = rendezvousClient;
@@ -329,6 +355,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
         }
         logoutButton = null;
         dashboardMessage = null;
+        sidebarStatus = null;
         contentPane = null;
         views = null;
         navButtons = null;

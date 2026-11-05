@@ -1,6 +1,8 @@
 package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.peer.network.RendezvousClient;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
+import vn.edu.p2p.peer.transfer.ConnectionPlanner.ConnectivityStatusModel;
 
 import java.io.DataInputStream;
 import java.io.IOException;
@@ -11,6 +13,7 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiConsumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -34,6 +37,8 @@ public final class RelayAgent implements AutoCloseable {
 
     private volatile Socket control;
     private volatile Thread thread;
+    private volatile BiConsumer<ConnectivityStatusModel.RelayState,
+            TrackerConnectionDiagnostics.Diagnostic> statusListener;
 
     public RelayAgent(RendezvousClient client, String sessionId, PeerUploadServer uploadServer) {
         this.client = client;
@@ -41,11 +46,19 @@ public final class RelayAgent implements AutoCloseable {
         this.uploadServer = uploadServer;
     }
 
+    public void setStatusListener(
+            BiConsumer<ConnectivityStatusModel.RelayState,
+                    TrackerConnectionDiagnostics.Diagnostic> listener) {
+        statusListener = listener;
+    }
+
     public synchronized void start() {
         if (closed.get()) return;
         if (!running.compareAndSet(false, true)) {
             return;
         }
+        report(ConnectivityStatusModel.RelayState.CONNECTING,
+                TrackerConnectionDiagnostics.FailureKind.NONE, "đang kết nối tới Tracker");
         thread = new Thread(this::runLoop, "peer-relay-agent");
         thread.setDaemon(true);
         thread.start();
@@ -60,6 +73,9 @@ public final class RelayAgent implements AutoCloseable {
                     control = channel;
                 }
                 delay = 3_000;
+                report(ConnectivityStatusModel.RelayState.READY,
+                        TrackerConnectionDiagnostics.FailureKind.NONE,
+                        "Relay đã đăng ký với Tracker");
                 LOG.info("Relay channel registered with Tracker");
                 DataInputStream in = new DataInputStream(channel.getInputStream());
                 while (running.get()) {
@@ -77,7 +93,11 @@ public final class RelayAgent implements AutoCloseable {
                 }
             } catch (IOException e) {
                 if (running.get() && !closed.get()) {
-                    LOG.log(Level.INFO, "Relay channel lost, retry in " + delay + " ms: " + e.getMessage());
+                    var issue = TrackerConnectionDiagnostics.classifyRelay(e);
+                    report(ConnectivityStatusModel.RelayState.ERROR,
+                            issue, TrackerConnectionDiagnostics.diagnostic(issue).message());
+                    LOG.log(Level.INFO, "Relay channel lost, retry in " + delay
+                            + " ms: " + issue);
                 }
             }
             if (closed.get()) return;
@@ -104,12 +124,25 @@ public final class RelayAgent implements AutoCloseable {
                 }
                 uploadServer.serveRelayedSocket(data); // upload server owns socket after handoff
                 data = null;
+                report(ConnectivityStatusModel.RelayState.READY,
+                        TrackerConnectionDiagnostics.FailureKind.NONE,
+                        "Relay đã chuyển kết nối tới Peer upload");
             }
         } catch (IOException | RuntimeException e) {
             if (data != null) {
                 try { data.close(); } catch (IOException ignored) { }
             }
-            LOG.log(Level.FINE, "Relay accept failed: " + e.getMessage(), e);
+            LOG.log(Level.FINE, "Relay accept failed: "
+                    + TrackerConnectionDiagnostics.classifyRelay(e));
+        }
+    }
+
+    private void report(ConnectivityStatusModel.RelayState state,
+                        TrackerConnectionDiagnostics.FailureKind kind, String message) {
+        BiConsumer<ConnectivityStatusModel.RelayState,
+                TrackerConnectionDiagnostics.Diagnostic> listener = statusListener;
+        if (listener != null) {
+            listener.accept(state, TrackerConnectionDiagnostics.diagnostic(kind, message));
         }
     }
 
@@ -118,6 +151,8 @@ public final class RelayAgent implements AutoCloseable {
         synchronized (lifecycleLock) {
             if (!closed.compareAndSet(false, true)) return;
             running.set(false);
+            report(ConnectivityStatusModel.RelayState.STOPPED,
+                    TrackerConnectionDiagnostics.FailureKind.NONE, "Relay đã dừng");
             client.close();
             Socket c = control;
             control = null;
