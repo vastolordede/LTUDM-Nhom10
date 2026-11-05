@@ -6,6 +6,7 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
 import java.io.File;
 import vn.edu.p2p.common.security.PeerAccessTickets;
@@ -106,6 +107,8 @@ public final class LoginController {
                 Platform.runLater(() -> {
                     if (!shuttingDown && connectionStatusLabel != null) {
                         connectionStatusLabel.setText(snapshot.trackerSummary());
+                        connectionStatusLabel.setTooltip(snapshot.guidance().isBlank() ? null
+                                : new Tooltip(snapshot.guidance()));
                     }
                 }));
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
@@ -124,7 +127,7 @@ public final class LoginController {
                     statusLabel.setText("Chưa có khóa Tracker được tin cậy. Hãy nhập public key "
                             + "và đối chiếu fingerprint qua kênh tin cậy.");
                 } else {
-                    statusLabel.setText("Tracker: " + saved.host() + ":" + saved.port());
+                    statusLabel.setText("Đã nạp cấu hình Tracker.");
                 }
             } catch (RuntimeException e) {
                 statusLabel.setText("Khóa Tracker chưa được tin cậy hoặc đã thay đổi. "
@@ -153,10 +156,10 @@ public final class LoginController {
             endpoint.toConnectionConfig(trackerDefaults);
             trackerSettingsStore.save(endpoint);
             applyTrackerConfig(endpoint);
-            statusLabel.setText("Tracker settings saved: " + endpoint.host() + ":" + endpoint.port());
+            statusLabel.setText("Đã lưu cấu hình Tracker.");
         } catch (Exception e) {
-            statusLabel.setText("Cấu hình Tracker lỗi: "
-                    + TrackerConnectionDiagnostics.explain(e, activeTrackerConfig));
+            showDiagnostic(statusLabel,
+                    TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
         }
     }
 
@@ -218,19 +221,26 @@ public final class LoginController {
                     trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText())
                     .toConnectionConfig(trackerDefaults);
         } catch (Exception e) {
-            statusLabel.setText("Cấu hình Tracker lỗi: "
-                    + TrackerConnectionDiagnostics.explain(e, activeTrackerConfig));
+            showDiagnostic(statusLabel,
+                    TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
             return;
         }
         diagnoseTrackerButton.setDisable(true);
         statusLabel.setText("Đang kiểm tra kết nối TCP/TLS tới Tracker...");
         long generation = AuthClientService.sessionGeneration();
-        CompletableFuture.supplyAsync(() -> TrackerConnectionDiagnostics.probe(target), ioExecutor)
-                .whenComplete((message, error) -> {
+        CompletableFuture.supplyAsync(
+                        () -> TrackerConnectionDiagnostics.probeDiagnostic(target), ioExecutor)
+                .whenComplete((diagnostic, error) -> {
                     postToCurrentUi(generation, () -> {
                         diagnoseTrackerButton.setDisable(false);
-                        statusLabel.setText(error == null ? message
-                                : TrackerConnectionDiagnostics.explain(error, target));
+                        if (error == null) {
+                            statusLabel.setText(diagnostic.message());
+                            statusLabel.setTooltip(diagnostic.guidance().isBlank() ? null
+                                    : new Tooltip(diagnostic.guidance()));
+                        } else {
+                            showDiagnostic(statusLabel,
+                                    TrackerConnectionDiagnostics.classify(error, target));
+                        }
                     });
                 });
     }
@@ -314,8 +324,9 @@ public final class LoginController {
                             logAuthFailure("login", cause, attemptConfig);
                             statusLabel.setText("Đăng nhập thất bại: "
                                     + safeAuthFailure(cause, attemptConfig, true));
-                            connectivityStatus.tracker(trackerFailureState(cause),
-                                    safeAuthFailure(cause, attemptConfig, true));
+                            var issue = TrackerConnectionDiagnostics.classify(cause, attemptConfig);
+                            connectivityStatus.tracker(trackerFailureState(cause), issue,
+                                    TrackerConnectionDiagnostics.diagnostic(issue).message());
                             return;
                         }
 
@@ -442,7 +453,7 @@ public final class LoginController {
                     authClientService.ticketRevocations());
         } catch (Exception e) {
             closeTransferDashboard();
-            statusLabel.setText("Peer Center cannot start (check upload port): " + e.getMessage());
+            showDiagnostic(statusLabel, TrackerConnectionDiagnostics.classify(e));
         }
     }
 
@@ -591,8 +602,16 @@ public final class LoginController {
                     default -> ConnectivityStatusModel.TrackerState.ONLINE;
                 };
             }
+
         }
         return ConnectivityStatusModel.TrackerState.OFFLINE;
+    }
+
+    private static void showDiagnostic(Label label,
+                                       TrackerConnectionDiagnostics.FailureKind kind) {
+        var diagnostic = TrackerConnectionDiagnostics.diagnostic(kind);
+        label.setText(diagnostic.message());
+        label.setTooltip(new Tooltip(diagnostic.guidance()));
     }
 
     private static String shortId(String id) {

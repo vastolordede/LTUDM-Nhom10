@@ -41,7 +41,10 @@ public final class ConnectionPlanner {
                 RelayState relay,
                 String trackerReason,
                 String directReason,
-                String relayReason
+                String relayReason,
+                TrackerConnectionDiagnostics.FailureKind trackerIssue,
+                TrackerConnectionDiagnostics.FailureKind directIssue,
+                TrackerConnectionDiagnostics.FailureKind relayIssue
         ) {
             public String summary() {
                 return "Tracker: " + trackerReason + " | LAN/Internet Direct: " + directReason
@@ -51,13 +54,22 @@ public final class ConnectionPlanner {
             public String trackerSummary() {
                 return "Tracker: " + trackerReason;
             }
+
+            public String guidance() {
+                return java.util.stream.Stream.of(trackerIssue, directIssue, relayIssue)
+                        .filter(Objects::nonNull)
+                        .filter(kind -> kind != TrackerConnectionDiagnostics.FailureKind.NONE)
+                        .distinct()
+                        .map(kind -> TrackerConnectionDiagnostics.diagnostic(kind).guidance())
+                        .collect(java.util.stream.Collectors.joining("\n\n"));
+            }
         }
 
         private final java.util.concurrent.CopyOnWriteArrayList<Consumer<Snapshot>> listeners =
                 new java.util.concurrent.CopyOnWriteArrayList<>();
         private volatile Snapshot current = new Snapshot(TrackerState.CHECKING,
                 DirectState.CHECKING, RelayState.DISABLED, "đang kiểm tra",
-                "đang kiểm tra", "đã tắt");
+                "đang kiểm tra", "đã tắt", null, null, null);
 
         public Snapshot snapshot() {
             return current;
@@ -71,14 +83,27 @@ public final class ConnectionPlanner {
         }
 
         public void tracker(TrackerState state, String reason) {
+            tracker(state, state == TrackerState.OFFLINE
+                    ? TrackerConnectionDiagnostics.FailureKind.OTHER
+                    : TrackerConnectionDiagnostics.FailureKind.NONE, reason);
+        }
+
+        public void tracker(TrackerState state, TrackerConnectionDiagnostics.FailureKind issue,
+                            String reason) {
             Objects.requireNonNull(state, "state");
+            Objects.requireNonNull(issue, "issue");
             if (state == TrackerState.LOGGED_OUT) {
                 update(previous -> new Snapshot(state, DirectState.CHECKING, RelayState.STOPPED,
-                        safeReason(reason), "chưa đăng nhập", "đã dừng"));
+                        safeReason(reason), "chưa đăng nhập", "đã dừng",
+                        TrackerConnectionDiagnostics.FailureKind.NONE,
+                        TrackerConnectionDiagnostics.FailureKind.NONE,
+                        TrackerConnectionDiagnostics.FailureKind.NONE));
                 return;
             }
             update(previous -> new Snapshot(state, previous.direct(), previous.relay(),
-                    safeReason(reason), previous.directReason(), previous.relayReason()));
+                    safeReason(reason), previous.directReason(), previous.relayReason(),
+                    issue == TrackerConnectionDiagnostics.FailureKind.NONE ? null : issue,
+                    previous.directIssue(), previous.relayIssue()));
         }
 
         public void directProbe(boolean reachable) {
@@ -87,13 +112,15 @@ public final class ConnectionPlanner {
                     previous.relay(), previous.trackerReason(),
                     reachable ? "địa chỉ công khai có thể truy cập"
                             : "NAT/firewall chưa cho phép kết nối trực tiếp",
-                    previous.relayReason()));
+                    previous.relayReason(), previous.trackerIssue(),
+                    reachable ? null : TrackerConnectionDiagnostics.FailureKind.NAT_PROBE_FAILED,
+                    previous.relayIssue()));
         }
 
         public void directChecking() {
             update(previous -> new Snapshot(previous.tracker(), DirectState.CHECKING,
                     previous.relay(), previous.trackerReason(), "đang kiểm tra",
-                    previous.relayReason()));
+                    previous.relayReason(), previous.trackerIssue(), null, previous.relayIssue()));
         }
 
         public void directMode(Mode mode) {
@@ -114,20 +141,38 @@ public final class ConnectionPlanner {
                 String relayReason = mode == Mode.RELAY
                         ? "đang truyền qua Relay" : previous.relayReason();
                 return new Snapshot(previous.tracker(), state, relay,
-                        previous.trackerReason(), reason, relayReason);
+                        previous.trackerReason(), reason, relayReason, previous.trackerIssue(),
+                        mode == Mode.RELAY ? previous.directIssue() : null,
+                        mode == Mode.RELAY ? null : previous.relayIssue());
             });
         }
 
         public void directUnavailable(String reason) {
+            directUnavailable(TrackerConnectionDiagnostics.FailureKind.OTHER, reason);
+        }
+
+        public void directUnavailable(TrackerConnectionDiagnostics.FailureKind issue,
+                                      String reason) {
             update(previous -> new Snapshot(previous.tracker(), DirectState.UNAVAILABLE,
                     previous.relay(), previous.trackerReason(), safeReason(reason),
-                    previous.relayReason()));
+                    previous.relayReason(), previous.trackerIssue(),
+                    Objects.requireNonNull(issue), previous.relayIssue()));
         }
 
         public void relay(RelayState state, String reason) {
+            relay(state, state == RelayState.ERROR
+                    ? TrackerConnectionDiagnostics.FailureKind.RELAY_UNAVAILABLE
+                    : TrackerConnectionDiagnostics.FailureKind.NONE, reason);
+        }
+
+        public void relay(RelayState state, TrackerConnectionDiagnostics.FailureKind issue,
+                          String reason) {
             Objects.requireNonNull(state, "state");
+            Objects.requireNonNull(issue, "issue");
             update(previous -> new Snapshot(previous.tracker(), previous.direct(), state,
-                    previous.trackerReason(), previous.directReason(), safeReason(reason)));
+                    previous.trackerReason(), previous.directReason(), safeReason(reason),
+                    previous.trackerIssue(), previous.directIssue(),
+                    issue == TrackerConnectionDiagnostics.FailureKind.NONE ? null : issue));
         }
 
         private synchronized void update(UnaryOperator<Snapshot> transition) {
@@ -170,13 +215,15 @@ public final class ConnectionPlanner {
         this.connectivityStatus = connectivityStatus;
     }
 
-    public void relayStatus(ConnectivityStatusModel.RelayState state, String reason) {
+    public void relayStatus(ConnectivityStatusModel.RelayState state,
+                            TrackerConnectionDiagnostics.Diagnostic diagnostic) {
         ConnectivityStatusModel status = connectivityStatus;
         if (status == null) return;
         if (state == ConnectivityStatusModel.RelayState.READY && activeRelayCount.get() > 0) {
-            status.relay(ConnectivityStatusModel.RelayState.IN_USE, "đang truyền qua Relay");
+            status.relay(ConnectivityStatusModel.RelayState.IN_USE,
+                    TrackerConnectionDiagnostics.FailureKind.NONE, "đang truyền qua Relay");
         } else {
-            status.relay(state, reason);
+            status.relay(state, diagnostic.kind(), diagnostic.message());
         }
     }
 
@@ -186,7 +233,8 @@ public final class ConnectionPlanner {
             if (status != null
                     && status.snapshot().relay() != ConnectivityStatusModel.RelayState.STOPPED
                     && status.snapshot().relay() != ConnectivityStatusModel.RelayState.ERROR) {
-                status.relay(ConnectivityStatusModel.RelayState.READY, "Relay đã sẵn sàng");
+                status.relay(ConnectivityStatusModel.RelayState.READY,
+                        TrackerConnectionDiagnostics.FailureKind.NONE, "Relay đã sẵn sàng");
             }
         }
     }
@@ -212,11 +260,14 @@ public final class ConnectionPlanner {
             } catch (IOException e) {
                 // TLS certificate/identity failure is NOT a connectivity failure;
                 // trying Relay must never hide a failed authenticated handshake.
+                TrackerConnectionDiagnostics.FailureKind issue =
+                        TrackerConnectionDiagnostics.classifyDirectPeer(e,
+                                connectivityStatus != null && connectivityStatus.snapshot().tracker()
+                                        == ConnectivityStatusModel.TrackerState.ONLINE);
+                updateDirectFailure(issue);
                 if (!mayRetryViaRelay(e)) {
-                    updateDirectFailure(TrackerConnectionDiagnostics.explain(e));
                     throw e;
                 }
-                updateDirectFailure("Kết nối trực tiếp thất bại; đang thử đường kết nối thay thế.");
                 failure = e;
             }
         }
@@ -226,6 +277,7 @@ public final class ConnectionPlanner {
             ConnectivityStatusModel status = connectivityStatus;
             if (status != null) {
                 status.relay(ConnectivityStatusModel.RelayState.CONNECTING,
+                        TrackerConnectionDiagnostics.FailureKind.NONE,
                         "đang thiết lập kết nối Relay");
             }
             try {
@@ -245,8 +297,9 @@ public final class ConnectionPlanner {
             } catch (IOException e) {
                 relayUntil.remove(key); // lần sau thử direct lại
                 if (status != null) {
+                    var issue = TrackerConnectionDiagnostics.classifyRelay(e);
                     status.relay(ConnectivityStatusModel.RelayState.ERROR,
-                            TrackerConnectionDiagnostics.explain(e));
+                            issue, TrackerConnectionDiagnostics.diagnostic(issue).message());
                 }
                 if (failure == null) {
                     failure = e;
@@ -279,9 +332,11 @@ public final class ConnectionPlanner {
         if (status != null) status.directMode(mode);
     }
 
-    private void updateDirectFailure(String reason) {
+    private void updateDirectFailure(TrackerConnectionDiagnostics.FailureKind issue) {
         ConnectivityStatusModel status = connectivityStatus;
-        if (status != null) status.directUnavailable(reason);
+        if (status != null) {
+            status.directUnavailable(issue, TrackerConnectionDiagnostics.diagnostic(issue).message());
+        }
     }
 
     public static boolean isPrivateAddress(String host) {

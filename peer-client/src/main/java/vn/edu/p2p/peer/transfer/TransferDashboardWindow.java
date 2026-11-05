@@ -5,6 +5,7 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import java.util.LinkedHashMap;
@@ -217,9 +218,13 @@ public final class TransferDashboardWindow implements AutoCloseable {
                     Platform.runLater(() -> {
                         if (!closed && dashboardMessage != null) {
                             dashboardMessage.setText(snapshot.summary());
+                            dashboardMessage.setTooltip(snapshot.guidance().isBlank() ? null
+                                    : new Tooltip(snapshot.guidance()));
                         }
                         if (!closed && sidebarStatus != null) {
                             sidebarStatus.setText(snapshot.summary());
+                            sidebarStatus.setTooltip(snapshot.guidance().isBlank() ? null
+                                    : new Tooltip(snapshot.guidance()));
                         }
                     }));
             configureConnectivity(connection, sessionId);
@@ -276,16 +281,26 @@ public final class TransferDashboardWindow implements AutoCloseable {
             Thread probe = new Thread(() -> {
                 try {
                     RendezvousClient.Probe p = rendezvous.probe(sessionId, uploadServer.listeningPort());
-                    connectivityStatus.directProbe(p.reachable());
+                    if (p.reachable()) {
+                        connectivityStatus.directProbe(true);
+                    } else {
+                        var diagnostic = TrackerConnectionDiagnostics.diagnostic(
+                                TrackerConnectionDiagnostics.FailureKind.NAT_PROBE_FAILED);
+                        connectivityStatus.directUnavailable(diagnostic.kind(), diagnostic.message());
+                    }
                 } catch (IOException e) {
-                    connectivityStatus.directUnavailable(TrackerConnectionDiagnostics.explain(e));
+                    var kind = TrackerConnectionDiagnostics.classifyNatProbe(e);
+                    connectivityStatus.directUnavailable(kind,
+                            TrackerConnectionDiagnostics.diagnostic(kind).message());
                 }
             }, "peer-nat-probe");
             probe.setDaemon(true);
             natProbeThread = probe;
             probe.start();
         } catch (RuntimeException e) {
-            connectivityStatus.directUnavailable(TrackerConnectionDiagnostics.explain(e));
+            var kind = TrackerConnectionDiagnostics.classifyNatProbe(e);
+            connectivityStatus.directUnavailable(kind,
+                    TrackerConnectionDiagnostics.diagnostic(kind).message());
         }
     }
 

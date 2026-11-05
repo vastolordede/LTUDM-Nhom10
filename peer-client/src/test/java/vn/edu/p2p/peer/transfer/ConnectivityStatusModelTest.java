@@ -3,6 +3,7 @@ package vn.edu.p2p.peer.transfer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import vn.edu.p2p.peer.transfer.ConnectionPlanner.ConnectivityStatusModel;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,12 +45,34 @@ class ConnectivityStatusModelTest {
     @Timeout(value = 5, unit = TimeUnit.SECONDS)
     void tlsFailureDoesNotClaimRelayWasUsed() {
         ConnectivityStatusModel model = new ConnectivityStatusModel();
-        model.directUnavailable("Chứng chỉ TLS không hợp lệ.");
+        model.directUnavailable(TrackerConnectionDiagnostics.FailureKind.CERTIFICATE_INVALID,
+                "Chứng chỉ TLS không hợp lệ.");
 
         assertEquals(ConnectivityStatusModel.DirectState.UNAVAILABLE, model.snapshot().direct());
         assertEquals(ConnectivityStatusModel.RelayState.DISABLED, model.snapshot().relay());
         assertTrue(model.snapshot().directReason().contains("TLS"));
         assertFalse(model.snapshot().summary().contains("đang truyền qua Relay"));
+        assertTrue(model.snapshot().guidance().contains("truststore"));
+        assertFalse(model.snapshot().guidance().contains("Dùng Relay"));
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    void statusGuidanceTracksFirewallAndRelayIssuesWithoutSensitiveDetails() {
+        ConnectivityStatusModel model = new ConnectivityStatusModel();
+        model.tracker(ConnectivityStatusModel.TrackerState.ONLINE,
+                TrackerConnectionDiagnostics.FailureKind.NONE, "đang hoạt động");
+        model.directUnavailable(TrackerConnectionDiagnostics.FailureKind.FIREWALL_SUSPECTED,
+                "Kết nối trực tiếp có thể bị firewall chặn.");
+        model.relay(ConnectivityStatusModel.RelayState.ERROR,
+                TrackerConnectionDiagnostics.FailureKind.RELAY_UNAVAILABLE,
+                "Relay không khả dụng.");
+
+        String guidance = model.snapshot().guidance();
+        assertTrue(guidance.contains("firewall"));
+        assertTrue(guidance.contains("Relay không khả dụng"));
+        assertFalse(guidance.contains("127.0.0.1"));
+        assertFalse(guidance.contains("ticket-secret"));
     }
 
     @Test
