@@ -13,7 +13,9 @@ class UserTrackerSettingsStoreTest {
         var store = new UserTrackerSettingsStore(temp.resolve("state/tracker.properties"));
         var defaults = PeerSettings.load();
         var input = new UserTrackerSettingsStore.Endpoint("localhost", 9123, false, "");
+        assertFalse(store.hasSavedSettings());
         store.save(input);
+        assertTrue(store.hasSavedSettings());
         assertEquals(input, store.load(defaults));
         String saved = java.nio.file.Files.readString(temp.resolve("state/tracker.properties"));
         assertFalse(saved.contains("password"));

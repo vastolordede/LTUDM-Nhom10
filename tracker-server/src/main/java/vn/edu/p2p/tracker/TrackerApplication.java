@@ -43,6 +43,7 @@ import vn.edu.p2p.tracker.transfer.TransferHistoryService;
 import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.io.IOException;
+import java.net.BindException;
 import java.time.Duration;
 import java.sql.SQLException;
 import java.util.concurrent.Executors;
@@ -56,7 +57,16 @@ public final class TrackerApplication {
     private TrackerApplication() {
     }
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
+        try {
+            run();
+        } catch (Exception e) {
+            System.err.println(startupFailureMessage(e));
+            System.exit(1);
+        }
+    }
+
+    private static void run() throws Exception {
         TrackerSettings settings = TrackerSettings.load();
         SecurityProfile.requireTracker(
                 SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development")),
@@ -155,7 +165,7 @@ public final class TrackerApplication {
             try {
                 rendezvous.start();
             } catch (IOException e) {
-                LOG.warning("Rendezvous server stopped: " + e.getMessage());
+                LOG.warning("Rendezvous server stopped because of a network/configuration error.");
             }
         }, "tracker-rendezvous-main");
         rendezvousThread.setDaemon(true);
@@ -198,11 +208,10 @@ public final class TrackerApplication {
         );
 
         LOG.info(() -> String.format(
-                "Tracker ready: port=%d, db=%s, heartbeat=%ds/%ds timeout, "
+                "Tracker ready: port=%d, database=verified, heartbeat=%ds/%ds timeout, "
                         + "statistics=%ds, workers=%d, queue=%d, socketTimeout=%dms, "
                         + "transport=%s",
                 settings.trackerPort(),
-                settings.database().url(),
                 settings.heartbeatIntervalSeconds(),
                 settings.heartbeatTimeoutSeconds(),
                 settings.statisticsIntervalSeconds(),
@@ -215,5 +224,60 @@ public final class TrackerApplication {
         heartbeatMonitor.start();
         statisticsMonitor.start();
         server.start();
+    }
+
+    static String startupFailureMessage(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof BindException) {
+                return "Tracker không khởi động: cổng mạng đang được sử dụng. "
+                        + "Kiểm tra TRACKER_PORT và RENDEZVOUS_PORT.";
+            }
+            if (cause instanceof SQLException sqlException) {
+                String message = sqlException.getMessage();
+                String normalized = message == null ? "" : message.toLowerCase(java.util.Locale.ROOT);
+                if (normalized.contains("schema") || normalized.contains("thiếu quan hệ")
+                        || normalized.contains("thiếu cột")) {
+                    return "Tracker không khởi động: schema DB chưa được xác minh. "
+                            + "Áp dụng migration theo thứ tự rồi chạy verify_schema.sql.";
+                }
+                return "Tracker không khởi động: không kết nối hoặc xác minh được PostgreSQL. "
+                        + "Kiểm tra dịch vụ DB, DB_URL, DB_USER, DB_PASSWORD và quyền truy cập.";
+            }
+            if (cause instanceof IllegalStateException state) {
+                String message = state.getMessage();
+                if (message != null && message.contains("Database password is empty")) {
+                    return "Tracker không khởi động: thiếu mật khẩu PostgreSQL. "
+                            + "Quản trị viên cần cấu hình DB_PASSWORD ngoài ứng dụng.";
+                }
+                if (message != null && message.contains("signing key missing")) {
+                    return "Tracker không khởi động: thiếu private key ký ticket. "
+                            + "Quản trị viên cần tạo hoặc cấu hình khóa trên máy Tracker.";
+                }
+                if (message != null && message.contains("does not match configured public key")) {
+                    return "Tracker không khởi động: cặp khóa ký ticket không khớp. "
+                            + "Quản trị viên cần xác minh khóa private/public trên Tracker.";
+                }
+                if (message != null && (message.contains("TLS context")
+                        || message.toLowerCase(java.util.Locale.ROOT).contains("keystore"))) {
+                    return "Tracker không khởi động: không nạp được TLS keystore. "
+                            + "Kiểm tra tệp, định dạng và mật khẩu keystore.";
+                }
+            }
+            if (cause instanceof IllegalArgumentException argumentException) {
+                String message = argumentException.getMessage();
+                if (message != null && (message.contains("PKCS8 Ed25519")
+                        || message.contains("signing key"))) {
+                    return "Tracker không khởi động: private key ký ticket không hợp lệ. "
+                            + "Quản trị viên cần kiểm tra khóa trên máy Tracker.";
+                }
+                if (message != null && message.toLowerCase(java.util.Locale.ROOT)
+                        .contains("keystore")) {
+                    return "Tracker không khởi động: cấu hình TLS keystore chưa đầy đủ. "
+                            + "Kiểm tra tệp, định dạng và mật khẩu keystore.";
+                }
+            }
+        }
+        return "Tracker không khởi động do cấu hình hoặc lỗi mạng. "
+                + "Kiểm tra cấu hình quản trị và log hệ thống đã được bảo vệ.";
     }
 }

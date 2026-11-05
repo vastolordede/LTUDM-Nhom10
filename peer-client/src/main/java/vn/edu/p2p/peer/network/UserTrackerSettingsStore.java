@@ -51,6 +51,7 @@ public final class UserTrackerSettingsStore {
         if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) {
             throw new IOException("Unsafe Tracker settings path: " + path);
         }
+
         Properties values = new Properties();
         try (InputStream input = Files.newInputStream(path)) { values.load(input); }
         try {
@@ -64,6 +65,10 @@ public final class UserTrackerSettingsStore {
         } catch (IllegalArgumentException e) {
             throw new IOException("Invalid saved Tracker configuration: " + path, e);
         }
+    }
+
+    public boolean hasSavedSettings() {
+        return Files.isRegularFile(path) && !Files.isSymbolicLink(path);
     }
 
     public void save(Endpoint endpoint) throws IOException {

@@ -9,9 +9,10 @@ import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.peer.network.TrackerPublicKeyInstaller;
-import vn.edu.p2p.common.security.PeerAccessTickets;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import vn.edu.p2p.common.dto.HeartbeatResponse;
@@ -122,22 +123,16 @@ public final class LoginController {
             trackerTlsCheckBox.setSelected(saved.tls());
             trackerTrustStoreField.setText(saved.trustStorePath());
             applyTrackerConfig(saved);
-            try {
-                if (PeerAccessTickets.optionalPeerKeys().isEmpty()) {
-                    statusLabel.setText("Chưa có khóa Tracker được tin cậy. Hãy nhập public key "
-                            + "và đối chiếu fingerprint qua kênh tin cậy.");
-                } else {
-                    statusLabel.setText("Đã nạp cấu hình Tracker.");
-                }
-            } catch (RuntimeException e) {
-                statusLabel.setText("Khóa Tracker chưa được tin cậy hoặc đã thay đổi. "
-                        + "Hãy xác minh fingerprint và nhập lại khóa.");
-            }
+            updateSetupGuidance();
         } catch (Exception e) {
             initializationError = TrackerConnectionDiagnostics.explain(e, activeTrackerConfig);
             loginButton.setDisable(true);
             registerButton.setDisable(true);
-            statusLabel.setText("Không thể khởi tạo Peer: " + initializationError);
+            if (trackerDefaults != null) {
+                updateSetupGuidance();
+            } else {
+                statusLabel.setText("Không thể khởi tạo Peer: " + initializationError);
+            }
         }
     }
 
@@ -156,10 +151,17 @@ public final class LoginController {
             endpoint.toConnectionConfig(trackerDefaults);
             trackerSettingsStore.save(endpoint);
             applyTrackerConfig(endpoint);
-            statusLabel.setText("Đã lưu cấu hình Tracker.");
+            updateSetupGuidance();
         } catch (Exception e) {
-            showDiagnostic(statusLabel,
-                    TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
+            if (!trackerSettingsStore.hasSavedSettings()
+                    || trackerTlsCheckBox.isSelected() && (trackerDefaults == null
+                    || trackerDefaults.trackerTrustStorePassword() == null
+                    || trackerDefaults.trackerTrustStorePassword().isBlank())) {
+                updateSetupGuidance();
+            } else {
+                showDiagnostic(statusLabel,
+                        TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
+            }
         }
     }
 
@@ -194,12 +196,13 @@ public final class LoginController {
                                 TrackerPublicKeyInstaller.defaultDestination(), expected, confirmed);
                         showImportedFingerprint(expected);
                     } catch (Exception replacementError) {
-                        statusLabel.setText("Không nhập được khóa Tracker: "
-                                + replacementError.getMessage());
+                        statusLabel.setText("Không nhập được public key Tracker. "
+                                + "Hãy chọn đúng tệp và nhập lại fingerprint đã xác minh.");
                     }
                 });
             } catch (Exception e) {
-                statusLabel.setText("Không nhập được khóa Tracker: " + e.getMessage());
+                statusLabel.setText("Không nhập được public key Tracker. "
+                        + "Hãy chọn đúng tệp và đối chiếu fingerprint qua kênh tin cậy.");
             }
         });
     }
@@ -209,6 +212,88 @@ public final class LoginController {
                 + PeerAccessTickets.formatFingerprint(
                         PeerAccessTickets.normalizeFingerprint(fingerprint))
                 + ". Khởi động lại ứng dụng Peer để áp dụng.");
+    }
+
+    private void updateSetupGuidance() {
+        boolean trackerConfigured;
+        try {
+            new UserTrackerSettingsStore.Endpoint(trackerHostField.getText().trim(),
+                    Integer.parseInt(trackerPortField.getText().trim()),
+                    trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText());
+            trackerConfigured = trackerSettingsStore.hasSavedSettings();
+        } catch (RuntimeException e) {
+            trackerConfigured = false;
+        }
+        try {
+            trackerConfigured &= SecurityProfile.parse(
+                    EnvConfig.get("P2P_PROFILE", "development"))
+                    != SecurityProfile.Mode.PRODUCTION || trackerTlsCheckBox.isSelected();
+        } catch (IllegalArgumentException e) {
+            trackerConfigured = false;
+        }
+
+        boolean trustStoreReady = false;
+        if (trackerTlsCheckBox.isSelected()) {
+            try {
+                String path = trackerTrustStoreField.getText().trim();
+                trustStoreReady = !path.isBlank()
+                        && trackerDefaults.trackerTrustStorePassword() != null
+                        && !trackerDefaults.trackerTrustStorePassword().isBlank()
+                        && Files.isRegularFile(Path.of(path))
+                        && Files.isReadable(Path.of(path));
+            } catch (RuntimeException e) {
+                trustStoreReady = false;
+            }
+        }
+
+        boolean publicKeyTrusted;
+        boolean publicKeyValid = true;
+        try {
+            publicKeyTrusted = !PeerAccessTickets.optionalPeerKeys().isEmpty();
+        } catch (RuntimeException e) {
+            publicKeyTrusted = false;
+            publicKeyValid = false;
+        }
+
+        SetupStep step = nextSetupStep(trackerConfigured,
+                trackerTlsCheckBox.isSelected(), trustStoreReady,
+                publicKeyTrusted, publicKeyValid);
+        statusLabel.setText(setupGuidance(step));
+        boolean ready = step == SetupStep.READY;
+        loginButton.setDisable(!ready);
+        registerButton.setDisable(!ready);
+    }
+
+    enum SetupStep {
+        TRACKER_CONFIGURATION,
+        TLS_TRUSTSTORE,
+        PUBLIC_KEY,
+        INVALID_PUBLIC_KEY,
+        READY
+    }
+
+    static SetupStep nextSetupStep(boolean trackerConfigured, boolean tlsEnabled,
+                                   boolean trustStoreReady, boolean publicKeyTrusted,
+                                   boolean publicKeyValid) {
+        if (!trackerConfigured) return SetupStep.TRACKER_CONFIGURATION;
+        if (tlsEnabled && !trustStoreReady) return SetupStep.TLS_TRUSTSTORE;
+        if (!publicKeyValid) return SetupStep.INVALID_PUBLIC_KEY;
+        if (!publicKeyTrusted) return SetupStep.PUBLIC_KEY;
+        return SetupStep.READY;
+    }
+
+    static String setupGuidance(SetupStep step) {
+        return switch (step) {
+            case TRACKER_CONFIGURATION -> "Bước 1/3: nhập địa chỉ/cổng Tracker, bật TLS theo "
+                    + "chính sách Tracker nếu cần, rồi lưu cấu hình.";
+            case TLS_TRUSTSTORE -> "Bước 2/3: chọn TLS, nhập đường dẫn truststore hợp lệ. "
+                    + "Mật khẩu truststore phải được quản trị viên cấu hình bên ngoài ứng dụng.";
+            case PUBLIC_KEY -> "Bước 3/3: nhập public key Tracker và đối chiếu fingerprint "
+                    + "do quản trị viên cung cấp qua kênh tin cậy.";
+            case INVALID_PUBLIC_KEY -> "Không đọc được public key Tracker đã tin cậy. "
+                    + "Hãy nhập lại public key hợp lệ và đối chiếu fingerprint qua kênh tin cậy.";
+            case READY -> "Cấu hình Tracker, TLS và public key đã sẵn sàng.";
+        };
     }
 
     @FXML
