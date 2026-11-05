@@ -17,10 +17,12 @@ import vn.edu.p2p.common.dto.FileSourceInfo;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
 import vn.edu.p2p.common.dto.SearchResultItem;
 import vn.edu.p2p.peer.network.TrackerConnection;
+import vn.edu.p2p.peer.network.TrackerConnectionDiagnostics;
 import vn.edu.p2p.peer.auth.AuthClientService;
 import vn.edu.p2p.peer.share.FileSourceClientService;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.security.PrivateKey;
@@ -381,8 +383,7 @@ public final class DownloadController {
             try {
                 transferHistoryClientService.reportTransferResult(sessionId, result);
             } catch (Exception e) {
-                postToUi(generation,
-                        () -> sourceLogs.add("Lưu lịch sử cảnh báo: " + e.getMessage()));
+                postToUi(generation, () -> sourceLogs.add("Không lưu được lịch sử truyền tệp."));
             }
 
             postToUi(generation, () -> {
@@ -392,7 +393,8 @@ public final class DownloadController {
                             + finalTargetFilePath);
                 } else {
                     statusLabel.setText("Phiên tải kết thúc (" + result.status() + "): "
-                            + (result.failureReason() != null ? result.failureReason() : "")
+                            + (result.failureReason() != null
+                            ? safeDownloadFailure(new IOException(result.failureReason())) : "")
                             + " File dở dang (nếu có) được giữ tại: " + finalTargetFilePath);
                 }
                 downloadSpeedLabel.setText("Tốc độ tải (DL): 0.0 KB/s");
@@ -400,11 +402,45 @@ public final class DownloadController {
             });
         } catch (Exception e) {
             postToUi(generation, () -> {
-                statusLabel.setText("Lỗi khi tải file: " + e.getMessage());
+                statusLabel.setText("Lỗi khi tải file: " + safeDownloadFailure(e));
                 resetButtons();
             });
         }
+
         activeDownloadClient = null;
+    }
+
+    static String safeDownloadFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            String message = cause.getMessage();
+            if (cause.getClass().getSimpleName().equals("TicketRefreshException")
+                    || message != null && (message.toLowerCase(java.util.Locale.ROOT)
+                    .contains("ticket") || message.contains("ACCESS_DENIED"))) {
+                return "Ticket truy cập không hợp lệ hoặc hết hạn. "
+                        + "Hãy đăng nhập lại, xác nhận file còn được chia sẻ rồi thử lại.";
+            }
+        }
+
+        TrackerConnectionDiagnostics.FailureKind kind =
+                TrackerConnectionDiagnostics.classify(failure);
+        if (kind == TrackerConnectionDiagnostics.FailureKind.TLS_HANDSHAKE_FAILED
+                || kind == TrackerConnectionDiagnostics.FailureKind.CERTIFICATE_INVALID
+                || kind == TrackerConnectionDiagnostics.FailureKind.CLIENT_TLS_SERVER_PLAINTEXT
+                || kind == TrackerConnectionDiagnostics.FailureKind.CLIENT_PLAINTEXT_SERVER_TLS) {
+            return TrackerConnectionDiagnostics.diagnostic(kind).message();
+        }
+        if (kind == TrackerConnectionDiagnostics.FailureKind.CONNECT_TIMEOUT
+                || kind == TrackerConnectionDiagnostics.FailureKind.READ_TIMEOUT) {
+            return "Peer nguồn hoặc Tracker không phản hồi đúng hạn. "
+                    + "Kiểm tra kết nối mạng và trạng thái dịch vụ.";
+        }
+        if (kind == TrackerConnectionDiagnostics.FailureKind.CONNECTION_REFUSED
+                || kind == TrackerConnectionDiagnostics.FailureKind.NO_ROUTE
+                || kind == TrackerConnectionDiagnostics.FailureKind.HOST_UNRESOLVED) {
+            return "Không kết nối được Peer nguồn hoặc Tracker. "
+                    + "Kiểm tra trạng thái online, host/cổng và cấu hình mạng.";
+        }
+        return "Không thể hoàn tất tải. Kiểm tra Tracker, Peer nguồn và thử lại.";
     }
 
     /** S40: Tính toán tốc độ Upload hiện tại dựa trên số byte PeerUploadServer đã gửi. */
