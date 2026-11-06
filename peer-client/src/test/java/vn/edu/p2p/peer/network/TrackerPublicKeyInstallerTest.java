@@ -28,6 +28,7 @@ class TrackerPublicKeyInstallerTest {
                 "tracker-public-key.properties"))) {
             storedTrust.load(input);
         }
+        assertEquals("2", storedTrust.getProperty("schema_version"));
         assertEquals(vn.edu.p2p.common.security.PeerAccessTickets.fingerprint(original.getPublic()),
                 storedTrust.getProperty(
                         vn.edu.p2p.common.security.PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY));
@@ -90,5 +91,58 @@ class TrackerPublicKeyInstallerTest {
         assertEquals(newKey.getPublic(), vn.edu.p2p.common.security.PeerAccessTickets
                 .loadPinnedPublicKey(destination,
                         destination.resolveSibling("tracker-public-key.properties")));
+    }
+
+    @Test
+    void backsUpUnknownPinVersionAndCorruptPublicKeyWithoutReplacingEither(@TempDir Path dir)
+            throws Exception {
+        var key = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        String encoded = Base64.getEncoder().encodeToString(key.getPublic().getEncoded());
+        Path source = dir.resolve("operator.key");
+        Path destination = dir.resolve("peer/tracker-public.key.b64");
+        Files.writeString(source, encoded);
+        String fingerprint = TrackerPublicKeyInstaller.fingerprint(encoded);
+        TrackerPublicKeyInstaller.install(source, destination, fingerprint);
+
+        Path trust = destination.resolveSibling("tracker-public-key.properties");
+        Properties future = new Properties();
+        try (var input = Files.newInputStream(trust)) { future.load(input); }
+        future.setProperty("schema_version", "99");
+        try (var output = Files.newOutputStream(trust)) { future.store(output, "future"); }
+        String originalTrust = Files.readString(trust);
+        assertThrows(java.io.IOException.class,
+                () -> TrackerPublicKeyInstaller.install(source, destination, fingerprint));
+        assertEquals(originalTrust, Files.readString(trust));
+        assertTrue(Files.exists(trust.resolveSibling(trust.getFileName() + ".bak")));
+
+        Files.writeString(trust, "schema_version=2\n"
+                + vn.edu.p2p.common.security.PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY
+                + "=" + vn.edu.p2p.common.security.PeerAccessTickets.fingerprint(key.getPublic())
+                + "\n");
+        Files.writeString(destination, "damaged");
+        assertThrows(java.io.IOException.class,
+                () -> TrackerPublicKeyInstaller.install(source, destination, fingerprint));
+        assertTrue(Files.exists(destination.resolveSibling(destination.getFileName() + ".bak")));
+        assertEquals("damaged", Files.readString(destination));
+    }
+
+    @Test
+    void migratesExistingPinOnStartupWithoutReinstallingKey(@TempDir Path dir) throws Exception {
+        var trusted = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+        Path keyFile = dir.resolve("tracker-public.key.b64");
+        String encoded = Base64.getEncoder().encodeToString(trusted.getPublic().getEncoded());
+        Files.writeString(keyFile, encoded);
+        Path settings = dir.resolve("tracker-public-key.properties");
+        Properties legacy = new Properties();
+        legacy.setProperty(vn.edu.p2p.common.security.PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY,
+                vn.edu.p2p.common.security.PeerAccessTickets.fingerprint(trusted.getPublic()));
+        try (var output = Files.newOutputStream(settings)) { legacy.store(output, "old pin"); }
+
+        TrackerPublicKeyInstaller.migratePinSettings(keyFile);
+
+        Properties migrated = new Properties();
+        try (var input = Files.newInputStream(settings)) { migrated.load(input); }
+        assertEquals("2", migrated.getProperty("schema_version"));
+        assertEquals(encoded, Files.readString(keyFile));
     }
 }

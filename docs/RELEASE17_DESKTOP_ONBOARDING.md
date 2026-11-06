@@ -5,6 +5,8 @@
 - `scripts/build_windows.ps1` now selects the Gradle **versioned** peer-client JAR and uses a non-Application bootstrap entrypoint. It refuses to delete a previous app-image automatically.
 - Build on a Windows host: `.\gradlew.bat clean :peer-client:installDist :peer-client:test`, `powershell -ExecutionPolicy Bypass -File scripts/build_windows.ps1`.
 - Unzip `dist/FileShare-P2P-windows.zip`, launch the bundled executable on a CLEAN Windows VM without JDK/Gradle, test login, settings, public key import, search, share, download, resume and update. Artifact was NOT built/tested on Windows in this patch generation environment.
+- Clean-machine app-image acceptance remains pending until this checklist is run and recorded on a real Windows machine; packaging code alone is not acceptance evidence.
+- Peers retaining a pre-pinning/old-format Tracker public key must import the current public key again and verify its grouped-hex SHA-256 fingerprint through an independent trusted channel.
 - TLS trust material / Ed25519 private keys must never be embedded in distributable ZIPs.
 
 ## Luồng sử dụng không cần terminal cho Peer

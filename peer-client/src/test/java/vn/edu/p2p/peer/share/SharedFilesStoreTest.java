@@ -67,10 +67,35 @@ class SharedFilesStoreTest {
         Path json = dir.resolve("store.json");
         Files.writeString(json, "{ khong phai json");
         SharedFilesStore store = new SharedFilesStore(json);
-        assertTrue(store.load().isEmpty());
+        IllegalStateException error = assertThrows(IllegalStateException.class, store::load);
+        assertTrue(error.getMessage().contains("danh sách chia sẻ"));
         assertThrows(java.io.IOException.class, () ->
                 store.add(new SharedFilesStore.Entry("x", "x", 1, "aa")));
         assertEquals("{ khong phai json", Files.readString(json),
                 "Corrupt data must not be silently overwritten");
+        assertTrue(Files.exists(json.resolveSibling("store.json.bak")));
+    }
+
+    @Test
+    void upgradesLegacyArrayAndPreservesUnknownVersionAndExistingBackup(@TempDir Path dir)
+            throws Exception {
+        Path json = dir.resolve("store.json");
+        Files.writeString(json, "[{\"path\":\"old.txt\",\"fileName\":\"old.txt\","
+                + "\"fileSize\":3,\"fileHash\":\"abc\"}]");
+        SharedFilesStore store = new SharedFilesStore(json);
+        assertEquals(1, store.load().size());
+        store.add(new SharedFilesStore.Entry("new.txt", "new.txt", 3, "def"));
+        assertTrue(Files.readString(json).stripLeading().startsWith("["),
+                "Writes keep the legacy array shape for compatibility with older app versions");
+
+        Files.writeString(json, "{\"schema_version\":99,\"entries\":[]}");
+        Path backup = json.resolveSibling("store.json.bak");
+        Files.writeString(backup, "preserve this backup");
+        String original = Files.readString(json);
+        assertThrows(IllegalStateException.class, store::load);
+        assertThrows(java.io.IOException.class,
+                () -> store.add(new SharedFilesStore.Entry("other", "other", 1, "ghi")));
+        assertEquals(original, Files.readString(json));
+        assertEquals("preserve this backup", Files.readString(backup));
     }
 }

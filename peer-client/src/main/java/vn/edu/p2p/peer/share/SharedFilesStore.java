@@ -1,6 +1,7 @@
 package vn.edu.p2p.peer.share;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.ArrayList;
@@ -12,6 +13,7 @@ public final class SharedFilesStore {
     public record Entry(String path, String fileName, long fileSize, String fileHash) {}
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final int CURRENT_SCHEMA_VERSION = 2;
     private final Path storeFile;
 
     private static volatile String currentUser;
@@ -37,22 +39,52 @@ public final class SharedFilesStore {
         try {
             return readStoredEntries();
         } catch (IOException e) {
-            // The UI can stay open, but writes must NOT overwrite a corrupt store.
-            return new ArrayList<>();
+            throw new IllegalStateException("Không thể đọc danh sách chia sẻ. "
+                    + "Dữ liệu gốc được giữ lại; hãy kiểm tra bản sao lưu .bak.", e);
         }
     }
 
     private List<Entry> readStoredEntries() throws IOException {
         if (!Files.exists(storeFile)) return new ArrayList<>();
         if (Files.isSymbolicLink(storeFile) || !Files.isRegularFile(storeFile)) {
-            throw new IOException("Unsafe shared files store: " + storeFile);
+            throw new IOException("Đường dẫn danh sách chia sẻ không an toàn.");
+        }
+        JsonNode root;
+        try {
+            root = MAPPER.readTree(storeFile.toFile());
+        } catch (IOException | RuntimeException e) {
+            throw invalidStore(e);
+        }
+        if (root == null) throw invalidStore(new IOException("Empty store"));
+        JsonNode entriesNode;
+        if (root.isArray()) {
+            entriesNode = root;
+        } else if (root.isObject()) {
+            JsonNode versionNode = root.get("schema_version");
+            int version = versionNode == null ? 1 : versionNode.asInt(-1);
+            if (version < 1 || version > CURRENT_SCHEMA_VERSION) {
+                throw invalidStore(new IOException("Unsupported shared-files schema"));
+            }
+            entriesNode = root.get("entries");
+            if (entriesNode == null || !entriesNode.isArray()) {
+                throw invalidStore(new IOException("Invalid shared-files entries"));
+            }
+        } else {
+            throw invalidStore(new IOException("Invalid shared-files root"));
         }
         try {
-            Entry[] arr = MAPPER.readValue(storeFile.toFile(), Entry[].class);
-            if (arr == null) throw new IOException("Invalid shared files store: " + storeFile);
-            return new ArrayList<>(List.of(arr));
-        } catch (RuntimeException e) {
-            throw new IOException("Invalid shared files store: " + storeFile, e);
+            Entry[] entries = MAPPER.treeToValue(entriesNode, Entry[].class);
+            if (entries == null) throw new IOException("Invalid entries");
+            for (Entry entry : entries) {
+                if (entry == null || entry.path() == null || entry.fileName() == null
+                        || entry.fileHash() == null || entry.fileSize() < 0) {
+                    throw new IOException("Invalid shared-file entry");
+                }
+                Path.of(entry.path());
+            }
+            return new ArrayList<>(List.of(entries));
+        } catch (IOException | RuntimeException e) {
+            throw invalidStore(e);
         }
     }
 
@@ -93,11 +125,32 @@ public final class SharedFilesStore {
     private void save(List<Entry> entries) throws IOException {
         Path dir = storeFile.toAbsolutePath().getParent();
         if (Files.isSymbolicLink(storeFile) || (dir != null && Files.isSymbolicLink(dir))) {
-            throw new IOException("Unsafe shared files store path: " + storeFile);
+            throw new IOException("Đường dẫn danh sách chia sẻ không an toàn.");
         }
         if (dir != null) Files.createDirectories(dir);
-        Path tmp = storeFile.resolveSibling(storeFile.getFileName() + ".tmp");
-        MAPPER.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), entries);
-        Files.move(tmp, storeFile, StandardCopyOption.REPLACE_EXISTING);
+        Path tmp = Files.createTempFile(dir, ".shared-files-", ".tmp");
+        try {
+            MAPPER.writerWithDefaultPrettyPrinter().writeValue(tmp.toFile(), entries);
+            try {
+                Files.move(tmp, storeFile, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(tmp, storeFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    private IOException invalidStore(Exception cause) throws IOException {
+        Path backup = storeFile.resolveSibling(storeFile.getFileName() + ".bak");
+        try {
+            if (!Files.exists(backup)) Files.copy(storeFile, backup);
+        } catch (IOException backupFailure) {
+            throw new IOException("Danh sách chia sẻ bị lỗi và không thể tạo bản sao lưu an toàn.",
+                    backupFailure);
+        }
+        return new IOException("Danh sách chia sẻ bị lỗi hoặc không tương thích. "
+                + "Đã giữ nguyên tệp gốc và tạo bản sao lưu .bak.", cause);
     }
 }

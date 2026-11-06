@@ -23,6 +23,8 @@ import java.util.UUID;
 public final class PeerKeyStore {
     private static final String PRIVATE_KEY = "private.pkcs8";
     private static final String PUBLIC_KEY = "public.x509";
+    private static final String SCHEMA_VERSION = "schema_version";
+    private static final int CURRENT_SCHEMA_VERSION = 2;
     private static final byte[] KEY_PAIR_CHECK = "fileshare-peer-key-check-v1"
             .getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
@@ -55,6 +57,7 @@ public final class PeerKeyStore {
     private KeyPair create(Path keyFile) throws IOException {
         KeyPair pair = PeerRequestProof.generateKeyPair();
         Properties properties = new Properties();
+        properties.setProperty(SCHEMA_VERSION, Integer.toString(CURRENT_SCHEMA_VERSION));
         properties.setProperty(PRIVATE_KEY,
                 Base64.getEncoder().encodeToString(pair.getPrivate().getEncoded()));
         properties.setProperty(PUBLIC_KEY, PeerRequestProof.encodePublicKey(pair.getPublic()));
@@ -86,8 +89,9 @@ public final class PeerKeyStore {
         Properties properties = new Properties();
         try (InputStream in = Files.newInputStream(keyFile)) {
             properties.load(in);
-        } catch (IOException e) {
-            throw new IOException("Cannot read stored Peer key file: " + keyFile, e);
+            validateVersion(properties);
+        } catch (IOException | IllegalArgumentException e) {
+            throw invalidData(keyFile, e);
         }
 
         try {
@@ -100,10 +104,58 @@ public final class PeerKeyStore {
             java.security.PublicKey publicKey = PeerRequestProof.decodePublicKey(publicValue);
             KeyPair pair = new KeyPair(publicKey, privateKey);
             verifyPair(pair);
+            if (properties.getProperty(SCHEMA_VERSION) == null) {
+                properties.setProperty(SCHEMA_VERSION, Integer.toString(CURRENT_SCHEMA_VERSION));
+                writeProperties(keyFile, properties);
+            }
             return pair;
         } catch (RuntimeException | java.security.GeneralSecurityException e) {
-            throw new IOException("Stored Peer key file is invalid: " + keyFile, e);
+            throw invalidData(keyFile, e);
         }
+    }
+
+    private static void writeProperties(Path keyFile, Properties properties) throws IOException {
+        Path parent = keyFile.getParent();
+        Path temp = Files.createTempFile(parent, "peer-key-", ".tmp");
+        try {
+            setOwnerOnlyPermissions(temp);
+            try (OutputStream out = Files.newOutputStream(temp)) {
+                properties.store(out, "FileShare-P2P Peer key; private material");
+            }
+            try {
+                Files.move(temp, keyFile, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temp, keyFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            setOwnerOnlyPermissions(keyFile);
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+    }
+
+    private static void validateVersion(Properties properties) throws IOException {
+        String version = properties.getProperty(SCHEMA_VERSION);
+        if (version == null) return;
+        try {
+            int parsed = Integer.parseInt(version);
+            if (parsed >= 1 && parsed <= CURRENT_SCHEMA_VERSION) return;
+        } catch (NumberFormatException ignored) {
+            // Invalid version is treated as an unsupported/corrupt store below.
+        }
+        throw new IOException("Unsupported peer-key schema");
+    }
+
+    private static IOException invalidData(Path keyFile, Exception cause) throws IOException {
+        Path backup = keyFile.resolveSibling(keyFile.getFileName() + ".bak");
+        try {
+            if (!Files.exists(backup)) Files.copy(keyFile, backup, StandardCopyOption.COPY_ATTRIBUTES);
+        } catch (IOException backupFailure) {
+            throw new IOException("Khóa Peer bị lỗi và không thể tạo bản sao lưu an toàn.",
+                    backupFailure);
+        }
+        return new IOException("Tệp khóa Peer bị lỗi hoặc không tương thích. "
+                + "Đã giữ nguyên tệp gốc và tạo bản sao lưu .bak.", cause);
     }
 
     private static void verifyPair(KeyPair pair) throws java.security.GeneralSecurityException {
