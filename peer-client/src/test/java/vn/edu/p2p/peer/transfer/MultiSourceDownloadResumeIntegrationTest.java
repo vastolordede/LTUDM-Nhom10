@@ -72,6 +72,17 @@ class MultiSourceDownloadResumeIntegrationTest {
         var ticketKeys = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
         Path targetFile = tempDir.resolve(targetName);
         writeInterruptedDownload(targetFile, content, metadata, initiallyGood, corruptPiece);
+        Path oldAppImage = tempDir.resolve("old-app-image");
+        Files.createDirectories(oldAppImage);
+        Files.writeString(oldAppImage.resolve("application.bin"), "old application image");
+        try (var paths = Files.walk(oldAppImage)) {
+            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                Files.delete(path);
+            }
+        }
+        if (!Files.isRegularFile(targetFile)) {
+            throw new AssertionError("Partial download must remain outside the replaced app image");
+        }
 
         try (PeerUploadServer seed = new PeerUploadServer(
                 0, seedRegistry, socketFactory, 2, ticketKeys.getPublic(), false)) {

@@ -12,6 +12,9 @@ import java.util.Properties;
 
 /** Out-of-band fingerprint checked installation. Never blindly trust downloaded key material. */
 public final class TrackerPublicKeyInstaller {
+    private static final String SCHEMA_VERSION = "schema_version";
+    private static final int CURRENT_SCHEMA_VERSION = 2;
+
     public static final class ReplacementConfirmationRequiredException extends IOException {
         private ReplacementConfirmationRequiredException() {
             super("Khóa Tracker hiện tại khác. Hãy nhập lại fingerprint SHA-256 mới để xác nhận thay khóa.");
@@ -22,6 +25,31 @@ public final class TrackerPublicKeyInstaller {
 
     public static Path defaultDestination() {
         return Path.of(System.getProperty("user.home"), ".fileshare-p2p", "tracker-public.key.b64");
+    }
+
+    static void migratePinSettings(Path keyFile) throws IOException {
+        Path trustSettings = keyFile.resolveSibling("tracker-public-key.properties");
+        if (!Files.exists(trustSettings)) return;
+        String pinned = readFingerprint(trustSettings);
+        if (pinned == null) return;
+        if (Files.exists(keyFile)) {
+            if (Files.isSymbolicLink(keyFile) || !Files.isRegularFile(keyFile)) {
+                throw new IOException("Tệp khóa công khai Tracker không an toàn.");
+            }
+            String encoded;
+            java.security.PublicKey key;
+            try {
+                encoded = Files.readString(keyFile, StandardCharsets.US_ASCII).trim();
+                key = PeerAccessTickets.decodePublicKey(encoded);
+            } catch (Exception e) {
+                throw invalidData(keyFile, "Tệp khóa công khai Tracker bị lỗi.", e);
+            }
+            if (!PeerAccessTickets.fingerprint(key).equals(pinned)) {
+                throw new IOException("Khóa Tracker không khớp fingerprint đã tin cậy; "
+                        + "không thay đổi cấu hình.");
+            }
+        }
+        saveFingerprint(trustSettings, pinned);
     }
 
     public static String fingerprint(String base64) throws Exception {
@@ -92,7 +120,7 @@ public final class TrackerPublicKeyInstaller {
                 current = Files.readString(destination, StandardCharsets.US_ASCII).trim();
                 currentKey = PeerAccessTickets.decodePublicKey(current);
             } catch (Exception e) {
-                throw new IOException("Tệp khóa Tracker hiện tại không hợp lệ; từ chối ghi đè.", e);
+                throw invalidData(destination, "Tệp khóa công khai Tracker bị lỗi.", e);
             }
             if (PeerAccessTickets.fingerprint(currentKey).equals(actualFingerprint)) {
                 saveFingerprint(trustSettings, actualFingerprint);
@@ -136,8 +164,17 @@ public final class TrackerPublicKeyInstaller {
         if (Files.exists(settingsFile)) {
             try (InputStream input = Files.newInputStream(settingsFile)) {
                 settings.load(input);
+                validateVersion(settings);
+                String existing = settings.getProperty(
+                        PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY);
+                if (existing != null && !existing.isBlank()) {
+                    PeerAccessTickets.normalizeFingerprint(existing);
+                }
+            } catch (IOException | IllegalArgumentException e) {
+                throw invalidData(settingsFile, "Cấu hình fingerprint Tracker bị lỗi.", e);
             }
         }
+        settings.setProperty(SCHEMA_VERSION, Integer.toString(CURRENT_SCHEMA_VERSION));
         settings.setProperty(PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY, fingerprint);
         Path temp = Files.createTempFile(settingsFile.getParent(), ".tracker-trust-", ".tmp");
         try {
@@ -164,13 +201,39 @@ public final class TrackerPublicKeyInstaller {
         Properties settings = new Properties();
         try (InputStream input = Files.newInputStream(settingsFile)) {
             settings.load(input);
+            validateVersion(settings);
+        } catch (IOException | IllegalArgumentException e) {
+            throw invalidData(settingsFile, "Cấu hình fingerprint Tracker bị lỗi.", e);
         }
         String fingerprint = settings.getProperty(PeerAccessTickets.TRUSTED_FINGERPRINT_PROPERTY);
         if (fingerprint == null || fingerprint.isBlank()) return null;
         try {
             return PeerAccessTickets.normalizeFingerprint(fingerprint);
         } catch (IllegalArgumentException e) {
-            throw new IOException("Fingerprint khóa Tracker đã lưu không hợp lệ.", e);
+            throw invalidData(settingsFile, "Cấu hình fingerprint Tracker bị lỗi.", e);
         }
+    }
+
+    private static void validateVersion(Properties settings) throws IOException {
+        String version = settings.getProperty(SCHEMA_VERSION);
+        if (version == null) return;
+        try {
+            int parsed = Integer.parseInt(version);
+            if (parsed >= 1 && parsed <= CURRENT_SCHEMA_VERSION) return;
+        } catch (NumberFormatException ignored) {
+            // Invalid version is treated as an unsupported/corrupt store below.
+        }
+        throw new IOException("Unsupported Tracker fingerprint schema");
+    }
+
+    private static IOException invalidData(Path file, String message, Exception cause)
+            throws IOException {
+        Path backup = file.resolveSibling(file.getFileName() + ".bak");
+        try {
+            if (!Files.exists(backup)) Files.copy(file, backup);
+        } catch (IOException backupFailure) {
+            throw new IOException(message + " Không thể tạo bản sao lưu an toàn.", backupFailure);
+        }
+        return new IOException(message + " Đã giữ nguyên tệp gốc và tạo bản sao lưu .bak.", cause);
     }
 }

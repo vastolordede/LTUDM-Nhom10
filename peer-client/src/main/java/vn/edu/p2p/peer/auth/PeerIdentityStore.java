@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.nio.charset.StandardCharsets;
@@ -18,6 +19,8 @@ public final class PeerIdentityStore {
     private static final String PEER_ID = "peer.id";
     private static final String DEVICE_NAME = "device.name";
     private static final String ACCOUNT_PREFIX = "account.peer.";
+    private static final String SCHEMA_VERSION = "schema_version";
+    private static final int CURRENT_SCHEMA_VERSION = 2;
 
     private final Path file;
 
@@ -71,7 +74,7 @@ public final class PeerIdentityStore {
         try {
             UUID.fromString(selected);
         } catch (IllegalArgumentException e) {
-            throw new IOException("Corrupt peer identity for this local account", e);
+            throw invalidData(e);
         }
         return new PeerIdentity(selected, legacy.deviceName());
     }
@@ -103,12 +106,18 @@ public final class PeerIdentityStore {
     private Properties properties() throws IOException {
         Properties props = new Properties();
         if (Files.exists(file)) {
-            try (InputStream in = Files.newInputStream(file)) { props.load(in); }
+            try (InputStream in = Files.newInputStream(file)) {
+                props.load(in);
+                validateVersion(props);
+            } catch (IOException | IllegalArgumentException e) {
+                throw invalidData(e);
+            }
         }
         return props;
     }
 
     private void saveProperties(Properties props) throws IOException {
+        props.setProperty(SCHEMA_VERSION, Integer.toString(CURRENT_SCHEMA_VERSION));
         if (file.getParent() != null) Files.createDirectories(file.getParent());
         // Write to a sibling temporary file before replacing the existing identity.
         Path temp = Files.createTempFile(file.toAbsolutePath().getParent(), "peer-", ".tmp");
@@ -126,18 +135,18 @@ public final class PeerIdentityStore {
     }
 
     private PeerIdentity load() throws IOException {
-        Properties properties = new Properties();
-        try (InputStream input = Files.newInputStream(file)) {
-            properties.load(input);
-        }
-
+        Properties properties = properties();
         String peerId = properties.getProperty(PEER_ID);
         String deviceName = properties.getProperty(DEVICE_NAME, detectDeviceName());
 
         try {
             UUID.fromString(peerId);
+            validateAccountIds(properties);
         } catch (Exception e) {
-            throw new IOException("Invalid local peer identity: " + file, e);
+            throw invalidData(e);
+        }
+        if (properties.getProperty(SCHEMA_VERSION) == null) {
+            saveProperties(properties);
         }
 
         return new PeerIdentity(peerId, deviceName);
@@ -157,5 +166,35 @@ public final class PeerIdentityStore {
         } catch (Exception e) {
             return "Unknown device";
         }
+    }
+
+    private static void validateVersion(Properties properties) throws IOException {
+        String version = properties.getProperty(SCHEMA_VERSION);
+        if (version == null) return;
+        try {
+            int parsed = Integer.parseInt(version);
+            if (parsed >= 1 && parsed <= CURRENT_SCHEMA_VERSION) return;
+        } catch (NumberFormatException ignored) {
+            // Invalid version is treated as an unsupported/corrupt store below.
+        }
+        throw new IOException("Unsupported identity schema");
+    }
+
+    private static void validateAccountIds(Properties properties) {
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith(ACCOUNT_PREFIX)) UUID.fromString(properties.getProperty(key));
+        }
+    }
+
+    private IOException invalidData(Exception cause) throws IOException {
+        Path backup = file.resolveSibling(file.getFileName() + ".bak");
+        try {
+            if (!Files.exists(backup)) Files.copy(file, backup, StandardCopyOption.COPY_ATTRIBUTES);
+        } catch (IOException backupFailure) {
+            throw new IOException("Dữ liệu Peer ID bị lỗi và không thể tạo bản sao lưu an toàn.",
+                    backupFailure);
+        }
+        return new IOException("Dữ liệu Peer ID bị lỗi hoặc không tương thích. "
+                + "Đã giữ nguyên tệp gốc và tạo bản sao lưu .bak.", cause);
     }
 }

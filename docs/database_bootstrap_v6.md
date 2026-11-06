@@ -69,7 +69,8 @@ a copy to a disposable database, compare important row counts/records, and run
 `database/verify_schema.sql`; record the result and restore duration. Rehearse a full
 Tracker restart against the restored database before relying on the backup.
 
-The real PostgreSQL recovery integration can be run on Windows with Docker:
+The real PostgreSQL recovery integration is skipped by default in `gradlew test`
+unless `P2P_PG_TEST_URL` is configured. Run it on Windows with Docker using:
 
 ```powershell
 .\tracker-server\src\test\run_postgres_recovery_acceptance.ps1
@@ -78,3 +79,5 @@ The real PostgreSQL recovery integration can be run on Windows with Docker:
 It creates a uniquely named disposable `postgres:16-alpine` container with a random
 process-only password and dynamic localhost port, and removes that container and its
 anonymous volume on completion. It does not use or inspect existing database volumes.
+The helper is a PowerShell `.ps1` script for Windows; it is not a cross-platform
+backup/restore command.
