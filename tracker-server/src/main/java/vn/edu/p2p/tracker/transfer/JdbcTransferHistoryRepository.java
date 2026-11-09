@@ -51,6 +51,10 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
                     failure_reason = EXCLUDED.failure_reason
                 WHERE transfer_sessions.destination_peer_id = EXCLUDED.destination_peer_id
                   AND transfer_sessions.file_id = EXCLUDED.file_id
+                  AND EXCLUDED.bytes_received >= transfer_sessions.bytes_received
+                  AND (transfer_sessions.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+                       OR (transfer_sessions.status = EXCLUDED.status
+                           AND transfer_sessions.bytes_received = EXCLUDED.bytes_received))
                 """;
 
         Instant safeStart = startedAt != null ? startedAt : Instant.now();
@@ -59,8 +63,24 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
             safeCompleted = completedAt.isBefore(safeStart) ? safeStart : completedAt;
         }
 
-        try (Connection connection = connectionFactory.open();
-             PreparedStatement statement = connection.prepareStatement(sql)) {
+        if (bytesReceived < 0) throw new SQLException("Negative transfer byte count");
+        try (Connection connection = connectionFactory.open()) {
+            // Status COMPLETED is not credible when the reported byte count differs from the catalog.
+            // This bounds falsified client reports, although true end-to-end proof still needs
+            // evidence from the uploader (a separate R101 security acceptance item).
+            try (PreparedStatement file = connection.prepareStatement(
+                    "SELECT file_size FROM files WHERE file_id = ?")) {
+                file.setLong(1, fileId);
+                try (ResultSet rs = file.executeQuery()) {
+                    if (!rs.next()) throw new SQLException("Unknown transfer fileId");
+                    long fileSize = rs.getLong(1);
+                    if (bytesReceived > fileSize
+                            || ("COMPLETED".equals(status) && bytesReceived != fileSize)) {
+                        throw new SQLException("Reported bytes inconsistent with file metadata");
+                    }
+                }
+            }
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setObject(1, transferId);
             statement.setLong(2, fileId);
             statement.setObject(3, destinationPeerId);
@@ -70,7 +90,8 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
             statement.setTimestamp(7, safeCompleted != null ? Timestamp.from(safeCompleted) : null);
             statement.setString(8, failureReason);
             if (statement.executeUpdate() != 1) {
-                throw new SQLException("Transfer UUID is owned by another peer or file");
+                throw new SQLException("Invalid transfer UUID ownership, state transition or byte regression");
+            }
             }
         }
     }
