@@ -69,14 +69,43 @@ class MultiSourceStorageSafetyIntegrationTest {
                 Arrays.fill(partial, (byte) 0x5a);
                 System.arraycopy(fixture.content(), 0, partial, 0, PIECE_SIZE);
                 Files.write(target, partial);
+                // Explicitly mark this fixture as P2P-owned before testing in-place resume.
+                ResumeOwnershipMarker.claim(target, fixture.metadata());
 
                 DownloadSessionResult result = download(fixture, target, null);
 
                 assertEquals("COMPLETED", result.status(), result.failureReason());
                 assertEquals(target, result.outputFile(),
-                        "A file with a hash-verified piece should remain the resume target");
+                        "A P2P-owned partial file must resume at its original path");
                 assertEquals(FileHashUtil.sha256(fixture.sourcePath()), FileHashUtil.sha256(target));
                 assertEquals(fixture.content().length - PIECE_SIZE, server.totalBytesUploaded());
+                assertNoTemporaryFiles();
+            }
+        });
+    }
+
+    @Test
+    void unclaimedPartialWithOneMatchingPieceIsPreservedAndUsesSuffix() throws Exception {
+        assertTimeoutPreemptively(Duration.ofSeconds(15), () -> {
+            TransferFixture fixture = createFixture("unclaimed-source.bin");
+            try (PeerUploadServer server = fixture.server()) {
+                Path target = tempDir.resolve("unclaimed.bin");
+                byte[] unclaimed = new byte[PIECE_SIZE * PIECE_COUNT];
+                Arrays.fill(unclaimed, (byte) 0x5a);
+                System.arraycopy(fixture.content(), 0, unclaimed, 0, PIECE_SIZE);
+                Files.write(target, unclaimed);
+                // One valid piece does not make a user-owned file safe to overwrite.
+                DownloadSessionResult result = download(fixture, target, null);
+
+                assertEquals("COMPLETED", result.status(), result.failureReason());
+                assertNotEquals(target, result.outputFile());
+                assertEquals("unclaimed (1).bin", result.outputFile().getFileName().toString());
+                assertArrayEquals(unclaimed, Files.readAllBytes(target),
+                        "Unclaimed existing bytes must remain unchanged");
+                assertEquals(FileHashUtil.sha256(fixture.sourcePath()),
+                        FileHashUtil.sha256(result.outputFile()));
+                assertEquals(fixture.content().length, server.totalBytesUploaded(),
+                        "An unclaimed partial file is never trusted as resume data");
                 assertNoTemporaryFiles();
             }
         });

@@ -17,6 +17,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.BitSet;
 import java.util.List;
 import java.util.Map;
@@ -40,6 +41,8 @@ public final class MultiSourceDownloadEngine {
 
     public static final int DEFAULT_WORKER_THREADS = 4;
     private static final int MAX_PIECE_RETRY_ROUNDS = 5;
+    /** A single fileId must have at most one active writer across all controllers. */
+    private static final Set<Long> ACTIVE_DOWNLOADS = ConcurrentHashMap.newKeySet();
 
     private final LocalFileRegistry fileRegistry;
     private final PeerDownloadClient downloadClient;
@@ -108,6 +111,24 @@ public final class MultiSourceDownloadEngine {
 
     /** Strict entry point: expected SHA-256 is obtained from Tracker file catalog, not Peer. */
     public DownloadSessionResult downloadFile(
+            long fileId, List<FileSourceInfo> candidateSources, Path targetFilePath,
+            DownloadProgressListener progressListener, AtomicBoolean cancelSignal,
+            UUID transferId, String expectedCatalogHash
+    ) {
+        Objects.requireNonNull(transferId, "transferId");
+        if (!ACTIVE_DOWNLOADS.add(fileId)) {
+            return failedResult(transferId, fileId, targetFilePath, Instant.now(), 0L,
+                    "A download of this fileId is already active on this Peer", List.of());
+        }
+        try {
+            return downloadFileExclusive(fileId, candidateSources, targetFilePath, progressListener,
+                    cancelSignal, transferId, expectedCatalogHash);
+        } finally {
+            ACTIVE_DOWNLOADS.remove(fileId);
+        }
+    }
+
+    private DownloadSessionResult downloadFileExclusive(
             long fileId, List<FileSourceInfo> candidateSources, Path targetFilePath,
             DownloadProgressListener progressListener, AtomicBoolean cancelSignal,
             UUID transferId, String expectedCatalogHash
@@ -249,6 +270,7 @@ public final class MultiSourceDownloadEngine {
         try {
             targetFilePath = resolveDownloadTarget(targetFilePath, metadata);
             DownloadPreflight.check(targetFilePath, metadata.fileSize());
+            ResumeOwnershipMarker.claim(targetFilePath, metadata);
             // Zero-byte shared files contain no pieces. Ensure a real empty file exists
             // before final SHA-256 and history completion; reject symbolic-link targets.
             if (metadata.fileSize() == 0L) {
@@ -368,6 +390,7 @@ public final class MultiSourceDownloadEngine {
                 );
             }
 
+            ResumeOwnershipMarker.release(targetFilePath);
             for (MutableSourceStat stat : sourceStatsMap.values()) {
                 if ("ACTIVE".equals(stat.status)) {
                     stat.markStatus("COMPLETED");
@@ -508,20 +531,22 @@ public final class MultiSourceDownloadEngine {
 
     private static Path resolveDownloadTarget(Path targetFilePath, FileMetadata metadata)
             throws IOException {
-        if (!Files.exists(targetFilePath)) {
+        if (!Files.exists(targetFilePath, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
             return targetFilePath;
         }
-        if (!Files.isRegularFile(targetFilePath)) {
-            throw new IOException("Download target exists and is not a regular file");
+        if (Files.isSymbolicLink(targetFilePath) || !Files.isRegularFile(targetFilePath)) {
+            throw new IOException("Download target exists and is not a safe regular file");
         }
-        boolean reusable = Files.size(targetFilePath) == metadata.fileSize()
-                && (metadata.fileSize() == 0L
-                ? FileHashUtil.sha256(targetFilePath).equalsIgnoreCase(metadata.fileHash())
-                : !inspectExistingPiecesForResume(targetFilePath, metadata).isEmpty());
-        if (!reusable) {
-            return FolderPathResolver.uniquify(targetFilePath);
+        // A coincidental single matching piece must NEVER authorize overwrite/resume.
+        // Existing complete content is safe to reuse; otherwise require our own durable marker.
+        if (Files.size(targetFilePath) == metadata.fileSize()
+                && FileHashUtil.sha256(targetFilePath).equalsIgnoreCase(metadata.fileHash())) {
+            return targetFilePath;
         }
-        return targetFilePath;
+        if (ResumeOwnershipMarker.matches(targetFilePath, metadata)) {
+            return targetFilePath;
+        }
+        return FolderPathResolver.uniquify(targetFilePath);
     }
 
     private FileSourceInfo sourceForRequest(long fileId, FileSourceInfo assignedSource,
