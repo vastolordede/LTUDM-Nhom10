@@ -52,6 +52,7 @@ public final class FolderController {
     @FXML private Button chooseDirButton;
     @FXML private Button downloadAllButton;
     @FXML private Button downloadSelectedButton;
+    @FXML private Button unshareFolderButton;
     @FXML private Button cancelButton;
     @FXML private ProgressBar progressBar;
     @FXML private Label statusLabel;
@@ -204,6 +205,36 @@ public final class FolderController {
             outputDir = chosen.toPath();
             outputDirField.setText(outputDir.toString());
         }
+    }
+
+    /** Owner-only on Tracker: another Peer cannot delete someone else's shared group. */
+    @FXML
+    private void onUnshareFolder() {
+        if (closed.get() || currentGroupId <= 0 || folderClient == null) return;
+        long id = currentGroupId;
+        long generation = AuthClientService.sessionGeneration();
+        unshareFolderButton.setDisable(true);
+        executor.submit(() -> {
+            try {
+                var result = folderClient.unshareFolder(sessionId, id);
+                postToUi(generation, () -> {
+                    if (result.stopped()) {
+                        groupsListView.getItems().removeIf(g -> g.groupId() == id);
+                        filesListView.getItems().clear();
+                        currentGroupId = 0;
+                        currentGroupComplete = false;
+                        currentDirectories = List.of();
+                        statusLabel.setText("Đã ngừng chia sẻ thư mục. File chia sẻ riêng vẫn được giữ.");
+                    } else statusLabel.setText("Thư mục đã ngừng chia sẻ trước đó.");
+                    unshareFolderButton.setDisable(false);
+                });
+            } catch (Exception ex) {
+                postToUi(generation, () -> {
+                    statusLabel.setText("Không thể ngừng chia sẻ thư mục: " + ex.getMessage());
+                    unshareFolderButton.setDisable(false);
+                });
+            }
+        });
     }
 
     @FXML
@@ -390,6 +421,7 @@ public final class FolderController {
         downloadAllButton.setDisable(busy || currentGroupId <= 0 || !currentGroupComplete);
         searchButton.setDisable(busy);
         cancelButton.setDisable(!busy);
+        unshareFolderButton.setDisable(busy || currentGroupId <= 0);
     }
 
     public void shutdown() {

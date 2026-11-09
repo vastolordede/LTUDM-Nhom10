@@ -10,6 +10,8 @@ import vn.edu.p2p.common.dto.FolderSearchRequest;
 import vn.edu.p2p.common.dto.FolderSearchResponse;
 import vn.edu.p2p.common.dto.FolderShareRequest;
 import vn.edu.p2p.common.dto.FolderShareResponse;
+import vn.edu.p2p.common.dto.FolderUnshareRequest;
+import vn.edu.p2p.common.dto.FolderUnshareResponse;
 import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
 import vn.edu.p2p.common.dto.RecordFolderDownloadResponse;
 import vn.edu.p2p.tracker.config.DatabaseConnectionFactory;
@@ -63,14 +65,38 @@ public final class FolderCatalogService {
                 long groupId;
                 try (PreparedStatement ps = c.prepareStatement("""
                         INSERT INTO file_groups (group_name, owner_peer_id) VALUES (?, ?)
-                        ON CONFLICT (owner_peer_id, group_name)
-                        DO UPDATE SET created_at = CURRENT_TIMESTAMP
+                        ON CONFLICT (owner_peer_id, group_name) DO NOTHING
                         RETURNING group_id""")) {
                     ps.setString(1, request.groupName().trim());
                     ps.setObject(2, peerId);
                     try (ResultSet rs = ps.executeQuery()) {
-                        rs.next();
-                        groupId = rs.getLong(1);
+                        if (rs.next()) groupId = rs.getLong(1);
+                        else groupId = 0L;
+                    }
+                }
+                if (groupId == 0L) {
+                    try (PreparedStatement existing = c.prepareStatement("""
+                            SELECT group_id FROM file_groups
+                            WHERE owner_peer_id = ? AND group_name = ? FOR UPDATE""")) {
+                        existing.setObject(1, peerId);
+                        existing.setString(2, request.groupName().trim());
+                        try (ResultSet rs = existing.executeQuery()) {
+                            if (!rs.next()) throw new FileCatalogException("Folder conflict changed concurrently");
+                            groupId = rs.getLong(1);
+                        }
+                    }
+                    try (PreparedStatement check = c.prepareStatement("""
+                            SELECT EXISTS(SELECT 1 FROM group_files WHERE group_id = ?)
+                              OR EXISTS(SELECT 1 FROM folder_directories WHERE group_id = ?)""")) {
+                        check.setLong(1, groupId);
+                        check.setLong(2, groupId);
+                        try (ResultSet rs = check.executeQuery()) {
+                            rs.next();
+                            if (rs.getBoolean(1)) {
+                                throw new FileCatalogException("Folder name already shared by this Peer. "
+                                        + "Unshare it first or choose a different name; existing files were not replaced.");
+                            }
+                        }
                     }
                 }
                 try (PreparedStatement ps = c.prepareStatement("DELETE FROM group_files WHERE group_id = ?")) {
@@ -114,6 +140,50 @@ public final class FolderCatalogService {
             } catch (SQLException | FileCatalogException | RuntimeException ex) {
                 c.rollback();
                 throw ex;
+            } finally {
+                c.setAutoCommit(true);
+            }
+        }
+    }
+
+    /** R94: remove folder associations without touching independently shared file records.
+     *  Historical folder download sessions remain referenced by file_groups.
+     */
+    public FolderUnshareResponse unshare(FolderUnshareRequest request)
+            throws FileCatalogException, SQLException {
+        if (request == null || request.groupId() <= 0) {
+            throw new FileCatalogException("Invalid folder group ID");
+        }
+        UUID peerId = sessionPeerResolver.resolvePeerId(parse(request.sessionId()));
+        try (Connection c = connectionFactory.open()) {
+            c.setAutoCommit(false);
+            try {
+                try (PreparedStatement owner = c.prepareStatement("""
+                        SELECT 1 FROM file_groups WHERE group_id = ? AND owner_peer_id = ? FOR UPDATE""")) {
+                    owner.setLong(1, request.groupId());
+                    owner.setObject(2, peerId);
+                    try (ResultSet rs = owner.executeQuery()) {
+                        if (!rs.next()) throw new FileCatalogException("Folder not found or not owned by this Peer");
+                    }
+                }
+                int removed = 0;
+                try (PreparedStatement del = c.prepareStatement(
+                        "DELETE FROM group_files WHERE group_id = ?")) {
+                    del.setLong(1, request.groupId());
+                    removed += del.executeUpdate();
+                }
+                try (PreparedStatement del = c.prepareStatement(
+                        "DELETE FROM folder_directories WHERE group_id = ?")) {
+                    del.setLong(1, request.groupId());
+                    removed += del.executeUpdate();
+                }
+                c.commit();
+                return new FolderUnshareResponse(request.groupId(), removed > 0);
+            } catch (Exception ex) {
+                c.rollback();
+                if (ex instanceof SQLException e) throw e;
+                if (ex instanceof FileCatalogException e) throw e;
+                throw new SQLException("Folder unshare transaction failed", ex);
             } finally {
                 c.setAutoCommit(true);
             }

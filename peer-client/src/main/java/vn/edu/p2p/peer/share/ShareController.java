@@ -311,7 +311,9 @@ public final class ShareController {
                 });
             } catch (Exception e) {
                 postToCurrentSession(generation, () -> {
-                    statusLabel.setText("Lỗi chia sẻ thư mục: " + e.getMessage());
+                    statusLabel.setText("Không thể hoàn tất chia sẻ thư mục: " + e.getMessage()
+                            + ". Một số file con có thể đã được công bố; kiểm tra Tệp của tôi "
+                            + "trước khi thử lại.");
                     chooseFolderButton.setDisable(false);
                 });
             }
