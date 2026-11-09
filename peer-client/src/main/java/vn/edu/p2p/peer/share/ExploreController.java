@@ -59,11 +59,8 @@ public final class ExploreController {
     private Consumer<FolderSearchItem> onFolder;
     private String sessionId;
     private String query = "";
-    private int nextFilePage;
-    private int nextFolderPage;
+    private MergedDiscoveryPager pager;
     private int generation;
-    private boolean moreFiles = true;
-    private boolean moreFolders = true;
     private boolean busy;
 
     @FXML
@@ -119,10 +116,15 @@ public final class ExploreController {
         generation++;
         loaded.clear();
         resultsTable.getItems().clear();
-        nextFilePage = 0;
-        nextFolderPage = 0;
-        moreFiles = true;
-        moreFolders = true;
+        final String currentSession = sessionId;
+        final String currentQuery = query;
+        final DiscoverySort sort = sortCombo.getValue();
+        pager = new MergedDiscoveryPager(
+                (page, size) -> files.search(currentSession, currentQuery, page, size, sort)
+                        .results().stream().map(DiscoveryEntry::ofFile).toList(),
+                (page, size) -> folders.search(currentSession, currentQuery, page, size, sort)
+                        .groups().stream().map(DiscoveryEntry::ofFolder).toList(),
+                DiscoveryEntry.comparator(sort));
         detailsLabel.setText("Chọn một kết quả để xem chi tiết.");
         loadNextPage();
     }
@@ -131,49 +133,30 @@ public final class ExploreController {
     private void onLoadMore() { loadNextPage(); }
 
     private void loadNextPage() {
-        if (busy || (!moreFiles && !moreFolders)) return;
-        boolean getFiles = moreFiles;
-        boolean getFolders = moreFolders;
-        final int filePage = nextFilePage;
-        final int folderPage = nextFolderPage;
+        if (busy || pager == null || !pager.hasMore()) return;
+        final MergedDiscoveryPager requestPager = pager;
         final int requestGeneration = generation;
-        final DiscoverySort sort = sortCombo.getValue();
-        final String searchQuery = query;
         busy = true;
         searchButton.setDisable(true);
         loadMoreButton.setDisable(true);
         statusLabel.setText("Đang tải danh mục từ Tracker...");
         executor.execute(() -> {
             try {
-                List<SearchResultItem> fileResult = getFiles
-                        ? files.search(sessionId, searchQuery, filePage, PAGE_SIZE, sort).results()
-                        : List.of();
-                List<FolderSearchItem> folderResult = getFolders
-                        ? folders.search(sessionId, searchQuery, folderPage, PAGE_SIZE, sort).groups()
-                        : List.of();
+                List<DiscoveryEntry> results = requestPager.nextPage(PAGE_SIZE);
                 Platform.runLater(() -> {
                     if (requestGeneration != generation) {
                         busy = false;
                         loadNextPage();
                         return;
                     }
-                    if (getFiles) {
-                        nextFilePage++;
-                        moreFiles = fileResult.size() == PAGE_SIZE;
-                    }
-                    if (getFolders) {
-                        nextFolderPage++;
-                        moreFolders = folderResult.size() == PAGE_SIZE;
-                    }
-                    fileResult.forEach(result -> loaded.add(DiscoveryEntry.ofFile(result)));
-                    folderResult.forEach(result -> loaded.add(DiscoveryEntry.ofFolder(result)));
+                    loaded.addAll(results);
                     busy = false;
                     searchButton.setDisable(false);
-                    loadMoreButton.setDisable(!moreFiles && !moreFolders);
+                    loadMoreButton.setDisable(!requestPager.hasMore());
                     applyFilter();
                     statusLabel.setText(loaded.isEmpty() ? "Không tìm thấy kết quả." :
-                            "Đã tải " + loaded.size() + " mục. "
-                                + (moreFiles || moreFolders ? "Có thể tải thêm." : "Đã hết kết quả."));
+                            "Đã tải " + loaded.size() + " mục đúng thứ tự toàn cục. "
+                                + (requestPager.hasMore() ? "Có thể tải thêm." : "Đã hết kết quả."));
                 });
             } catch (Exception e) {
                 Platform.runLater(() -> {
