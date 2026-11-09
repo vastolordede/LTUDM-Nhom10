@@ -603,8 +603,16 @@ public final class LoginController {
             transferDashboard.show(trackerConnection, session.sessionId(), session.peerId(),
                     authClientService.ticketRevocations());
         } catch (Exception e) {
-            closeTransferDashboard();
-            showDiagnostic(statusLabel, TrackerConnectionDiagnostics.classify(e));
+            // The Tracker must not keep this Peer online when the uploader failed to start.
+            ClientSession failedSession = beginLocalLogout();
+            String reason = "Không thể mở Peer Center/Upload Server (cổng bận hoặc cấu hình bảo mật lỗi). "
+                    + "Phiên đã được đóng; hãy kiểm tra cổng, TLS và thử lại.";
+            resetLoggedOutUi(reason);
+            if (failedSession != null) {
+                CompletableFuture.runAsync(() ->
+                        authClientService.logoutBestEffort(failedSession, TRACKER_LOGOUT_TIMEOUT),
+                        ioExecutor);
+            }
         }
     }
 
