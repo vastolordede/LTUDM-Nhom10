@@ -6,75 +6,78 @@
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.PasswordField?>
 <?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.ScrollPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox xmlns="http://javafx.com/javafx"
-      xmlns:fx="http://javafx.com/fxml"
-      fx:controller="vn.edu.p2p.peer.auth.LoginController"
-      alignment="CENTER"
-      spacing="12"
-      styleClass="login-root">
-
+<ScrollPane xmlns="http://javafx.com/javafx"
+            xmlns:fx="http://javafx.com/fxml"
+            fx:controller="vn.edu.p2p.peer.auth.LoginController"
+            fitToWidth="true" hbarPolicy="NEVER" vbarPolicy="AS_NEEDED"
+            style="-fx-background-color: #101827; -fx-background: #101827;">
+    <content>
+        <VBox alignment="CENTER" spacing="12" styleClass="login-root">
     <padding>
-        <Insets top="28" right="42" bottom="28" left="42"/>
+        <Insets top="26" right="42" bottom="26" left="42"/>
     </padding>
 
-    <Label text="P2P FILE SHARING"
-           styleClass="title"/>
+    <Label text="P2P FILE SHARING" styleClass="title"/>
+    <Label fx:id="authModeLabel" text="Đăng nhập vào Tracker" styleClass="subtitle"/>
 
-    <Label text="Đăng nhập vào Tracker"
-           styleClass="subtitle"/>
+    <!-- Two independent credential forms. Only the active form is visible/managed. -->
+    <VBox fx:id="loginForm" spacing="12" alignment="CENTER">
+        <TextField fx:id="usernameField" promptText="Tên đăng nhập" maxWidth="320"/>
+        <PasswordField fx:id="passwordField" promptText="Mật khẩu" maxWidth="320"/>
+        <Button fx:id="loginButton" text="ĐĂNG NHẬP" onAction="#onLogin"
+                defaultButton="true" prefWidth="320"/>
+        <Button fx:id="showRegisterButton" text="Chưa có tài khoản? Đăng ký"
+                style="-fx-background-color: transparent; -fx-text-fill: #5eead4;"
+                prefWidth="320" onAction="#onShowRegisterForm"/>
+    </VBox>
 
-    <Label text="Tracker connection" styleClass="subtitle"/>
-    <HBox spacing="6" alignment="CENTER">
-        <TextField fx:id="trackerHostField" promptText="Tracker IP / hostname" prefWidth="205"/>
-        <TextField fx:id="trackerPortField" promptText="Port" prefWidth="95"/>
-    </HBox>
-    <CheckBox fx:id="trackerTlsCheckBox" text="Use TLS (requires truststore password from environment)"/>
-    <TextField fx:id="trackerTrustStoreField" promptText="TLS truststore path" maxWidth="320"/>
-    <HBox alignment="CENTER" spacing="8">
-        <Button fx:id="saveTrackerButton" text="Save Tracker settings"
-                onAction="#onSaveTrackerSettings"/>
-        <Button fx:id="diagnoseTrackerButton" text="Test connection"
-                onAction="#onDiagnoseTracker"/>
-    </HBox>
-    <Button fx:id="importTrackerKeyButton" text="Import Tracker PUBLIC key (verify fingerprint)"
-            onAction="#onImportTrackerPublicKey" maxWidth="320"/>
+    <VBox fx:id="registrationForm" visible="false" managed="false"
+          spacing="12" alignment="CENTER">
+        <TextField fx:id="registerUsernameField" promptText="Tên tài khoản mới" maxWidth="320"/>
+        <PasswordField fx:id="registerPasswordField" promptText="Mật khẩu mới" maxWidth="320"/>
+        <PasswordField fx:id="confirmPasswordField" promptText="Nhập lại mật khẩu" maxWidth="320"/>
+        <Button fx:id="registerButton" text="TẠO TÀI KHOẢN" prefWidth="320"
+                onAction="#onRegister"/>
+        <Button fx:id="showLoginButton" text="Đã có tài khoản? Đăng nhập"
+                style="-fx-background-color: transparent; -fx-text-fill: #5eead4;"
+                prefWidth="320" onAction="#onShowLoginForm"/>
+    </VBox>
 
-    <TextField fx:id="usernameField"
-               promptText="Username"
-               maxWidth="320"/>
+    <Button fx:id="openDashboardButton" text="Mở Peer Center" disable="true"
+            onAction="#onOpenDashboard"/>
 
-    <PasswordField fx:id="passwordField"
-                   promptText="Password"
+    <Label fx:id="statusLabel" wrapText="true" maxWidth="330" styleClass="status"/>
+    <Label fx:id="connectionStatusLabel" wrapText="true"
+           maxWidth="330" styleClass="status"/>
+
+    <!-- Technical settings stay accessible for troubleshooting, not in daily login. -->
+    <Button fx:id="advancedSettingsToggleButton" text="Cấu hình nâng cao"
+            onAction="#onToggleAdvancedSettings"
+            style="-fx-background-color: transparent; -fx-text-fill: #a5b4c8;"/>
+    <VBox fx:id="advancedSettingsBox" visible="false" managed="false"
+          spacing="10" alignment="CENTER">
+        <Label text="Thiết lập Tracker / Peer" styleClass="subtitle"/>
+        <HBox spacing="6" alignment="CENTER">
+            <TextField fx:id="trackerHostField" promptText="Tracker IP / hostname" prefWidth="205"/>
+            <TextField fx:id="trackerPortField" promptText="Port" prefWidth="95"/>
+        </HBox>
+        <CheckBox fx:id="trackerTlsCheckBox" text="Dùng TLS (yêu cầu truststore được cấu hình)"/>
+        <TextField fx:id="trackerTrustStoreField" promptText="Đường dẫn TLS truststore"
                    maxWidth="320"/>
-
-    <PasswordField fx:id="confirmPasswordField"
-                   promptText="Nhập lại mật khẩu (khi đăng ký)"
+        <TextField fx:id="listeningPortField" promptText="Cổng lắng nghe Peer"
                    maxWidth="320"/>
-
-    <TextField fx:id="listeningPortField"
-               promptText="Peer listening port"
-               maxWidth="320"/>
-
-    <Button fx:id="loginButton"
-            text="ĐĂNG NHẬP"
-            onAction="#onLogin"
-            defaultButton="true" prefWidth="320"/>
-
-    <Button fx:id="registerButton" text="TẠO TÀI KHOẢN"
-            maxWidth="320" onAction="#onRegister"/>
-
-    <Button fx:id="openDashboardButton" text="Mo Peer Center" disable="true" onAction="#onOpenDashboard"/>
-
-    <Label fx:id="statusLabel"
-           wrapText="true"
-           maxWidth="320"
-           styleClass="status"/>
-
-    <Label fx:id="connectionStatusLabel"
-           wrapText="true"
-           maxWidth="320"
-           styleClass="status"/>
-</VBox>
+        <HBox alignment="CENTER" spacing="8">
+            <Button fx:id="saveTrackerButton" text="Lưu cấu hình" onAction="#onSaveTrackerSettings"/>
+            <Button fx:id="diagnoseTrackerButton" text="Kiểm tra kết nối"
+                    onAction="#onDiagnoseTracker"/>
+        </HBox>
+        <Button fx:id="importTrackerKeyButton" text="Nhập PUBLIC key Tracker (xác minh fingerprint)"
+                onAction="#onImportTrackerPublicKey" maxWidth="320"/>
+    </VBox>
+        </VBox>
+    </content>
+</ScrollPane>
