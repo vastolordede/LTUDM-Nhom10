@@ -203,8 +203,8 @@ public final class MultiSourceDownloadEngine {
                             FileSourceInfo requestSource = sourceForRequest(fileId, source,
                                     currentSources, refreshFailedSources);
                             var page = downloadClient.fetchMetadataPage(requestSource.ipAddress(),
-                                    requestSource.listeningPort(), fileId, offset, 400,
-                                    requestSource.accessTicket());
+                                    requestSource.listeningPort(), requestSource.peerId(),
+                                    fileId, offset, 400, requestSource.accessTicket());
                             if (page.pieces().isEmpty()) throw new IOException("Empty metadata page");
                             for (PieceInfo piece : page.pieces()) {
                                 if (piece.pieceIndex() != allPieces.size() || piece.pieceLength() <= 0

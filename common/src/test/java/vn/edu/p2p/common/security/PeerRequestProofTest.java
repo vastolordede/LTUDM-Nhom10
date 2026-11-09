@@ -103,4 +103,19 @@ class PeerRequestProofTest {
         assertFalse(PeerRequestProof.verify(claims.requesterPublicKey(),
                 PeerRequestProof.RequestType.PIECE, "uploader-1", 42, 0, ticket, thiefProof, CLOCK));
     }
+    @Test
+    void metadataPageProofBindsBothOffsetAndPageSize() {
+        var keys = PeerRequestProof.generateKeyPair();
+        var proof = PeerRequestProof.signMetadataPage(keys.getPrivate(),
+                "uploader-1", 42, 400, 200, "ticket", CLOCK);
+        assertTrue(PeerRequestProof.verifyMetadataPage(keys.getPublic(),
+                "uploader-1", 42, 400, 200, "ticket", proof, CLOCK));
+        assertFalse(PeerRequestProof.verifyMetadataPage(keys.getPublic(),
+                "uploader-1", 42, 401, 200, "ticket", proof, CLOCK));
+        assertFalse(PeerRequestProof.verifyMetadataPage(keys.getPublic(),
+                "uploader-1", 42, 400, 201, "ticket", proof, CLOCK));
+        assertFalse(PeerRequestProof.verify(keys.getPublic(), PeerRequestProof.RequestType.PIECE,
+                "uploader-1", 42, 400, "ticket", proof, CLOCK));
+    }
+
 }
