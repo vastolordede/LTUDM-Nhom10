@@ -31,8 +31,26 @@ public final class SharedFilesStore {
 
     public static SharedFilesStore forUser(String username) {
         String safe = username.replaceAll("[^A-Za-z0-9_.-]", "_");
-        return new SharedFilesStore(
-                Path.of(System.getProperty("user.home"), ".fileshare-p2p", safe + "-shared.json"));
+        Path dir = Path.of(System.getProperty("user.home"), ".fileshare-p2p");
+        SharedFilesStore result = new SharedFilesStore(dir.resolve(safe + "-shared.json"));
+        // Port changes must not silently orphan old 7001-shared.json inventories.
+        if (!Files.exists(result.storeFile) && Files.isDirectory(dir) && !Files.isSymbolicLink(dir)) {
+            try (DirectoryStream<Path> legacy = Files.newDirectoryStream(dir,
+                    safe + "-[0-9]*-shared.json")) {
+                List<Entry> recovered = new ArrayList<>();
+                for (Path candidate : legacy) {
+                    if (!Files.isRegularFile(candidate) || Files.isSymbolicLink(candidate)) continue;
+                    recovered.addAll(new SharedFilesStore(candidate).readStoredEntries());
+                }
+                if (!recovered.isEmpty()) {
+                    // Never overwrite the legacy file; persist a new stable inventory.
+                    result.save(recovered);
+                }
+            } catch (IOException e) {
+                throw new IllegalStateException("Không thể khôi phục danh sách chia sẻ cũ", e);
+            }
+        }
+        return result;
     }
 
     public synchronized List<Entry> load() {
@@ -103,16 +121,17 @@ public final class SharedFilesStore {
         return valid;
     }
 
-    /** Verify small files on restore; large files are validated piece-by-piece when uploaded. */
+    /** On startup, verify every advertised file before re-publishing an online source. */
     private static boolean smallFileHashMatches(Entry entry, Path file) throws IOException {
-        if (entry.fileSize() > 32L * 1024 * 1024 || entry.fileHash() == null
-                || !entry.fileHash().matches("[0-9a-fA-F]{64}")) return true;
+        if (entry.fileHash() == null || !entry.fileHash().matches("[0-9a-fA-F]{64}")) return true;
         return entry.fileHash().equalsIgnoreCase(FileHashUtil.sha256(file));
     }
 
     public synchronized void add(Entry entry) throws IOException {
         List<Entry> all = readStoredEntries();
-        all.removeIf(x -> x.fileHash().equalsIgnoreCase(entry.fileHash()));
+        // A single SHA-256 may belong to multiple independently shared local paths.
+        all.removeIf(x -> Path.of(x.path()).toAbsolutePath().normalize()
+                .equals(Path.of(entry.path()).toAbsolutePath().normalize()));
         all.add(entry);
         save(all);
     }

@@ -580,7 +580,7 @@ public final class LoginController {
             heartbeatCoordinator.start(session);
         }
 
-        SharedFilesStore.setCurrentUser(usernameField.getText().trim() + "-" + listeningPortField.getText().trim());
+        SharedFilesStore.setCurrentUser(usernameField.getText().trim());
 
         openDashboardForSession(session);
     }

@@ -138,6 +138,14 @@ public final class JdbcPeerSessionRepository implements PeerSessionRepository {
                     insert.executeUpdate();
                 }
 
+                // A new login must not inherit file sources from a dead old process.
+                // The desktop restore job re-publishes only files it can verify locally.
+                try (PreparedStatement reset = connection.prepareStatement("""
+                        UPDATE peer_files SET is_sharing = FALSE, updated_at = CURRENT_TIMESTAMP
+                        WHERE peer_id = ? AND is_sharing = TRUE""")) {
+                    reset.setObject(1, newSession.peerId());
+                    reset.executeUpdate();
+                }
                 connection.commit();
                 return replaced;
             } catch (SQLException e) {

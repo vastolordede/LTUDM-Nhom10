@@ -52,12 +52,12 @@ class SharedFilesStoreTest {
     }
 
     @Test
-    void characterizationOnePeerStoresOnlyOneEntryPerHash(@TempDir Path dir) throws Exception {
+    void keepsMultipleLocalPathsForSameHash(@TempDir Path dir) throws Exception {
         SharedFilesStore store = new SharedFilesStore(dir.resolve("store.json"));
         store.add(new SharedFilesStore.Entry("x", "x", 1, "AA"));
         store.add(new SharedFilesStore.Entry("y", "y", 1, "aa"));
-        assertEquals(List.of(new SharedFilesStore.Entry("y", "y", 1, "aa")), store.load(),
-                "The current model keeps one shared path per hash on a peer");
+        assertEquals(2, store.load().size(),
+                "Two local paths with the same SHA-256 must survive restart");
         store.removeByHash("AA");
         assertTrue(store.load().isEmpty());
     }
