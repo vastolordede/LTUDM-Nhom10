@@ -23,7 +23,7 @@ public final class PeerApplication extends Application {
         Parent root = loader.load();
         loginController = loader.getController();
 
-        Scene scene = new Scene(root, 580, 840);
+        Scene scene = new Scene(root, 580, 730);
         var css = PeerApplication.class.getResource(
                 "/vn/edu/p2p/peer/view/styles.css"
         );
@@ -33,7 +33,7 @@ public final class PeerApplication extends Application {
 
         stage.setTitle("FileShare-P2P");
         stage.setMinWidth(500);
-        stage.setMinHeight(790);
+        stage.setMinHeight(650);
         stage.setScene(scene);
         stage.show();
     }

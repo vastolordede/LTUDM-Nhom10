@@ -25,12 +25,13 @@ public final class JdbcPeerFileRepository implements PeerFileRepository {
                 INSERT INTO peer_files
                     (peer_id, file_id, availability_status, is_sharing, announced_at, updated_at, completed_at)
                 VALUES
-                    (?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+                    (?, ?, ?, FALSE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
                 ON CONFLICT (peer_id, file_id) DO UPDATE
                 SET availability_status = CASE
                         WHEN peer_files.availability_status = 'COMPLETE' AND EXCLUDED.availability_status = 'PARTIAL'
                         THEN 'COMPLETE' ELSE EXCLUDED.availability_status END,
-                    is_sharing = TRUE,
+                    -- Transfer history must never re-enable a share the user stopped.
+                    is_sharing = peer_files.is_sharing,
                     updated_at = CURRENT_TIMESTAMP,
                     completed_at = COALESCE(peer_files.completed_at, EXCLUDED.completed_at)
                 """;
@@ -76,6 +77,20 @@ public final class JdbcPeerFileRepository implements PeerFileRepository {
             statement.setObject(2, peerId);
             statement.setLong(3, fileId);
             statement.executeUpdate();
+        }
+    }
+
+    @Override
+    public boolean stopSharingIfActive(UUID peerId, long fileId) throws SQLException {
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement statement = connection.prepareStatement("""
+                     UPDATE peer_files
+                     SET is_sharing = FALSE, updated_at = CURRENT_TIMESTAMP
+                     WHERE peer_id = ? AND file_id = ? AND is_sharing = TRUE
+                     """)) {
+            statement.setObject(1, peerId);
+            statement.setLong(2, fileId);
+            return statement.executeUpdate() == 1;
         }
     }
 

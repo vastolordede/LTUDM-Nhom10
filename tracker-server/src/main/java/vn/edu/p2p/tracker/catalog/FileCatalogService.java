@@ -104,6 +104,9 @@ public final class FileCatalogService {
         // so it is recorded as a COMPLETE, actively-sharing source.
         String availabilityStatus = "COMPLETE";
         peerFileRepository.upsertOwnership(peerId, fileId, availabilityStatus);
+        // Publishing is the explicit user action that opts this file into sharing.
+        // Transfer history alone must never set is_sharing to TRUE.
+        peerFileRepository.setSharing(peerId, fileId, true);
 
         // T24: log SHARE_START every time a peer (re-)announces sharing.
         shareEventRepository.insert(peerId, fileId, "SHARE_START");
@@ -154,11 +157,12 @@ public final class FileCatalogService {
         UUID sessionId = parseSessionId(request.sessionId());
         UUID peerId = sessionPeerResolver.resolvePeerId(sessionId);
 
-        peerFileRepository.setSharing(peerId, request.fileId(), false);
-        shareEventRepository.insert(peerId, request.fileId(), "SHARE_STOP");
-        revocationRegistry.revokeFile(peerId.toString(), request.fileId());
-
-        return new UnshareFileResponse(request.fileId(), true);
+        boolean stopped = peerFileRepository.stopSharingIfActive(peerId, request.fileId());
+        if (stopped) {
+            shareEventRepository.insert(peerId, request.fileId(), "SHARE_STOP");
+            revocationRegistry.revokeFile(peerId.toString(), request.fileId());
+        }
+        return new UnshareFileResponse(request.fileId(), stopped);
     }
 
     private UUID parseSessionId(String sessionId) throws FileCatalogException {

@@ -72,6 +72,9 @@ class MultiSourceDownloadResumeIntegrationTest {
         var ticketKeys = java.security.KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
         Path targetFile = tempDir.resolve(targetName);
         writeInterruptedDownload(targetFile, content, metadata, initiallyGood, corruptPiece);
+        // Simulate an interrupted transfer from this application, not an arbitrary user file.
+        // The engine creates this marker before writing the first piece in production.
+        ResumeOwnershipMarker.claim(targetFile, metadata);
         Path oldAppImage = tempDir.resolve("old-app-image");
         Files.createDirectories(oldAppImage);
         Files.writeString(oldAppImage.resolve("application.bin"), "old application image");
@@ -150,6 +153,9 @@ class MultiSourceDownloadResumeIntegrationTest {
         assertEquals("COMPLETED", result.session().status());
         assertEquals(result.metadata().fileSize(), result.session().bytesReceived());
         assertEquals(result.metadata().fileHash(), FileHashUtil.sha256(result.targetFile()));
+        org.junit.jupiter.api.Assertions.assertFalse(
+                ResumeOwnershipMarker.matches(result.targetFile(), result.metadata()),
+                "A successful transfer must remove its durable resume marker");
     }
 
     private record ScenarioResult(

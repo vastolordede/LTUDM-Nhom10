@@ -12,6 +12,8 @@ import java.util.BitSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -94,6 +96,7 @@ public final class LocalFileRegistry {
     }
 
     private final Map<Long, RegisteredFile> filesById = new ConcurrentHashMap<>();
+    private final Map<Long, CopyOnWriteArrayList<RegisteredFile>> completeAliases = new ConcurrentHashMap<>();
 
     /**
      * Đăng ký một file đã có sẵn đầy đủ 100% trên máy (khi Peer bấm Share file).
@@ -102,6 +105,10 @@ public final class LocalFileRegistry {
         BitSet fullBits = new BitSet(metadata.pieceCount());
         fullBits.set(0, metadata.pieceCount());
         RegisteredFile entry = new RegisteredFile(fileId, filePath, metadata, fullBits);
+        completeAliases.computeIfAbsent(fileId, unused -> new CopyOnWriteArrayList<>())
+                .removeIf(existing -> existing.filePath().toAbsolutePath().normalize()
+                        .equals(filePath.toAbsolutePath().normalize()));
+        completeAliases.get(fileId).add(entry);
         filesById.put(fileId, entry);
         return entry;
     }
@@ -130,6 +137,7 @@ public final class LocalFileRegistry {
 
     public void unregisterFile(long fileId) {
         filesById.remove(fileId);
+        completeAliases.remove(fileId);
     }
 
     public Optional<RegisteredFile> find(long fileId) {
@@ -154,11 +162,26 @@ public final class LocalFileRegistry {
      * Chỉ cho phép đọc nếu pieceIndex đã có trong BitSet (S28).
      */
     public byte[] readPieceBytes(long fileId, int pieceIndex) throws IOException {
-        RegisteredFile entry = filesById.get(fileId);
-        if (entry == null) {
-            throw new IOException("File is not registered locally: fileId=" + fileId);
+        RegisteredFile primary = filesById.get(fileId);
+        if (primary == null) throw new IOException("File not registered: " + fileId);
+        IOException failure = null;
+        java.util.List<RegisteredFile> candidates = new java.util.ArrayList<>();
+        candidates.add(primary);
+        for (RegisteredFile alternate : completeAliases.getOrDefault(
+                fileId, new CopyOnWriteArrayList<>())) {
+            if (!alternate.filePath().equals(primary.filePath())) candidates.add(alternate);
         }
+        for (RegisteredFile candidate : candidates) {
+            try {
+                return readPieceFrom(candidate, pieceIndex);
+            } catch (IOException badCandidate) {
+                failure = badCandidate;
+            }
+        }
+        throw failure == null ? new IOException("No valid file sources") : failure;
+    }
 
+    private byte[] readPieceFrom(RegisteredFile entry, int pieceIndex) throws IOException {
         FileMetadata meta = entry.metadata();
         if (pieceIndex < 0 || pieceIndex >= meta.pieceCount()) {
             throw new IndexOutOfBoundsException("Invalid pieceIndex: " + pieceIndex);
@@ -177,8 +200,7 @@ public final class LocalFileRegistry {
                 raf.readFully(buffer);
                 if (!pieceHashMatches(meta, pieceIndex, buffer)) {
                     entry.invalidatePiece(pieceIndex);
-                    throw new IOException("Shared file content changed or corrupted: fileId="
-                            + fileId + ", piece=" + pieceIndex);
+                    throw new IOException("Shared file content changed or corrupted: piece=" + pieceIndex);
                 }
                 return buffer;
             }

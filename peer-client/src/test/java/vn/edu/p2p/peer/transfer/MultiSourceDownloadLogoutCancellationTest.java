@@ -54,6 +54,8 @@ class MultiSourceDownloadLogoutCancellationTest {
         System.arraycopy(sourceBytes, 0, partialBytes, 0, 128 * 1024);
         Path target = tempDir.resolve("partial.bin");
         Files.write(target, partialBytes);
+        // The partial bytes represent a download created by an earlier P2P session.
+        ResumeOwnershipMarker.claim(target, metadata);
 
         CountDownLatch pieceRequested = new CountDownLatch(1);
         CountDownLatch releaseSeed = new CountDownLatch(1);
@@ -97,6 +99,8 @@ class MultiSourceDownloadLogoutCancellationTest {
                 assertFalse("COMPLETED".equals(cancelled.status()));
                 assertTrue(Files.exists(cancelled.outputFile()));
                 assertArrayEquals(partialBytes, Files.readAllBytes(cancelled.outputFile()));
+                assertTrue(ResumeOwnershipMarker.matches(target, metadata),
+                        "Cancellation must retain the marker so a later session can resume");
                 assertNoDownloadWorker(FILE_ID);
             } finally {
                 cancel.set(true);
@@ -122,6 +126,7 @@ class MultiSourceDownloadLogoutCancellationTest {
             System.arraycopy(sourceBytes, 0, partialBytes, 0, 128 * 1024);
             Path target = tempDir.resolve("server-close-partial.bin");
             Files.write(target, partialBytes);
+            ResumeOwnershipMarker.claim(target, metadata);
 
             CountDownLatch pieceRequested = new CountDownLatch(1);
             CountDownLatch releaseSeed = new CountDownLatch(1);

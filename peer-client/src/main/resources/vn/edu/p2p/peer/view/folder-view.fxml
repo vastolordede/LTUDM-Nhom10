@@ -41,6 +41,7 @@
     <HBox spacing="10">
         <Button fx:id="downloadAllButton" text="Tải cả thư mục" onAction="#onDownloadAll" disable="true"/>
         <Button fx:id="downloadSelectedButton" text="Tải file đã chọn" onAction="#onDownloadSelected" disable="true"/>
+        <Button fx:id="unshareFolderButton" text="Ngừng chia sẻ thư mục của tôi" onAction="#onUnshareFolder" disable="true"/>
         <Button fx:id="cancelButton" text="Hủy" onAction="#onCancel" disable="true"/>
     </HBox>
 

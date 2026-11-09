@@ -112,6 +112,7 @@ class ZeroByteDownloadIntegrationTest {
             Path regularTarget = FolderPathResolver.resolve(root, "nested/regular.bin");
             Files.createDirectories(regularTarget.getParent());
             writePartialFileWithFirstPiece(regularTarget, content);
+            ResumeOwnershipMarker.claim(regularTarget, seed.metadata.get(REGULAR_FILE_ID));
 
             MultiSourceDownloadEngine engine = newEngine();
             DownloadSessionResult emptyResult = download(engine, seed, EMPTY_FILE_ID, emptyTarget);
@@ -177,6 +178,7 @@ class ZeroByteDownloadIntegrationTest {
             for (FileTarget file : plan.files()) Files.createDirectories(file.target().getParent());
             Path regularTarget = plan.files().getFirst().target();
             writePartialFileWithFirstPiece(regularTarget, content);
+            ResumeOwnershipMarker.claim(regularTarget, seed.metadata.get(REGULAR_FILE_ID));
 
             MultiSourceDownloadEngine engine = newEngine();
             List<DownloadSessionResult> results = new ArrayList<>();

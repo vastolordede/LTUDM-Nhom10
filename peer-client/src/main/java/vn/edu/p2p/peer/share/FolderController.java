@@ -52,6 +52,7 @@ public final class FolderController {
     @FXML private Button chooseDirButton;
     @FXML private Button downloadAllButton;
     @FXML private Button downloadSelectedButton;
+    @FXML private Button unshareFolderButton;
     @FXML private Button cancelButton;
     @FXML private ProgressBar progressBar;
     @FXML private Label statusLabel;
@@ -73,6 +74,7 @@ public final class FolderController {
     private Path outputDir = Path.of(System.getProperty("user.home"), "Downloads");
     private String currentGroupName;
     private long currentGroupId;
+    private boolean currentGroupComplete;
     private List<String> currentDirectories = List.of();
     private volatile AtomicBoolean cancelSignal = new AtomicBoolean(false);
     private volatile ConnectionPlanner planner;
@@ -130,6 +132,7 @@ public final class FolderController {
         filesListView.getItems().clear();
         currentGroupName = null;
         currentGroupId = 0;
+        currentGroupComplete = false;
         currentDirectories = List.of();
         groupsListView.getSelectionModel().select(item);
         statusLabel.setText("Đang tải chi tiết thư mục " + item.groupName() + "...");
@@ -152,6 +155,7 @@ public final class FolderController {
                     groupsListView.getItems().setAll(res.groups());
                     filesListView.getItems().clear();
                     currentGroupId = 0;
+                    currentGroupComplete = false;
                     currentGroupName = null;
                     currentDirectories = List.of();
                     downloadAllButton.setDisable(true);
@@ -181,7 +185,11 @@ public final class FolderController {
                     currentGroupId = d.groupId();
                     filesListView.getItems().setAll(d.files());
                     currentDirectories = d.directories();
-                    downloadAllButton.setDisable(false);
+                    currentGroupComplete = d.complete();
+                    downloadAllButton.setDisable(!d.complete());
+                    statusLabel.setText(d.complete() ? "Thư mục đã có đủ file nguồn."
+                            : "Thư mục chưa đủ nguồn: chỉ " + d.files().size() + "/"
+                               + d.totalFileCount() + " file khả dụng. Không thể tải toàn bộ.");
                 });
             } catch (Exception e) {
                 postToUi(generation,
@@ -199,8 +207,42 @@ public final class FolderController {
         }
     }
 
+    /** Owner-only on Tracker: another Peer cannot delete someone else's shared group. */
+    @FXML
+    private void onUnshareFolder() {
+        if (closed.get() || currentGroupId <= 0 || folderClient == null) return;
+        long id = currentGroupId;
+        long generation = AuthClientService.sessionGeneration();
+        unshareFolderButton.setDisable(true);
+        executor.submit(() -> {
+            try {
+                var result = folderClient.unshareFolder(sessionId, id);
+                postToUi(generation, () -> {
+                    if (result.stopped()) {
+                        groupsListView.getItems().removeIf(g -> g.groupId() == id);
+                        filesListView.getItems().clear();
+                        currentGroupId = 0;
+                        currentGroupComplete = false;
+                        currentDirectories = List.of();
+                        statusLabel.setText("Đã ngừng chia sẻ thư mục. File chia sẻ riêng vẫn được giữ.");
+                    } else statusLabel.setText("Thư mục đã ngừng chia sẻ trước đó.");
+                    unshareFolderButton.setDisable(false);
+                });
+            } catch (Exception ex) {
+                postToUi(generation, () -> {
+                    statusLabel.setText("Không thể ngừng chia sẻ thư mục: " + ex.getMessage());
+                    unshareFolderButton.setDisable(false);
+                });
+            }
+        });
+    }
+
     @FXML
     private void onDownloadAll() {
+        if (!currentGroupComplete) {
+            statusLabel.setText("Không thể tải toàn bộ thư mục vì thiếu file nguồn.");
+            return;
+        }
         startDownload(new ArrayList<>(filesListView.getItems()), true);
     }
 
@@ -376,9 +418,10 @@ public final class FolderController {
     }
 
     private void setBusy(boolean busy) {
-        downloadAllButton.setDisable(busy || currentGroupId <= 0);
+        downloadAllButton.setDisable(busy || currentGroupId <= 0 || !currentGroupComplete);
         searchButton.setDisable(busy);
         cancelButton.setDisable(!busy);
+        unshareFolderButton.setDisable(busy || currentGroupId <= 0);
     }
 
     public void shutdown() {

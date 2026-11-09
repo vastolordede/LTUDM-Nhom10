@@ -1,6 +1,8 @@
 package vn.edu.p2p.peer.transfer;
 
 import vn.edu.p2p.common.dto.FolderFileInfo;
+import vn.edu.p2p.peer.share.FileHashUtil;
+import java.nio.file.Files;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -33,7 +35,24 @@ public final class FolderDownloadPlan {
         for (String directory : directories) {
             targets.add(resolve(safeRoot, directory));
         }
-        return createPlan(safeRoot, files, targets);
+        FolderDownloadPlan plan = createPlan(safeRoot, files, targets);
+        for (FileTarget item : plan.files()) {
+            Path target = item.target();
+            if (Files.exists(target)) {
+                boolean exact = Files.isRegularFile(target) && !Files.isSymbolicLink(target)
+                        && Files.size(target) == item.file().fileSize()
+                        && FileHashUtil.sha256(target).equalsIgnoreCase(item.file().fileHash());
+                // A P2P-owned partial artifact is eligible for a safe resume.
+                boolean resumable = Files.isRegularFile(target) && !Files.isSymbolicLink(target)
+                        && ResumeOwnershipMarker.matchesExpectedFile(target,
+                                item.file().fileHash(), item.file().fileSize());
+                if (!exact && !resumable) {
+                    throw new IOException("Folder destination already contains a conflicting file: "
+                            + item.file().relativePath());
+                }
+            }
+        }
+        return plan;
     }
 
     private static FolderDownloadPlan createPlan(Path root, List<FolderFileInfo> files,

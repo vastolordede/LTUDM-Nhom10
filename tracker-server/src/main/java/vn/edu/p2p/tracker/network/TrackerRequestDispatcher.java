@@ -39,6 +39,7 @@ import vn.edu.p2p.tracker.transfer.TransferHistoryService;
 import vn.edu.p2p.common.dto.FolderDetailRequest;
 import vn.edu.p2p.common.dto.FolderSearchRequest;
 import vn.edu.p2p.common.dto.FolderShareRequest;
+import vn.edu.p2p.common.dto.FolderUnshareRequest;
 import vn.edu.p2p.tracker.catalog.FolderCatalogService;
 
 import java.util.logging.Level;
@@ -149,6 +150,7 @@ public final class TrackerRequestDispatcher {
                 case FOLDER_SHARE_REQUEST -> handleFolder(request, 0);
                 case FOLDER_SEARCH_REQUEST -> handleFolder(request, 1);
                 case FOLDER_DETAIL_REQUEST -> handleFolder(request, 2);
+                case FOLDER_UNSHARE_REQUEST -> handleFolderUnshare(request);
                 case FOLDER_DOWNLOAD_COMPLETED_REQUEST -> handleFolderDownloadCompleted(request);
                 default -> TrackerErrorResponses.forRequest(
                         request,
@@ -408,6 +410,17 @@ public final class TrackerRequestDispatcher {
                 request.requestId(),
                 ProtocolCodec.toPayload(response)
         );
+    }
+
+    private MessageEnvelope handleFolderUnshare(MessageEnvelope request) throws Exception {
+        if (folderCatalogService == null) {
+            return TrackerErrorResponses.forRequest(request, "FEATURE_UNAVAILABLE",
+                    "Folder sharing is not configured on this Tracker.");
+        }
+        FolderUnshareRequest payload = ProtocolCodec.fromPayload(
+                request.payload(), FolderUnshareRequest.class);
+        return MessageEnvelope.success(MessageType.FOLDER_UNSHARE_RESPONSE, request.requestId(),
+                ProtocolCodec.toPayload(folderCatalogService.unshare(payload)));
     }
 
     private MessageEnvelope handleFolderDownloadCompleted(MessageEnvelope request) throws Exception {

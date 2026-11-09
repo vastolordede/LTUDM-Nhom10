@@ -119,7 +119,20 @@ public final class ShareController {
         String session = sessionId;
         long generation = AuthClientService.sessionGeneration();
         submitIfOpen(() -> {
-            for (SharedFilesStore.Entry saved : store.loadValid()) {
+            List<SharedFilesStore.Entry> entries;
+            try {
+                entries = store.loadValid();
+                int skipped = store.load().size() - entries.size();
+                if (skipped > 0) {
+                    postToCurrentSession(generation, () -> statusLabel.setText(
+                            skipped + " file cũ không thể khôi phục (đã xóa/đổi nội dung)."));
+                }
+            } catch (RuntimeException readError) {
+                postToCurrentSession(generation, () -> statusLabel.setText(
+                        "Không đọc được danh sách chia sẻ. Tệp gốc và backup vẫn được giữ."));
+                return;
+            }
+            for (SharedFilesStore.Entry saved : entries) {
                 if (!isCurrentSession(generation)) return;
                 try {
                     Path path = Path.of(saved.path());
@@ -136,8 +149,9 @@ public final class ShareController {
                         sharedFiles.removeIf(x -> x.fileId() == r.fileId());
                         sharedFiles.add(new SharedFileEntry(r.fileId(), metadata.fileName()));
                     });
-                } catch (Exception ignored) {
-                    // bỏ qua file lỗi, các file còn lại vẫn khôi phục
+                } catch (Exception restoreError) {
+                    postToCurrentSession(generation, () -> statusLabel.setText(
+                            "Không thể khôi phục một file chia sẻ; kiểm tra file nguồn và Tracker."));
                 }
             }
         });
@@ -311,7 +325,9 @@ public final class ShareController {
                 });
             } catch (Exception e) {
                 postToCurrentSession(generation, () -> {
-                    statusLabel.setText("Lỗi chia sẻ thư mục: " + e.getMessage());
+                    statusLabel.setText("Không thể hoàn tất chia sẻ thư mục: " + e.getMessage()
+                            + ". Một số file con có thể đã được công bố; kiểm tra Tệp của tôi "
+                            + "trước khi thử lại.");
                     chooseFolderButton.setDisable(false);
                 });
             }

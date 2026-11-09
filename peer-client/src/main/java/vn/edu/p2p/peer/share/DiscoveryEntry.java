@@ -26,8 +26,11 @@ public record DiscoveryEntry(SearchResultItem file, FolderSearchItem folder) {
 
     /** Same stable sort as server-side paging, merged across the two result types. */
     public static Comparator<DiscoveryEntry> comparator(DiscoverySort sort) {
+        // The Tracker orders ties by descending ID except for DATE_OLDEST.
+        // Matching source ordering is necessary for a correct streaming merge.
         Comparator<DiscoveryEntry> tieBreak = Comparator.comparing(DiscoveryEntry::type)
-                .thenComparingLong(DiscoveryEntry::id);
+                .thenComparing((a, b) -> sort == DiscoverySort.DATE_OLDEST
+                        ? Long.compare(a.id(), b.id()) : Long.compare(b.id(), a.id()));
         Comparator<DiscoveryEntry> main = switch (sort) {
             case POPULARITY -> Comparator.comparingLong(DiscoveryEntry::completedDownloads).reversed()
                     .thenComparing(Comparator.comparingLong(DiscoveryEntry::createdAtEpochMillis).reversed());

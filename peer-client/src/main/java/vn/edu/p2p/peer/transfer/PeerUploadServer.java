@@ -384,8 +384,11 @@ public final class PeerUploadServer implements AutoCloseable {
                     "INVALID_METADATA_PAGE", "Invalid metadata page bounds"));
             return;
         }
-        if (!authorizeTicket(client, request, payload.fileId(), payload.accessTicket(),
-                MessageType.METADATA_PAGE_RESPONSE)) return;
+        if (!authorizeDownloadRequest(client, request, payload.fileId(),
+                payload.accessTicket(), PeerRequestProof.RequestType.METADATA_PAGE,
+                payload.startIndex(), payload.proofTimestamp(), payload.proofNonce(),
+                payload.proofSignature(), MessageType.METADATA_PAGE_RESPONSE,
+                payload.pageSize())) return;
         Optional<LocalFileRegistry.RegisteredFile> file = fileRegistry.find(payload.fileId());
         if (file.isEmpty() || payload.startIndex() >= file.get().metadata().pieceCount()) {
             ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
@@ -473,6 +476,16 @@ public final class PeerUploadServer implements AutoCloseable {
                                              int pieceIndex, Long proofTimestamp, String proofNonce,
                                              String proofSignature, MessageType responseType)
             throws IOException {
+        return authorizeDownloadRequest(client, request, fileId, ticket, requestType,
+                pieceIndex, proofTimestamp, proofNonce, proofSignature, responseType, null);
+    }
+
+    private boolean authorizeDownloadRequest(Socket client, MessageEnvelope request, long fileId,
+                                             String ticket, PeerRequestProof.RequestType requestType,
+                                             int pieceIndex, Long proofTimestamp, String proofNonce,
+                                             String proofSignature, MessageType responseType,
+                                             Integer metadataPageSize)
+            throws IOException {
         PeerAccessTickets.TicketClaims claims = ticketVerificationKeys.isEmpty() || uploaderPeerId == null
                 ? null : PeerAccessTickets.verifyClaims(ticketVerificationKeys, ticket, fileId,
                         uploaderPeerId, clock.instant());
@@ -490,26 +503,19 @@ public final class PeerUploadServer implements AutoCloseable {
         }
         PeerRequestProof.Proof proof = new PeerRequestProof.Proof(
                 proofTimestamp, proofNonce, proofSignature);
-        if (!PeerRequestProof.verify(claims.requesterPublicKey(), requestType, uploaderPeerId,
-                fileId, pieceIndex, ticket, proof, clock)) {
+        boolean validProof = requestType == PeerRequestProof.RequestType.METADATA_PAGE
+                ? metadataPageSize != null && PeerRequestProof.verifyMetadataPage(
+                        claims.requesterPublicKey(), uploaderPeerId, fileId, pieceIndex,
+                        metadataPageSize, ticket, proof, clock)
+                : PeerRequestProof.verify(claims.requesterPublicKey(), requestType, uploaderPeerId,
+                        fileId, pieceIndex, ticket, proof, clock);
+        if (!validProof) {
             return deny(client, request, responseType, "invalid proof");
         }
         if (!replayGuard.accept(claims.requesterId(), proofNonce)) {
             return deny(client, request, responseType, "replayed proof");
         }
         return true;
-    }
-
-    private boolean authorizeTicket(Socket client, MessageEnvelope request, long fileId,
-                                    String ticket, MessageType responseType) throws IOException {
-        PeerAccessTickets.TicketClaims claims = !ticketVerificationKeys.isEmpty() && uploaderPeerId != null
-                ? PeerAccessTickets.verifyClaims(ticketVerificationKeys, ticket, fileId,
-                        uploaderPeerId, clock.instant()) : null;
-        boolean allowed = claims != null
-                && !ticketRevocations.isRevoked(claims, uploaderPeerId, fileId);
-        if (!allowed && isInsecureLoopbackDemo(client)) return true;
-        if (allowed) return true;
-        return deny(client, request, responseType, "invalid ticket");
     }
 
     private boolean isInsecureLoopbackDemo(Socket client) {

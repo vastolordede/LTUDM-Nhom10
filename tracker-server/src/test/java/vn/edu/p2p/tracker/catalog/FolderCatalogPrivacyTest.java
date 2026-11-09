@@ -63,8 +63,12 @@ class FolderCatalogPrivacyTest {
             assertEquals(List.of(70L), detail.files().stream().map(file -> file.fileId()).toList());
             assertEquals("keep/a.txt", detail.files().getFirst().relativePath());
             assertEquals(List.of("keep"), detail.directories());
+            // The unavailable file is counted without revealing its relative path.
+            assertEquals(2, detail.totalFileCount());
+            assertFalse(detail.complete());
+            assertFalse(detail.files().stream().anyMatch(file -> file.relativePath().contains("secret")));
             assertTrue(driver.sql.stream().filter(sql -> sql.contains("FROM file_groups g"))
-                    .allMatch(sql -> sql.contains("AND EXISTS")
+                    .allMatch(sql -> sql.contains("AND (EXISTS")
                             && sql.contains("pf.is_sharing = TRUE")
                             && sql.contains("v_online_peers")));
             assertTrue(driver.sql.stream().filter(sql -> sql.contains("SELECT x.file_id"))
@@ -108,6 +112,13 @@ class FolderCatalogPrivacyTest {
             if (query.contains("SELECT group_name FROM file_groups")) {
                 return List.of(row("group_name", "shared"));
             }
+            if (query.contains("SELECT COUNT(*) FROM group_files WHERE group_id = ?")) {
+                return List.of(row("total_file_count", 2));
+            }
+            if (query.contains("SELECT relative_path FROM group_files WHERE group_id = ?")) {
+                return List.of(row("relative_path", "keep/a.txt"),
+                        row("relative_path", "stale/secret.txt"));
+            }
             if (query.contains("SELECT x.file_id")) {
                 if (!hasOnlineShares) return List.of();
                 if (query.contains("pf.is_sharing = TRUE") && query.contains("v_online_peers")) {
@@ -125,7 +136,9 @@ class FolderCatalogPrivacyTest {
             }
             if (query.contains("FROM file_groups g")) {
                 if (!hasOnlineShares) return List.of();
-                if (query.contains("AND EXISTS") && query.contains("v_online_peers")) {
+                if (query.contains("AND (EXISTS")
+                        && query.contains("pf.is_sharing = TRUE")
+                        && query.contains("v_online_peers")) {
                     return List.of(searchRow(7, "shared", 1, 12, 1));
                 }
                 return List.of(searchRow(7, "shared", 1, 12, 1),

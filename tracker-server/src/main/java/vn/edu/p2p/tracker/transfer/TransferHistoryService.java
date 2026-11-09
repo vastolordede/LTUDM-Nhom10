@@ -39,7 +39,14 @@ public final class TransferHistoryService {
         UUID destinationPeerId = sessionPeerResolver.resolvePeerId(sessionId);
         UUID transferId = parseUuid(request.transferId(), "transferId");
 
+        if (request.fileId() <= 0 || request.bytesReceived() < 0) {
+            throw new FileCatalogException("Invalid transfer fileId or received bytes");
+        }
         String status = normalizeStatus(request.status());
+        if ("COMPLETED".equals(status)
+                && (request.completedAtEpochMillis() == null || request.completedAtEpochMillis() <= 0)) {
+            throw new FileCatalogException("COMPLETED requires completedAt");
+        }
         Instant startedAt = request.startedAtEpochMillis() > 0
                 ? Instant.ofEpochMilli(request.startedAtEpochMillis())
                 : Instant.now();
@@ -64,7 +71,8 @@ public final class TransferHistoryService {
         if (peerFileRepository != null) {
             if ("COMPLETED".equals(status)) {
                 peerFileRepository.upsertOwnership(destinationPeerId, request.fileId(), "COMPLETE");
-            } else if ("DOWNLOADING".equals(status)) {
+            } else if ("DOWNLOADING".equals(status) && request.bytesReceived() > 0) {
+                // A session started with zero downloaded pieces is not a valid partial source.
                 peerFileRepository.upsertOwnership(destinationPeerId, request.fileId(), "PARTIAL");
             } else if ("FAILED".equals(status) || "CANCELLED".equals(status)) {
                 peerFileRepository.demoteIfPartial(destinationPeerId, request.fileId());

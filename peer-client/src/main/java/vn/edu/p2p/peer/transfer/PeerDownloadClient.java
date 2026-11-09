@@ -133,17 +133,16 @@ public final class PeerDownloadClient {
         }
     }
 
-    public MetadataPageResponse fetchMetadataPage(String host, int port, long fileId,
-                                                 int startIndex, int pageSize) throws IOException {
-        return fetchMetadataPage(host, port, fileId, startIndex, pageSize, null);
-    }
-
-    public MetadataPageResponse fetchMetadataPage(String host, int port, long fileId,
-                                                 int startIndex, int pageSize,
-                                                 String accessTicket) throws IOException {
+    /** Metadata pages require requester identity and a bounded, one-time proof. */
+    public MetadataPageResponse fetchMetadataPage(String host, int port, String uploaderId,
+                                                  long fileId, int startIndex, int pageSize,
+                                                  String accessTicket) throws IOException {
+        PeerRequestProof.Proof proof = PeerRequestProof.signMetadataPage(
+                requesterPrivateKey, uploaderId, fileId, startIndex, pageSize, accessTicket, clock);
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.METADATA_PAGE_REQUEST, UUID.randomUUID().toString(),
-                ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize, accessTicket))
+                ProtocolCodec.toPayload(new MetadataPageRequest(fileId, startIndex, pageSize,
+                        accessTicket, proof.timestampEpochMillis(), proof.requestNonce(), proof.signature()))
         );
         Socket socket = open(host, port);
         try (socket) {

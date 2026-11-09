@@ -9,6 +9,8 @@ import vn.edu.p2p.common.dto.FolderSearchRequest;
 import vn.edu.p2p.common.dto.FolderSearchResponse;
 import vn.edu.p2p.common.dto.FolderShareRequest;
 import vn.edu.p2p.common.dto.FolderShareResponse;
+import vn.edu.p2p.common.dto.FolderUnshareRequest;
+import vn.edu.p2p.common.dto.FolderUnshareResponse;
 import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
 import vn.edu.p2p.common.dto.RecordFolderDownloadResponse;
 import vn.edu.p2p.common.dto.UnshareFileRequest;
@@ -85,35 +87,12 @@ public final class FolderClientService {
                 FolderDetailResponse.class);
     }
 
-    /** Stops this peer's share of each file currently listed in the folder. */
-    public int unshareFolder(String sessionId, long groupId, LocalFileRegistry fileRegistry)
+    /** Unshare only the folder grouping; never unshare files used by another group. */
+    public FolderUnshareResponse unshareFolder(String sessionId, long groupId)
             throws ShareFileClientException {
-        Objects.requireNonNull(fileRegistry, "fileRegistry");
-        FolderDetailResponse folder = detail(sessionId, groupId);
-        int unshared = 0;
-        for (long fileId : folder.files().stream().mapToLong(file -> file.fileId()).distinct().toArray()) {
-            unshareFile(sessionId, fileId);
-            var registered = fileRegistry.find(fileId);
-            if (registered.isPresent()) {
-                try {
-                    SharedFilesStore store = SharedFilesStore.current();
-                    if (store != null) store.removeByHash(registered.get().metadata().fileHash());
-                } catch (IOException e) {
-                    throw new ShareFileClientException(
-                            "File unshared, but local share state could not be removed.", e);
-                } finally {
-                    fileRegistry.unregisterFile(fileId);
-                }
-            }
-            unshared++;
-        }
-        return unshared;
-    }
-
-    private void unshareFile(String sessionId, long fileId) throws ShareFileClientException {
-        call(MessageType.UNSHARE_FILE_REQUEST, MessageType.UNSHARE_FILE_RESPONSE,
-                ProtocolCodec.toPayload(new UnshareFileRequest(sessionId, fileId)),
-                UnshareFileResponse.class);
+        return call(MessageType.FOLDER_UNSHARE_REQUEST, MessageType.FOLDER_UNSHARE_RESPONSE,
+                ProtocolCodec.toPayload(new FolderUnshareRequest(sessionId, groupId)),
+                FolderUnshareResponse.class);
     }
 
     private <T> T call(MessageType reqType, MessageType respType, JsonNode payload, Class<T> cls)

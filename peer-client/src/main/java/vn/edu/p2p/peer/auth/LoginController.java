@@ -15,6 +15,7 @@ import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.peer.network.TrackerPublicKeyInstaller;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.VBox;
 import vn.edu.p2p.common.dto.HeartbeatResponse;
 import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.common.security.SecurityProfile;
@@ -53,6 +54,16 @@ public final class LoginController {
 
     @FXML
     private PasswordField confirmPasswordField;
+
+    @FXML private VBox loginForm;
+    @FXML private VBox registrationForm;
+    @FXML private VBox advancedSettingsBox;
+    @FXML private Label authModeLabel;
+    @FXML private Button advancedSettingsToggleButton;
+    @FXML private Button showRegisterButton;
+    @FXML private Button showLoginButton;
+    @FXML private TextField registerUsernameField;
+    @FXML private PasswordField registerPasswordField;
 
     @FXML
     private Button registerButton;
@@ -102,6 +113,8 @@ public final class LoginController {
 
     @FXML
     private void initialize() {
+        showAuthForm(false);
+        setAdvancedSettingsVisible(false);
         listeningPortField.setText("7001");
         openDashboardButton.setDisable(true);
         connectivitySubscription = connectivityStatus.subscribe(snapshot ->
@@ -134,6 +147,49 @@ public final class LoginController {
                 statusLabel.setText("Không thể khởi tạo Peer: " + initializationError);
             }
         }
+    }
+
+    /** Switch screens without sharing password/confirmation fields between forms. */
+    private void showAuthForm(boolean registering) {
+        loginForm.setVisible(!registering);
+        loginForm.setManaged(!registering);
+        registrationForm.setVisible(registering);
+        registrationForm.setManaged(registering);
+        authModeLabel.setText(registering ? "Tạo tài khoản mới" : "Đăng nhập vào Tracker");
+        loginButton.setDefaultButton(!registering);
+        registerButton.setDefaultButton(registering);
+    }
+
+    @FXML
+    private void onShowRegisterForm() {
+        if (authClientService != null && authClientService.currentSession() != null) return;
+        if (registerUsernameField.getText().isBlank()) {
+            registerUsernameField.setText(usernameField.getText());
+        }
+        passwordField.clear();
+        registerPasswordField.clear();
+        confirmPasswordField.clear();
+        showAuthForm(true);
+    }
+
+    @FXML
+    private void onShowLoginForm() {
+        if (authClientService != null && authClientService.currentSession() != null) return;
+        registerPasswordField.clear();
+        confirmPasswordField.clear();
+        showAuthForm(false);
+    }
+
+    private void setAdvancedSettingsVisible(boolean visible) {
+        advancedSettingsBox.setVisible(visible);
+        advancedSettingsBox.setManaged(visible);
+        advancedSettingsToggleButton.setText(
+                visible ? "Ẩn cấu hình nâng cao" : "Cấu hình nâng cao");
+    }
+
+    @FXML
+    private void onToggleAdvancedSettings() {
+        setAdvancedSettingsVisible(!advancedSettingsBox.isVisible());
     }
 
     @FXML
@@ -262,6 +318,9 @@ public final class LoginController {
         boolean ready = step == SetupStep.READY;
         loginButton.setDisable(!ready);
         registerButton.setDisable(!ready);
+        // Show setup only when genuinely required; otherwise keep daily login focused.
+        if (!ready) setAdvancedSettingsVisible(true);
+        else setAdvancedSettingsVisible(false);
     }
 
     enum SetupStep {
@@ -426,8 +485,9 @@ public final class LoginController {
             statusLabel.setText("Chỉ đăng ký khi chưa đăng nhập.");
             return;
         }
-        String username = usernameField.getText() == null ? "" : usernameField.getText().trim();
-        String password = passwordField.getText();
+        String username = registerUsernameField.getText() == null
+                ? "" : registerUsernameField.getText().trim();
+        String password = registerPasswordField.getText();
         String error = RegisterInputPolicy.validate(username, password);
         if (error == null && !password.equals(confirmPasswordField.getText())) {
             error = "Mật khẩu xác nhận không khớp.";
@@ -457,8 +517,10 @@ public final class LoginController {
                             + safeAuthFailure(cause, attemptConfig, false));
                     return;
                 }
-                passwordField.clear();
+                usernameField.setText(registered.username());
+                registerPasswordField.clear();
                 confirmPasswordField.clear();
+                showAuthForm(false);
                 statusLabel.setText("Đã tạo tài khoản " + registered.username()
                         + ". Nhập mật khẩu để đăng nhập.");
             });
@@ -491,8 +553,12 @@ public final class LoginController {
     private void onLoginSuccess(ClientSession session) {
         loggedInGeneration = AuthClientService.sessionGeneration();
         passwordField.clear();
+        registerPasswordField.clear();
         confirmPasswordField.clear();
         registerButton.setDisable(true);
+        showRegisterButton.setDisable(true);
+        showLoginButton.setDisable(true);
+        advancedSettingsToggleButton.setDisable(true);
         usernameField.setDisable(true);
         passwordField.setDisable(true);
         listeningPortField.setDisable(true);
@@ -514,7 +580,7 @@ public final class LoginController {
             heartbeatCoordinator.start(session);
         }
 
-        SharedFilesStore.setCurrentUser(usernameField.getText().trim() + "-" + listeningPortField.getText().trim());
+        SharedFilesStore.setCurrentUser(usernameField.getText().trim());
 
         openDashboardForSession(session);
     }
@@ -537,8 +603,16 @@ public final class LoginController {
             transferDashboard.show(trackerConnection, session.sessionId(), session.peerId(),
                     authClientService.ticketRevocations());
         } catch (Exception e) {
-            closeTransferDashboard();
-            showDiagnostic(statusLabel, TrackerConnectionDiagnostics.classify(e));
+            // The Tracker must not keep this Peer online when the uploader failed to start.
+            ClientSession failedSession = beginLocalLogout();
+            String reason = "Không thể mở Peer Center/Upload Server (cổng bận hoặc cấu hình bảo mật lỗi). "
+                    + "Phiên đã được đóng; hãy kiểm tra cổng, TLS và thử lại.";
+            resetLoggedOutUi(reason);
+            if (failedSession != null) {
+                CompletableFuture.runAsync(() ->
+                        authClientService.logoutBestEffort(failedSession, TRACKER_LOGOUT_TIMEOUT),
+                        ioExecutor);
+            }
         }
     }
 
@@ -550,6 +624,11 @@ public final class LoginController {
 
         usernameField.setDisable(false);
         passwordField.setDisable(false);
+        registerUsernameField.setDisable(false);
+        registerPasswordField.setDisable(false);
+        showRegisterButton.setDisable(false);
+        showLoginButton.setDisable(false);
+        advancedSettingsToggleButton.setDisable(false);
         listeningPortField.setDisable(false);
         trackerHostField.setDisable(false);
         trackerPortField.setDisable(false);
@@ -559,6 +638,7 @@ public final class LoginController {
         loginButton.setDisable(false);
         registerButton.setDisable(false);
         openDashboardButton.setDisable(true);
+        showAuthForm(false);
         statusLabel.setText(message);
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
                 "đã đăng xuất");
@@ -580,6 +660,9 @@ public final class LoginController {
         boolean loggedIn = authClientService != null && authClientService.currentSession() != null;
         loginButton.setDisable(busy || loggedIn || initializationError != null);
         registerButton.setDisable(busy || loggedIn || initializationError != null);
+        showRegisterButton.setDisable(busy || loggedIn);
+        showLoginButton.setDisable(busy || loggedIn);
+        advancedSettingsToggleButton.setDisable(busy || loggedIn);
         openDashboardButton.setDisable(busy || !loggedIn);
     }
 
