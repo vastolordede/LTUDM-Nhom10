@@ -24,8 +24,18 @@ final class ResumeOwnershipMarker {
         if (Files.isSymbolicLink(claim) || !Files.isRegularFile(claim)) {
             throw new IOException("Unsafe download resume marker");
         }
-        return Files.readString(claim).equals(MAGIC + metadata.fileHash().toLowerCase()
-                + "\n" + metadata.fileSize() + "\n");
+        return matchesExpectedFile(target, metadata.fileHash(), metadata.fileSize());
+    }
+
+    static boolean matchesExpectedFile(Path target, String fileHash, long fileSize)
+            throws IOException {
+        Path claim = marker(target);
+        if (!Files.exists(claim, LinkOption.NOFOLLOW_LINKS)) return false;
+        if (Files.isSymbolicLink(claim) || !Files.isRegularFile(claim)) {
+            throw new IOException("Unsafe download resume marker");
+        }
+        return Files.readString(claim).equals(MAGIC + fileHash.toLowerCase()
+                + "\n" + fileSize + "\n");
     }
 
     static void claim(Path target, FileMetadata metadata) throws IOException {
