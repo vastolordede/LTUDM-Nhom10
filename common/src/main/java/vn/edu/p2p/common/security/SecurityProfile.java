@@ -1,6 +1,7 @@
 package vn.edu.p2p.common.security;
 
 import java.util.Locale;
+import vn.edu.p2p.common.config.EnvConfig;
 
 /** Fail-closed profile checks; never automatically downgrade production to plain TCP. */
 public final class SecurityProfile {
@@ -9,7 +10,7 @@ public final class SecurityProfile {
     public enum Mode { DEVELOPMENT, LAN, PRODUCTION }
 
     public static Mode parse(String value) {
-        if (value == null || value.isBlank()) return Mode.DEVELOPMENT;
+        if (value == null || value.isBlank()) return Mode.PRODUCTION;
         return switch (value.trim().toLowerCase(Locale.ROOT)) {
             case "dev", "development" -> Mode.DEVELOPMENT;
             case "lan" -> Mode.LAN;
@@ -17,6 +18,25 @@ public final class SecurityProfile {
             default -> throw new IllegalStateException("Invalid P2P_PROFILE: " + value
                     + ". Expected development, lan, or production");
         };
+    }
+
+    /**
+     * The shipped application is secure by default even with an old .env containing
+     * P2P_PROFILE=development. Insecure modes require a separate, deliberate opt-in
+     * and must never be used in a distributed client package.
+     */
+    public static Mode configuredMode() {
+        Mode requested = parse(EnvConfig.get("P2P_PROFILE", "production"));
+        if (requested != Mode.PRODUCTION && !EnvConfig.flag("P2P_ALLOW_INSECURE_DEV", false)) {
+            throw new IllegalStateException("Insecure P2P_PROFILE requires explicit "
+                    + "P2P_ALLOW_INSECURE_DEV=true for isolated developer testing");
+        }
+        return requested;
+    }
+
+    /** Disregard legacy false toggles in the production client/server profile. */
+    public static boolean tlsRequiredByDefault(Mode mode, boolean configuredValue) {
+        return mode == Mode.PRODUCTION || configuredValue;
     }
 
     public static void requireTracker(Mode mode, boolean trackerTls,
