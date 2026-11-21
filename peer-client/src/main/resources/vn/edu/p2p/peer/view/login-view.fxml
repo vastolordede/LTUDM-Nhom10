@@ -65,7 +65,9 @@
             <TextField fx:id="trackerHostField" promptText="Tracker IP / hostname" prefWidth="205"/>
             <TextField fx:id="trackerPortField" promptText="Port" prefWidth="95"/>
         </HBox>
-        <CheckBox fx:id="trackerTlsCheckBox" text="Dùng TLS (yêu cầu truststore được cấu hình)"/>
+        <Label text="Bảo mật TLS tự động (không thể tắt trong bản phát hành)" styleClass="subtitle"/>
+        <CheckBox fx:id="trackerTlsCheckBox" text="TLS bắt buộc" selected="true"
+                  visible="false" managed="false" disable="true"/>
         <TextField fx:id="trackerTrustStoreField" promptText="Đường dẫn TLS truststore"
                    maxWidth="320"/>
         <TextField fx:id="listeningPortField" promptText="Cổng lắng nghe Peer"

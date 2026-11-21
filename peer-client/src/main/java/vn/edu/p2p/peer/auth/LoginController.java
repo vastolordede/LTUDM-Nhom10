@@ -153,7 +153,16 @@ public final class LoginController {
             UserTrackerSettingsStore.Endpoint saved = trackerSettingsStore.load(trackerDefaults);
             trackerHostField.setText(saved.host());
             trackerPortField.setText(Integer.toString(saved.port()));
-            trackerTlsCheckBox.setSelected(saved.tls());
+            trackerTlsCheckBox.setSelected(SecurityProfile.tlsRequiredByDefault(
+                    SecurityProfile.configuredMode(), saved.tls()));
+            trackerTlsCheckBox.setDisable(true);
+            if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION) {
+                trackerHostField.setDisable(true);
+                trackerPortField.setDisable(true);
+                trackerTrustStoreField.setDisable(true);
+                saveTrackerButton.setDisable(true);
+                importTrackerKeyButton.setDisable(true);
+            }
             trackerTrustStoreField.setText(saved.trustStorePath());
             applyTrackerConfig(saved);
             updateSetupGuidance();
@@ -268,6 +277,10 @@ public final class LoginController {
 
     @FXML
     private void onSaveTrackerSettings() {
+        if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION) {
+            showSetupStatus("Cấu hình mạng/TLS đã được đóng gói sẵn; không cho người dùng thay đổi.");
+            return;
+        }
         if (authClientService != null && authClientService.currentSession() != null) {
             statusLabel.setText("Please log out before changing Tracker settings.");
             return;
@@ -351,13 +364,14 @@ public final class LoginController {
             new UserTrackerSettingsStore.Endpoint(trackerHostField.getText().trim(),
                     Integer.parseInt(trackerPortField.getText().trim()),
                     trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText());
-            trackerConfigured = trackerSettingsStore.hasSavedSettings();
+            // A trusted packaged endpoint is sufficient on first run; the user
+            // never has to press Save before registering or signing in.
+            trackerConfigured = trackerDefaults != null;
         } catch (RuntimeException e) {
             trackerConfigured = false;
         }
         try {
-            trackerConfigured &= SecurityProfile.parse(
-                    EnvConfig.get("P2P_PROFILE", "development"))
+            trackerConfigured &= SecurityProfile.configuredMode()
                     != SecurityProfile.Mode.PRODUCTION || trackerTlsCheckBox.isSelected();
         } catch (IllegalArgumentException e) {
             trackerConfigured = false;
@@ -367,11 +381,14 @@ public final class LoginController {
         if (trackerTlsCheckBox.isSelected()) {
             try {
                 String path = trackerTrustStoreField.getText().trim();
-                trustStoreReady = !path.isBlank()
+                // System CA trust works without a manually selected PKCS12 file.
+                trustStoreReady = "system".equalsIgnoreCase(path)
+                        || (trackerDefaults != null
                         && trackerDefaults.trackerTrustStorePassword() != null
                         && !trackerDefaults.trackerTrustStorePassword().isBlank()
+                        && !path.isBlank()
                         && Files.isRegularFile(Path.of(path))
-                        && Files.isReadable(Path.of(path));
+                        && Files.isReadable(Path.of(path)));
             } catch (RuntimeException e) {
                 trustStoreReady = false;
             }
@@ -416,15 +433,14 @@ public final class LoginController {
 
     static String setupGuidance(SetupStep step) {
         return switch (step) {
-            case TRACKER_CONFIGURATION -> "Bước 1/3: nhập địa chỉ/cổng Tracker, bật TLS theo "
-                    + "chính sách Tracker nếu cần, rồi lưu cấu hình.";
-            case TLS_TRUSTSTORE -> "Bước 2/3: chọn TLS, nhập đường dẫn truststore hợp lệ. "
-                    + "Mật khẩu truststore phải được quản trị viên cấu hình bên ngoài ứng dụng.";
-            case PUBLIC_KEY -> "Bước 3/3: nhập public key Tracker và đối chiếu fingerprint "
-                    + "do quản trị viên cung cấp qua kênh tin cậy.";
+            case TRACKER_CONFIGURATION -> "Chưa có địa chỉ Tracker hợp lệ trong bản cài đặt.";
+            case TLS_TRUSTSTORE -> "Chưa được cấp phát CA/truststore cho kết nối mã hóa. "
+                    + "Liên hệ quản trị viên; không tắt TLS để bỏ qua lỗi.";
+            case PUBLIC_KEY -> "Bản cài đặt chưa có public key Tracker được tin cậy. "
+                    + "Quản trị viên cần cấp gói cấu hình ký số an toàn.";
             case INVALID_PUBLIC_KEY -> "Không đọc được public key Tracker đã tin cậy. "
                     + "Hãy nhập lại public key hợp lệ và đối chiếu fingerprint qua kênh tin cậy.";
-            case READY -> "Cấu hình Tracker, TLS và public key đã sẵn sàng.";
+            case READY -> "Bảo mật đường truyền đã được cấu hình tự động.";
         };
     }
 
@@ -466,7 +482,7 @@ public final class LoginController {
 
     private void applyTrackerConfig(UserTrackerSettingsStore.Endpoint endpoint) throws Exception {
         TrackerConnectionConfig config = endpoint.toConnectionConfig(trackerDefaults);
-        if (SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development"))
+        if (SecurityProfile.configuredMode()
                 == SecurityProfile.Mode.PRODUCTION && !config.tlsEnabled()) {
             throw new IllegalStateException("Production Tracker connection requires TLS");
         }
@@ -707,11 +723,13 @@ public final class LoginController {
         showLoginButton.setDisable(false);
         advancedSettingsToggleButton.setDisable(false);
         listeningPortField.setDisable(false);
-        trackerHostField.setDisable(false);
-        trackerPortField.setDisable(false);
-        trackerTlsCheckBox.setDisable(false);
-        trackerTrustStoreField.setDisable(false);
-        saveTrackerButton.setDisable(false);
+        boolean installerManaged = SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION;
+        trackerHostField.setDisable(installerManaged);
+        trackerPortField.setDisable(installerManaged);
+        trackerTlsCheckBox.setDisable(true);
+        trackerTrustStoreField.setDisable(installerManaged);
+        saveTrackerButton.setDisable(installerManaged);
+        importTrackerKeyButton.setDisable(installerManaged);
         loginButton.setDisable(false);
         registerButton.setDisable(false);
         openDashboardButton.setDisable(true);

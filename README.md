@@ -32,7 +32,20 @@ FileShare-P2P/
 - Lịch sử truyền, thống kê Tracker, tốc độ truyền và chẩn đoán trạng thái kết nối LAN / Internet Direct / Relay.
 - Kiểm tra tên file, quyền ghi và dung lượng đích trước khi tải.
 
-SHA-256 ở đây dùng để kiểm tra tính toàn vẹn, không mã hóa file. Ed25519 ký ticket truy cập, không ký hay mã hóa nội dung file. TLS bảo vệ dữ liệu trên đường truyền khi được bật/cấu hình.
+SHA-256 ở đây dùng để kiểm tra tính toàn vẹn, không mã hóa file. Ed25519 ký ticket truy cập, không ký hay mã hóa nội dung file. TLS bảo vệ dữ liệu trên đường truyền; bản phát hành production bắt buộc dùng TLS và không tự hạ cấp TCP thường.
+
+## Bản phát hành bảo mật mặc định (Secure by Default)
+
+Bản phát hành không có công tắc mã hóa cho người dùng: TLS cho Tracker/Peer được bật
+mặc định trong `P2P_PROFILE=production` và cấu hình cũ `TLS=false` không được hạ cấp
+kết nối. Gói cài đặt đã được quản trị viên cấp chứng chỉ/truststore và public key
+Tracker thì người dùng chỉ cần đăng ký/đăng nhập. Nếu chưa được cấp chứng chỉ đúng,
+ứng dụng sẽ báo lỗi an toàn chứ **không** chuyển sang TCP không mã hóa.
+
+**Đây là thay đổi chính sách, không phải cơ chế tự cấp CA/cert trên Internet:** nhà
+triển khai phải cấp CA, chứng chỉ máy chủ và mỗi máy Peer (SAN khớp địa chỉ thực tế),
+phân phối Tracker public key qua kênh tin cậy trước khi giao bộ cài. Xem
+[SECURE_DEFAULTS_RELEASE.md](docs/SECURE_DEFAULTS_RELEASE.md).
 
 ## Chuẩn bị PostgreSQL
 
@@ -77,11 +90,11 @@ Giao thức control dùng `MessageEnvelope` phiên bản 3, 4-byte length prefix
 - Tin nhắn điều khiển dùng `MessageEnvelope` + `ProtocolCodec` (4-byte length + JSON UTF-8, tối đa 1 MiB); dữ liệu piece truyền riêng dạng binary.
 - IP của Peer lấy từ socket phía Tracker; client chỉ công bố `listeningPort`.
 - Password không lưu plaintext (BCrypt). SHA-256 là kiểm tra integrity; Ed25519 là chữ ký ticket, không phải mã hóa file.
-- TLS bảo vệ vận chuyển: Peer ↔ Tracker cấu hình bằng `TRACKER_TLS_ENABLED`, Peer ↔ Peer bằng `P2P_TLS_ENABLED`. TLS không thay thế xác minh fingerprint public key Tracker.
+- TLS bảo vệ vận chuyển: production **bắt buộc** TLS cho Peer ↔ Tracker và Peer ↔ Peer; giá trị `false` cũ không cho phép hạ cấp. TLS không thay thế xác minh fingerprint public key Tracker.
 
 ## Giới hạn đã biết và nghiệm thu
 
-- Màn hình Share chưa có nút dừng chia sẻ thư mục; service có thao tác unshare, nhưng chưa có nút GUI tương ứng.
+- Việc cấp/đổi chứng chỉ TLS cho máy mới vẫn là nhiệm vụ quản trị viên phát hành (chưa có CA enrollment tự động cho mọi thiết bị).
 - NAT/Relay qua Internet thực, các kết nối trên nhiều mạng và app-image chạy trên máy Windows sạch chưa được nghiệm thu. Chẩn đoán trạng thái trong GUI không thay thế nghiệm thu mạng/máy thật.
 - PostgreSQL recovery integration test mặc định **skip** khi không có `P2P_PG_TEST_URL`. Chạy trên Windows có Docker bằng `.\tracker-server\src\test\run_postgres_recovery_acceptance.ps1`.
 - Chưa có nghiệm thu máy thật cho kích thước file lớn hơn 2 GB. Không suy diễn nghiệm thu từ việc code hoặc unit test tồn tại.
@@ -136,8 +149,17 @@ Các lệnh trên kiểm tra marker trong repository, migration, liên kết FXM
 
 - Khi bật TLS Tracker, certificate phải có SAN khớp `TRACKER_HOST`; hostname được kiểm tra trong handshake.
 - `P2P_TLS_VERIFY_HOSTNAME=true` chỉ bật sau khi cấp certificate Peer với SAN khớp địa chỉ kết nối.
-- Không deploy ra Internet với `TRACKER_TLS_ENABLED=false` hoặc `P2P_TLS_ENABLED=false` khi truyền dữ liệu nhạy cảm.
+- Production bắt buộc TLS; để thử TCP thường trên máy phát triển nội bộ phải dùng cả `P2P_PROFILE=development` và `P2P_ALLOW_INSECURE_DEV=true`.
 - Không mở PostgreSQL cổng 5432 ra Internet.
 - Với cấu hình Internet, bật TLS cho Tracker và Peer, xác minh certificate name/SAN, và không bỏ qua ticket hay fingerprint.
 - Tạo khóa ticket một lần trên máy Tracker bằng `.\gradlew.bat :tracker-server:generateTicketKeys`. Chỉ phân phối public key; gửi fingerprint grouped-hex qua kênh độc lập và tin cậy.
 - PostgreSQL backup/restore và app-image là quy trình vận hành riêng; xem hướng dẫn migration và checklist nghiệm thu trước khi triển khai.
+
+
+### Lưu ý nghiệm thu cuối cùng
+
+Chính sách mã hóa không đồng nghĩa chứng chỉ được tạo/đăng ký tự động.
+Ứng dụng mới **chỉ** đạt yêu cầu "người dùng tạo tài khoản rồi dùng" sau khi nhà phát hành
+đã tạo và phân phối gói cài đặt chứa chứng chỉ, truststore, khóa công khai Tracker
+và địa chỉ DNS/port chính xác. Thiếu thành phần bảo mật -> không kết nối, không hạ cấp.
+Chưa có tự cấp TLS danh tính cho Peer mới có IP/DNS động.
