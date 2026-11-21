@@ -1,6 +1,7 @@
 package vn.edu.p2p.peer.network;
 
 import java.io.IOException;
+import vn.edu.p2p.common.security.SecurityProfile;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
@@ -29,9 +30,12 @@ public final class UserTrackerSettingsStore {
         }
 
         public TrackerConnectionConfig toConnectionConfig(PeerSettings defaults) {
-            Path trust = trustStorePath.isBlank() ? defaults.trackerTrustStorePath()
+            Path trust = trustStorePath.isBlank() || "system".equalsIgnoreCase(trustStorePath)
+                    ? (trustStorePath.isBlank() ? defaults.trackerTrustStorePath() : null)
                     : Path.of(trustStorePath).toAbsolutePath().normalize();
-            return new TrackerConnectionConfig(host, port, tls, trust,
+            boolean secured = SecurityProfile.tlsRequiredByDefault(
+                    SecurityProfile.configuredMode(), tls);
+            return new TrackerConnectionConfig(host, port, secured, trust,
                     defaults.trackerTrustStorePassword(), defaults.trackerTrustStoreType());
         }
     }
@@ -48,13 +52,27 @@ public final class UserTrackerSettingsStore {
     }
 
     public Endpoint load(PeerSettings defaults) throws IOException {
+        return load(defaults, SecurityProfile.configuredMode());
+    }
+
+    /** Package-private overload keeps legacy settings migration testable without changing production policy. */
+    Endpoint load(PeerSettings defaults, SecurityProfile.Mode mode) throws IOException {
+        // Production endpoints and trust anchors are owned by the installer/admin.
+        // Ignore pre-upgrade per-user preferences so an old TCP or stale host
+        // does not override the trusted installation configuration.
+        if (mode == SecurityProfile.Mode.PRODUCTION) {
+            return new Endpoint(defaults.trackerHost(), defaults.trackerPort(), true,
+                    defaults.trackerTrustStorePath() == null ? "system"
+                            : defaults.trackerTrustStorePath().toString());
+        }
         if (path.toAbsolutePath().normalize().equals(defaultSettingsPath())) {
             TrackerPublicKeyInstaller.migratePinSettings(
                     TrackerPublicKeyInstaller.defaultDestination());
         }
         if (!Files.exists(path)) return new Endpoint(defaults.trackerHost(),
                 defaults.trackerPort(), defaults.trackerTlsEnabled(),
-                defaults.trackerTrustStorePath().toString());
+                defaults.trackerTrustStorePath() == null ? "system"
+                        : defaults.trackerTrustStorePath().toString());
         if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) {
             throw new IOException("Unsafe Tracker settings path: " + path);
         }
@@ -66,8 +84,10 @@ public final class UserTrackerSettingsStore {
             if (!"true".equals(tls) && !"false".equals(tls)) {
                 throw new IllegalArgumentException("Invalid saved TLS flag");
             }
+            boolean enabled = SecurityProfile.tlsRequiredByDefault(
+                    SecurityProfile.configuredMode(), Boolean.parseBoolean(tls));
             Endpoint endpoint = new Endpoint(values.getProperty("tracker.host", ""), port,
-                    Boolean.parseBoolean(tls), values.getProperty("tracker.truststore.path", ""));
+                    enabled, values.getProperty("tracker.truststore.path", ""));
             if (values.getProperty(SCHEMA_VERSION) == null) save(endpoint);
             return endpoint;
         } catch (IllegalArgumentException e) {
@@ -103,7 +123,9 @@ public final class UserTrackerSettingsStore {
         values.setProperty(SCHEMA_VERSION, Integer.toString(CURRENT_SCHEMA_VERSION));
         values.setProperty("tracker.host", endpoint.host());
         values.setProperty("tracker.port", Integer.toString(endpoint.port()));
-        values.setProperty("tracker.tls", Boolean.toString(endpoint.tls()));
+        values.setProperty("tracker.tls", Boolean.toString(
+                SecurityProfile.tlsRequiredByDefault(
+                        SecurityProfile.configuredMode(), endpoint.tls())));
         values.setProperty("tracker.truststore.path", endpoint.trustStorePath());
         Path temp = Files.createTempFile(path.getParent(), ".tracker-", ".tmp");
         try {

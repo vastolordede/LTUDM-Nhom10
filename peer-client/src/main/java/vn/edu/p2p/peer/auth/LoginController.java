@@ -1,6 +1,13 @@
 package vn.edu.p2p.peer.auth;
 
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
+import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
+import javafx.scene.control.DialogPane;
+import javafx.scene.control.ScrollPane;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -8,6 +15,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
+import javafx.stage.Modality;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -110,13 +118,25 @@ public final class LoginController {
     private final UserTrackerSettingsStore trackerSettingsStore = UserTrackerSettingsStore.defaultStore();
     private PeerSettings trackerDefaults;
     private TrackerConnectionConfig activeTrackerConfig;
+    /** Separate window for technical setup, not part of the daily login page. */
+    private Dialog<Void> advancedSettingsDialog;
+    private Label modalStatusLabel;
 
     @FXML
     private void initialize() {
         showAuthForm(false);
-        setAdvancedSettingsVisible(false);
+        // Settings start hidden in the existing FXML, even before it is moved into the dialog.
+        advancedSettingsBox.setVisible(false);
+        advancedSettingsBox.setManaged(false);
+        // The ScrollPane is attached to a Scene after FXMLLoader calls initialize().
+        loginForm.sceneProperty().addListener((observable, oldScene, newScene) -> {
+            if (newScene != null) Platform.runLater(this::centerAuthenticationContent);
+        });
+        Platform.runLater(this::centerAuthenticationContent);
         listeningPortField.setText("7001");
         openDashboardButton.setDisable(true);
+        openDashboardButton.setVisible(false);
+        openDashboardButton.setManaged(false);
         connectivitySubscription = connectivityStatus.subscribe(snapshot ->
                 Platform.runLater(() -> {
                     if (!shuttingDown && connectionStatusLabel != null) {
@@ -133,7 +153,16 @@ public final class LoginController {
             UserTrackerSettingsStore.Endpoint saved = trackerSettingsStore.load(trackerDefaults);
             trackerHostField.setText(saved.host());
             trackerPortField.setText(Integer.toString(saved.port()));
-            trackerTlsCheckBox.setSelected(saved.tls());
+            trackerTlsCheckBox.setSelected(SecurityProfile.tlsRequiredByDefault(
+                    SecurityProfile.configuredMode(), saved.tls()));
+            trackerTlsCheckBox.setDisable(true);
+            if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION) {
+                trackerHostField.setDisable(true);
+                trackerPortField.setDisable(true);
+                trackerTrustStoreField.setDisable(true);
+                saveTrackerButton.setDisable(true);
+                importTrackerKeyButton.setDisable(true);
+            }
             trackerTrustStoreField.setText(saved.trustStorePath());
             applyTrackerConfig(saved);
             updateSetupGuidance();
@@ -180,20 +209,78 @@ public final class LoginController {
         showAuthForm(false);
     }
 
-    private void setAdvancedSettingsVisible(boolean visible) {
-        advancedSettingsBox.setVisible(visible);
-        advancedSettingsBox.setManaged(visible);
-        advancedSettingsToggleButton.setText(
-                visible ? "Ẩn cấu hình nâng cao" : "Cấu hình nâng cao");
+    /** Center the login/registration stack vertically without modifying the FXML baseline.
+     *  The login-root VBox is the existing ScrollPane content. Its minimum height tracks
+     *  the viewport, preserving scrolling in a smaller window. */
+    private void centerAuthenticationContent() {
+        Node node = loginForm;
+        while (node != null && !(node instanceof ScrollPane)) {
+            node = node.getParent();
+        }
+        if (!(node instanceof ScrollPane scroll) || !(scroll.getContent() instanceof VBox root)) {
+            return;
+        }
+        root.setAlignment(Pos.CENTER);
+        if (!root.minHeightProperty().isBound()) {
+            root.minHeightProperty().bind(Bindings.createDoubleBinding(
+                    () -> Math.max(0.0, scroll.getViewportBounds().getHeight()),
+                    scroll.viewportBoundsProperty()));
+        }
     }
 
     @FXML
     private void onToggleAdvancedSettings() {
-        setAdvancedSettingsVisible(!advancedSettingsBox.isVisible());
+        if (advancedSettingsDialog == null) {
+            // This VBox already exists in the FXML; moving the same Node preserves all
+            // controller @FXML bindings and event handlers without duplicating inputs.
+            if (advancedSettingsBox.getParent() instanceof VBox parent) {
+                parent.getChildren().remove(advancedSettingsBox);
+            } else {
+                throw new IllegalStateException("Unexpected Advanced Settings layout");
+            }
+            advancedSettingsBox.setVisible(true);
+            advancedSettingsBox.setManaged(true);
+            advancedSettingsBox.setStyle("-fx-padding: 12 8 10 8; -fx-background-color: #172439;");
+
+            Label heading = new Label("Thiết lập Tracker / Peer");
+            heading.setStyle("-fx-font-weight: bold; -fx-font-size: 17px; -fx-text-fill: #eaf1f7;");
+            advancedSettingsBox.getChildren().add(0, heading);
+            modalStatusLabel = new Label(statusLabel.getText());
+            modalStatusLabel.setWrapText(true);
+            modalStatusLabel.setMaxWidth(Double.MAX_VALUE);
+            modalStatusLabel.getStyleClass().add("status");
+            advancedSettingsBox.getChildren().add(modalStatusLabel);
+
+            Dialog<Void> dialog = new Dialog<>();
+            dialog.setTitle("Cấu hình nâng cao - FileShare-P2P");
+            dialog.initOwner(advancedSettingsToggleButton.getScene().getWindow());
+            dialog.initModality(Modality.WINDOW_MODAL);
+            DialogPane pane = dialog.getDialogPane();
+            pane.setContent(advancedSettingsBox);
+            pane.getButtonTypes().add(ButtonType.CLOSE);
+            pane.setPrefWidth(470);
+            pane.setMinWidth(400);
+            pane.setStyle("-fx-background-color: #172439;");
+            var stylesheet = getClass().getResource("/vn/edu/p2p/peer/view/styles.css");
+            if (stylesheet != null) pane.getStylesheets().add(stylesheet.toExternalForm());
+            dialog.setResizable(true);
+            advancedSettingsDialog = dialog;
+        }
+        modalStatusLabel.setText(statusLabel.getText());
+        advancedSettingsDialog.showAndWait();
+    }
+
+    private void showSetupStatus(String message) {
+        statusLabel.setText(message);
+        if (modalStatusLabel != null) modalStatusLabel.setText(message);
     }
 
     @FXML
     private void onSaveTrackerSettings() {
+        if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION) {
+            showSetupStatus("Cấu hình mạng/TLS đã được đóng gói sẵn; không cho người dùng thay đổi.");
+            return;
+        }
         if (authClientService != null && authClientService.currentSession() != null) {
             statusLabel.setText("Please log out before changing Tracker settings.");
             return;
@@ -217,6 +304,7 @@ public final class LoginController {
             } else {
                 showDiagnostic(statusLabel,
                         TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
+                showSetupStatus(statusLabel.getText());
             }
         }
     }
@@ -264,7 +352,7 @@ public final class LoginController {
     }
 
     private void showImportedFingerprint(String fingerprint) {
-        statusLabel.setText("Đã tin cậy khóa Tracker. Fingerprint: "
+        showSetupStatus("Đã tin cậy khóa Tracker. Fingerprint: "
                 + PeerAccessTickets.formatFingerprint(
                         PeerAccessTickets.normalizeFingerprint(fingerprint))
                 + ". Khởi động lại ứng dụng Peer để áp dụng.");
@@ -276,13 +364,14 @@ public final class LoginController {
             new UserTrackerSettingsStore.Endpoint(trackerHostField.getText().trim(),
                     Integer.parseInt(trackerPortField.getText().trim()),
                     trackerTlsCheckBox.isSelected(), trackerTrustStoreField.getText());
-            trackerConfigured = trackerSettingsStore.hasSavedSettings();
+            // A trusted packaged endpoint is sufficient on first run; the user
+            // never has to press Save before registering or signing in.
+            trackerConfigured = trackerDefaults != null;
         } catch (RuntimeException e) {
             trackerConfigured = false;
         }
         try {
-            trackerConfigured &= SecurityProfile.parse(
-                    EnvConfig.get("P2P_PROFILE", "development"))
+            trackerConfigured &= SecurityProfile.configuredMode()
                     != SecurityProfile.Mode.PRODUCTION || trackerTlsCheckBox.isSelected();
         } catch (IllegalArgumentException e) {
             trackerConfigured = false;
@@ -292,11 +381,14 @@ public final class LoginController {
         if (trackerTlsCheckBox.isSelected()) {
             try {
                 String path = trackerTrustStoreField.getText().trim();
-                trustStoreReady = !path.isBlank()
+                // System CA trust works without a manually selected PKCS12 file.
+                trustStoreReady = "system".equalsIgnoreCase(path)
+                        || (trackerDefaults != null
                         && trackerDefaults.trackerTrustStorePassword() != null
                         && !trackerDefaults.trackerTrustStorePassword().isBlank()
+                        && !path.isBlank()
                         && Files.isRegularFile(Path.of(path))
-                        && Files.isReadable(Path.of(path));
+                        && Files.isReadable(Path.of(path)));
             } catch (RuntimeException e) {
                 trustStoreReady = false;
             }
@@ -314,13 +406,11 @@ public final class LoginController {
         SetupStep step = nextSetupStep(trackerConfigured,
                 trackerTlsCheckBox.isSelected(), trustStoreReady,
                 publicKeyTrusted, publicKeyValid);
-        statusLabel.setText(setupGuidance(step));
+        showSetupStatus(setupGuidance(step));
         boolean ready = step == SetupStep.READY;
         loginButton.setDisable(!ready);
         registerButton.setDisable(!ready);
-        // Show setup only when genuinely required; otherwise keep daily login focused.
-        if (!ready) setAdvancedSettingsVisible(true);
-        else setAdvancedSettingsVisible(false);
+        // Keep setup entirely in the separate modal. Never bypass setup/security checks.
     }
 
     enum SetupStep {
@@ -343,15 +433,14 @@ public final class LoginController {
 
     static String setupGuidance(SetupStep step) {
         return switch (step) {
-            case TRACKER_CONFIGURATION -> "Bước 1/3: nhập địa chỉ/cổng Tracker, bật TLS theo "
-                    + "chính sách Tracker nếu cần, rồi lưu cấu hình.";
-            case TLS_TRUSTSTORE -> "Bước 2/3: chọn TLS, nhập đường dẫn truststore hợp lệ. "
-                    + "Mật khẩu truststore phải được quản trị viên cấu hình bên ngoài ứng dụng.";
-            case PUBLIC_KEY -> "Bước 3/3: nhập public key Tracker và đối chiếu fingerprint "
-                    + "do quản trị viên cung cấp qua kênh tin cậy.";
+            case TRACKER_CONFIGURATION -> "Chưa có địa chỉ Tracker hợp lệ trong bản cài đặt.";
+            case TLS_TRUSTSTORE -> "Chưa được cấp phát CA/truststore cho kết nối mã hóa. "
+                    + "Liên hệ quản trị viên; không tắt TLS để bỏ qua lỗi.";
+            case PUBLIC_KEY -> "Bản cài đặt chưa có public key Tracker được tin cậy. "
+                    + "Quản trị viên cần cấp gói cấu hình ký số an toàn.";
             case INVALID_PUBLIC_KEY -> "Không đọc được public key Tracker đã tin cậy. "
                     + "Hãy nhập lại public key hợp lệ và đối chiếu fingerprint qua kênh tin cậy.";
-            case READY -> "Cấu hình Tracker, TLS và public key đã sẵn sàng.";
+            case READY -> "Bảo mật đường truyền đã được cấu hình tự động.";
         };
     }
 
@@ -367,10 +456,11 @@ public final class LoginController {
         } catch (Exception e) {
             showDiagnostic(statusLabel,
                     TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
+            showSetupStatus(statusLabel.getText());
             return;
         }
         diagnoseTrackerButton.setDisable(true);
-        statusLabel.setText("Đang kiểm tra kết nối TCP/TLS tới Tracker...");
+        showSetupStatus("Đang kiểm tra kết nối TCP/TLS tới Tracker...");
         long generation = AuthClientService.sessionGeneration();
         CompletableFuture.supplyAsync(
                         () -> TrackerConnectionDiagnostics.probeDiagnostic(target), ioExecutor)
@@ -378,12 +468,13 @@ public final class LoginController {
                     postToCurrentUi(generation, () -> {
                         diagnoseTrackerButton.setDisable(false);
                         if (error == null) {
-                            statusLabel.setText(diagnostic.message());
+                            showSetupStatus(diagnostic.message());
                             statusLabel.setTooltip(diagnostic.guidance().isBlank() ? null
                                     : new Tooltip(diagnostic.guidance()));
                         } else {
                             showDiagnostic(statusLabel,
                                     TrackerConnectionDiagnostics.classify(error, target));
+                            showSetupStatus(statusLabel.getText());
                         }
                     });
                 });
@@ -391,7 +482,7 @@ public final class LoginController {
 
     private void applyTrackerConfig(UserTrackerSettingsStore.Endpoint endpoint) throws Exception {
         TrackerConnectionConfig config = endpoint.toConnectionConfig(trackerDefaults);
-        if (SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development"))
+        if (SecurityProfile.configuredMode()
                 == SecurityProfile.Mode.PRODUCTION && !config.tlsEnabled()) {
             throw new IllegalStateException("Production Tracker connection requires TLS");
         }
@@ -569,6 +660,8 @@ public final class LoginController {
         saveTrackerButton.setDisable(true);
         loginButton.setDisable(true);
         openDashboardButton.setDisable(false);
+        openDashboardButton.setVisible(true);
+        openDashboardButton.setManaged(true);
         statusLabel.setText(
                 "Đăng nhập thành công. Peer=" + shortId(session.peerId())
                         + " | Session=" + shortId(session.sessionId())
@@ -630,14 +723,18 @@ public final class LoginController {
         showLoginButton.setDisable(false);
         advancedSettingsToggleButton.setDisable(false);
         listeningPortField.setDisable(false);
-        trackerHostField.setDisable(false);
-        trackerPortField.setDisable(false);
-        trackerTlsCheckBox.setDisable(false);
-        trackerTrustStoreField.setDisable(false);
-        saveTrackerButton.setDisable(false);
+        boolean installerManaged = SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION;
+        trackerHostField.setDisable(installerManaged);
+        trackerPortField.setDisable(installerManaged);
+        trackerTlsCheckBox.setDisable(true);
+        trackerTrustStoreField.setDisable(installerManaged);
+        saveTrackerButton.setDisable(installerManaged);
+        importTrackerKeyButton.setDisable(installerManaged);
         loginButton.setDisable(false);
         registerButton.setDisable(false);
         openDashboardButton.setDisable(true);
+        openDashboardButton.setVisible(false);
+        openDashboardButton.setManaged(false);
         showAuthForm(false);
         statusLabel.setText(message);
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,

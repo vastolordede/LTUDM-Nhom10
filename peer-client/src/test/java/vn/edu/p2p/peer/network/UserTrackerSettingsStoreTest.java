@@ -1,6 +1,7 @@
 package vn.edu.p2p.peer.network;
 
 import org.junit.jupiter.api.Test;
+import vn.edu.p2p.common.security.SecurityProfile;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.nio.file.Files;
@@ -18,7 +19,10 @@ class UserTrackerSettingsStoreTest {
         assertFalse(store.hasSavedSettings());
         store.save(input);
         assertTrue(store.hasSavedSettings());
-        assertEquals(input, store.load(defaults));
+        var loaded = store.load(defaults, SecurityProfile.Mode.DEVELOPMENT);
+        assertEquals(input.host(), loaded.host());
+        assertEquals(input.port(), loaded.port());
+        assertFalse(loaded.tls(), "Explicit development test profile preserves plaintext loopback fixture");
         String saved = java.nio.file.Files.readString(temp.resolve("state/tracker.properties"));
         assertTrue(saved.contains("schema_version=2"));
         assertFalse(saved.contains("password"));
@@ -29,13 +33,27 @@ class UserTrackerSettingsStoreTest {
     }
 
     @Test
+    void productionIgnoresSavedUntrustedEndpoints(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("tracker.properties");
+        Files.writeString(file, "tracker.host=wrong-host.example\ntracker.port=22\n"
+                + "tracker.tls=false\ntracker.truststore.path=wrong-truststore.p12\n");
+        var store = new UserTrackerSettingsStore(file);
+        var defaults = new PeerSettings("secure.example", 9000, true, null, "", "PKCS12");
+        var config = store.load(defaults, SecurityProfile.Mode.PRODUCTION);
+        assertEquals("secure.example", config.host());
+        assertEquals(9000, config.port());
+        assertTrue(config.tls());
+        assertEquals("system", config.trustStorePath());
+    }
+
+    @Test
     void upgradesLegacySettingsAndBacksUpUnknownVersionWithoutOverwriting(@TempDir Path dir)
             throws Exception {
         Path file = dir.resolve("tracker.properties");
         Files.writeString(file, "tracker.host=localhost\ntracker.port=9123\n"
                 + "tracker.tls=true\ntracker.truststore.path=C:\\\\trust\\\\peer.p12\n");
         UserTrackerSettingsStore store = new UserTrackerSettingsStore(file);
-        assertTrue(store.load(PeerSettings.load()).tls());
+        assertTrue(store.load(PeerSettings.load(), SecurityProfile.Mode.DEVELOPMENT).tls());
         assertTrue(Files.readString(file).contains("schema_version=2"));
 
         Properties future = new Properties();

@@ -1,5 +1,6 @@
 package vn.edu.p2p.peer.network;
 
+import vn.edu.p2p.common.security.SecurityProfile;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.MessageType;
@@ -28,6 +29,7 @@ public final class TrackerConnection implements AutoCloseable {
 
     public TrackerConnection(TrackerConnectionConfig config, int connectTimeoutMillis,
                              int readTimeoutMillis) {
+        requireSecureConfig(config);
         this.config = java.util.Objects.requireNonNull(config);
         if (connectTimeoutMillis < 1 || readTimeoutMillis < 1) {
             throw new IllegalArgumentException("Tracker timeouts must be positive");
@@ -41,12 +43,20 @@ public final class TrackerConnection implements AutoCloseable {
 
     /** Replaces endpoint settings without waiting for a blocked request or retaining its socket. */
     public void reconfigure(TrackerConnectionConfig newConfig) {
-        java.util.Objects.requireNonNull(newConfig, "newConfig");
+        requireSecureConfig(newConfig);
         synchronized (socketLock) {
             if (config.equals(newConfig)) return;
             config = newConfig;
             requestGeneration.incrementAndGet();
             closeSocketLocked();
+        }
+    }
+
+    private static void requireSecureConfig(TrackerConnectionConfig selected) {
+        java.util.Objects.requireNonNull(selected, "Tracker config");
+        if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION
+                && !selected.tlsEnabled()) {
+            throw new IllegalStateException("Production cannot connect to Tracker over plain TCP");
         }
     }
 

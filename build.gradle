@@ -14,5 +14,9 @@ subprojects {
 
     tasks.withType(Test).configureEach {
         useJUnitPlatform()
+        // Integration tests deliberately use loopback/plain-TCP fixtures.
+        // Opt in ONLY for forked test JVMs; packaged applications stay production/TLS by default.
+        environment 'P2P_PROFILE', 'development'
+        environment 'P2P_ALLOW_INSECURE_DEV', 'true'
     }
 }

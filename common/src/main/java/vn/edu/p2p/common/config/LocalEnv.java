@@ -92,7 +92,11 @@ public final class LocalEnv {
             return explicitPath;
         }
 
+        // Production installers write a per-user profile once. Ordinary users
+        // do not need to select keystores, edit TLS switches or set OS env vars.
+        // The explicit P2P_ENV_FILE still wins, including for Tracker deployments.
         List<Path> candidates = List.of(
+                Path.of(System.getProperty("user.home"), ".fileshare-p2p", ".env"),
                 Path.of(".env"),
                 Path.of("..", ".env"),
                 Path.of("tracker-server", ".env")
