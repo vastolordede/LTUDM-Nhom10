@@ -22,7 +22,7 @@ class UserTrackerSettingsStoreTest {
         var loaded = store.load(defaults, SecurityProfile.Mode.DEVELOPMENT);
         assertEquals(input.host(), loaded.host());
         assertEquals(input.port(), loaded.port());
-        assertTrue(loaded.tls(), "Old stored TCP preference must be upgraded in production");
+        assertFalse(loaded.tls(), "Explicit development test profile preserves plaintext loopback fixture");
         String saved = java.nio.file.Files.readString(temp.resolve("state/tracker.properties"));
         assertTrue(saved.contains("schema_version=2"));
         assertFalse(saved.contains("password"));

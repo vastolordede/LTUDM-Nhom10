@@ -32,7 +32,8 @@ class LoginControllerSetupChecklistTest {
             assertTrue(guidance.chars().anyMatch(character -> character > 127), guidance);
             assertTrue(!guidance.contains("password") && !guidance.contains("C:\\"), guidance);
         }
-        assertTrue(LoginController.setupGuidance(LoginController.SetupStep.TLS_TRUSTSTORE)
-                .contains("bên ngoài ứng dụng"));
+        String tlsGuidance = LoginController.setupGuidance(LoginController.SetupStep.TLS_TRUSTSTORE);
+        assertTrue(tlsGuidance.contains("quản trị viên"), tlsGuidance);
+        assertTrue(tlsGuidance.contains("không tắt TLS"), tlsGuidance);
     }
 }
