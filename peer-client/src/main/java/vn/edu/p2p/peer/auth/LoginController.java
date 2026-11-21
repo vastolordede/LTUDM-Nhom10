@@ -1,6 +1,13 @@
 package vn.edu.p2p.peer.auth;
 
 import javafx.application.Platform;
+import javafx.beans.binding.Bindings;
+import javafx.geometry.Pos;
+import javafx.scene.Node;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
+import javafx.scene.control.DialogPane;
+import javafx.scene.control.ScrollPane;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
@@ -8,6 +15,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
+import javafx.stage.Modality;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -110,13 +118,25 @@ public final class LoginController {
     private final UserTrackerSettingsStore trackerSettingsStore = UserTrackerSettingsStore.defaultStore();
     private PeerSettings trackerDefaults;
     private TrackerConnectionConfig activeTrackerConfig;
+    /** Separate window for technical setup, not part of the daily login page. */
+    private Dialog<Void> advancedSettingsDialog;
+    private Label modalStatusLabel;
 
     @FXML
     private void initialize() {
         showAuthForm(false);
-        setAdvancedSettingsVisible(false);
+        // Settings start hidden in the existing FXML, even before it is moved into the dialog.
+        advancedSettingsBox.setVisible(false);
+        advancedSettingsBox.setManaged(false);
+        // The ScrollPane is attached to a Scene after FXMLLoader calls initialize().
+        loginForm.sceneProperty().addListener((observable, oldScene, newScene) -> {
+            if (newScene != null) Platform.runLater(this::centerAuthenticationContent);
+        });
+        Platform.runLater(this::centerAuthenticationContent);
         listeningPortField.setText("7001");
         openDashboardButton.setDisable(true);
+        openDashboardButton.setVisible(false);
+        openDashboardButton.setManaged(false);
         connectivitySubscription = connectivityStatus.subscribe(snapshot ->
                 Platform.runLater(() -> {
                     if (!shuttingDown && connectionStatusLabel != null) {
@@ -180,16 +200,70 @@ public final class LoginController {
         showAuthForm(false);
     }
 
-    private void setAdvancedSettingsVisible(boolean visible) {
-        advancedSettingsBox.setVisible(visible);
-        advancedSettingsBox.setManaged(visible);
-        advancedSettingsToggleButton.setText(
-                visible ? "Ẩn cấu hình nâng cao" : "Cấu hình nâng cao");
+    /** Center the login/registration stack vertically without modifying the FXML baseline.
+     *  The login-root VBox is the existing ScrollPane content. Its minimum height tracks
+     *  the viewport, preserving scrolling in a smaller window. */
+    private void centerAuthenticationContent() {
+        Node node = loginForm;
+        while (node != null && !(node instanceof ScrollPane)) {
+            node = node.getParent();
+        }
+        if (!(node instanceof ScrollPane scroll) || !(scroll.getContent() instanceof VBox root)) {
+            return;
+        }
+        root.setAlignment(Pos.CENTER);
+        if (!root.minHeightProperty().isBound()) {
+            root.minHeightProperty().bind(Bindings.createDoubleBinding(
+                    () -> Math.max(0.0, scroll.getViewportBounds().getHeight()),
+                    scroll.viewportBoundsProperty()));
+        }
     }
 
     @FXML
     private void onToggleAdvancedSettings() {
-        setAdvancedSettingsVisible(!advancedSettingsBox.isVisible());
+        if (advancedSettingsDialog == null) {
+            // This VBox already exists in the FXML; moving the same Node preserves all
+            // controller @FXML bindings and event handlers without duplicating inputs.
+            if (advancedSettingsBox.getParent() instanceof VBox parent) {
+                parent.getChildren().remove(advancedSettingsBox);
+            } else {
+                throw new IllegalStateException("Unexpected Advanced Settings layout");
+            }
+            advancedSettingsBox.setVisible(true);
+            advancedSettingsBox.setManaged(true);
+            advancedSettingsBox.setStyle("-fx-padding: 12 8 10 8; -fx-background-color: #172439;");
+
+            Label heading = new Label("Thiết lập Tracker / Peer");
+            heading.setStyle("-fx-font-weight: bold; -fx-font-size: 17px; -fx-text-fill: #eaf1f7;");
+            advancedSettingsBox.getChildren().add(0, heading);
+            modalStatusLabel = new Label(statusLabel.getText());
+            modalStatusLabel.setWrapText(true);
+            modalStatusLabel.setMaxWidth(Double.MAX_VALUE);
+            modalStatusLabel.getStyleClass().add("status");
+            advancedSettingsBox.getChildren().add(modalStatusLabel);
+
+            Dialog<Void> dialog = new Dialog<>();
+            dialog.setTitle("Cấu hình nâng cao - FileShare-P2P");
+            dialog.initOwner(advancedSettingsToggleButton.getScene().getWindow());
+            dialog.initModality(Modality.WINDOW_MODAL);
+            DialogPane pane = dialog.getDialogPane();
+            pane.setContent(advancedSettingsBox);
+            pane.getButtonTypes().add(ButtonType.CLOSE);
+            pane.setPrefWidth(470);
+            pane.setMinWidth(400);
+            pane.setStyle("-fx-background-color: #172439;");
+            var stylesheet = getClass().getResource("/vn/edu/p2p/peer/view/styles.css");
+            if (stylesheet != null) pane.getStylesheets().add(stylesheet.toExternalForm());
+            dialog.setResizable(true);
+            advancedSettingsDialog = dialog;
+        }
+        modalStatusLabel.setText(statusLabel.getText());
+        advancedSettingsDialog.showAndWait();
+    }
+
+    private void showSetupStatus(String message) {
+        statusLabel.setText(message);
+        if (modalStatusLabel != null) modalStatusLabel.setText(message);
     }
 
     @FXML
@@ -217,6 +291,7 @@ public final class LoginController {
             } else {
                 showDiagnostic(statusLabel,
                         TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
+                showSetupStatus(statusLabel.getText());
             }
         }
     }
@@ -264,7 +339,7 @@ public final class LoginController {
     }
 
     private void showImportedFingerprint(String fingerprint) {
-        statusLabel.setText("Đã tin cậy khóa Tracker. Fingerprint: "
+        showSetupStatus("Đã tin cậy khóa Tracker. Fingerprint: "
                 + PeerAccessTickets.formatFingerprint(
                         PeerAccessTickets.normalizeFingerprint(fingerprint))
                 + ". Khởi động lại ứng dụng Peer để áp dụng.");
@@ -314,13 +389,11 @@ public final class LoginController {
         SetupStep step = nextSetupStep(trackerConfigured,
                 trackerTlsCheckBox.isSelected(), trustStoreReady,
                 publicKeyTrusted, publicKeyValid);
-        statusLabel.setText(setupGuidance(step));
+        showSetupStatus(setupGuidance(step));
         boolean ready = step == SetupStep.READY;
         loginButton.setDisable(!ready);
         registerButton.setDisable(!ready);
-        // Show setup only when genuinely required; otherwise keep daily login focused.
-        if (!ready) setAdvancedSettingsVisible(true);
-        else setAdvancedSettingsVisible(false);
+        // Keep setup entirely in the separate modal. Never bypass setup/security checks.
     }
 
     enum SetupStep {
@@ -367,10 +440,11 @@ public final class LoginController {
         } catch (Exception e) {
             showDiagnostic(statusLabel,
                     TrackerConnectionDiagnostics.classify(e, activeTrackerConfig));
+            showSetupStatus(statusLabel.getText());
             return;
         }
         diagnoseTrackerButton.setDisable(true);
-        statusLabel.setText("Đang kiểm tra kết nối TCP/TLS tới Tracker...");
+        showSetupStatus("Đang kiểm tra kết nối TCP/TLS tới Tracker...");
         long generation = AuthClientService.sessionGeneration();
         CompletableFuture.supplyAsync(
                         () -> TrackerConnectionDiagnostics.probeDiagnostic(target), ioExecutor)
@@ -378,12 +452,13 @@ public final class LoginController {
                     postToCurrentUi(generation, () -> {
                         diagnoseTrackerButton.setDisable(false);
                         if (error == null) {
-                            statusLabel.setText(diagnostic.message());
+                            showSetupStatus(diagnostic.message());
                             statusLabel.setTooltip(diagnostic.guidance().isBlank() ? null
                                     : new Tooltip(diagnostic.guidance()));
                         } else {
                             showDiagnostic(statusLabel,
                                     TrackerConnectionDiagnostics.classify(error, target));
+                            showSetupStatus(statusLabel.getText());
                         }
                     });
                 });
@@ -569,6 +644,8 @@ public final class LoginController {
         saveTrackerButton.setDisable(true);
         loginButton.setDisable(true);
         openDashboardButton.setDisable(false);
+        openDashboardButton.setVisible(true);
+        openDashboardButton.setManaged(true);
         statusLabel.setText(
                 "Đăng nhập thành công. Peer=" + shortId(session.peerId())
                         + " | Session=" + shortId(session.sessionId())
@@ -638,6 +715,8 @@ public final class LoginController {
         loginButton.setDisable(false);
         registerButton.setDisable(false);
         openDashboardButton.setDisable(true);
+        openDashboardButton.setVisible(false);
+        openDashboardButton.setManaged(false);
         showAuthForm(false);
         statusLabel.setText(message);
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
