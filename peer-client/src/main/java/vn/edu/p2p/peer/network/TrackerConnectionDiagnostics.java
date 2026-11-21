@@ -1,5 +1,6 @@
 package vn.edu.p2p.peer.network;
 
+import vn.edu.p2p.common.security.SecurityProfile;
 import vn.edu.p2p.common.protocol.ProtocolCompatibilityException;
 import vn.edu.p2p.common.protocol.ProtocolException;
 
@@ -65,6 +66,11 @@ public final class TrackerConnectionDiagnostics {
 
     public static Diagnostic probeDiagnostic(TrackerConnectionConfig config) {
         try {
+            if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION
+                    && !config.tlsEnabled()) {
+                return diagnostic(FailureKind.INVALID_CONFIGURATION,
+                        "Không thể kiểm tra bằng TCP thường trong bản phát hành.");
+            }
             if (config.tlsEnabled()) {
                 try (var socket = new TlsTrackerSocketFactory(config).connect(3000, 3000)) {
                     return diagnostic(FailureKind.NONE, "Kết nối Tracker thành công.");
