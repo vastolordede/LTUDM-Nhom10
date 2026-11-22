@@ -12,6 +12,7 @@ import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
 import vn.edu.p2p.common.protocol.ResponseStatus;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.common.security.PeerLoginProof;
 import vn.edu.p2p.peer.auth.TicketRevocationList;
 import vn.edu.p2p.peer.network.TrackerConnection;
 import vn.edu.p2p.peer.session.ClientSession;
@@ -99,7 +100,8 @@ public final class AuthClientService implements AutoCloseable {
         MessageEnvelope response = sendLogin(username, password, listeningPort, currentIdentity);
         requireType(response, MessageType.LOGIN_RESPONSE);
         if (identityStore != null && response.status() == ResponseStatus.ERROR
-                && "PEER_OWNERSHIP_MISMATCH".equals(response.errorCode())) {
+                && ("PEER_OWNERSHIP_MISMATCH".equals(response.errorCode())
+                || "PEER_KEY_MISMATCH".equals(response.errorCode()))) {
             // Credentials are validated by Tracker before the mismatch. Retry only
             // this case once with a separate persistent ID for this account.
             try {
@@ -155,9 +157,12 @@ public final class AuthClientService implements AutoCloseable {
             throw new AuthClientException("LOCAL_KEY_ERROR",
                     "Cannot load or create the Peer identity key: " + e.getMessage(), e);
         }
+        String publicKey = PeerRequestProof.encodePublicKey(peerKeys.getPublic());
+        PeerLoginProof.Proof deviceProof = PeerLoginProof.sign(peerKeys.getPrivate(),
+                username, identity.peerId(), listeningPort, publicKey, java.time.Clock.systemUTC());
         LoginRequest payload = new LoginRequest(username, password, listeningPort,
-                identity.peerId(), identity.deviceName(),
-                PeerRequestProof.encodePublicKey(peerKeys.getPublic()));
+                identity.peerId(), identity.deviceName(), publicKey,
+                deviceProof.timestampMillis(), deviceProof.nonce(), deviceProof.signature());
         MessageEnvelope request = MessageEnvelope.request(MessageType.LOGIN_REQUEST,
                 UUID.randomUUID().toString(), ProtocolCodec.toPayload(payload));
         return send(request);

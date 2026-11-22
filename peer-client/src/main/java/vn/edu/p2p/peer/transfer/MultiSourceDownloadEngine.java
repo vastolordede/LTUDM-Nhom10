@@ -590,7 +590,7 @@ public final class MultiSourceDownloadEngine {
             }
             FileSourceInfo refreshedSource = new FileSourceInfo(source.peerId(),
                     source.availabilityStatus(), source.ipAddress(), source.listeningPort(),
-                    source.lastSeenEpochMillis(), refreshedTicket);
+                    source.lastSeenEpochMillis(), refreshedTicket, source.peerPublicKey());
             currentSources.put(source.peerId(), refreshedSource);
             return refreshedSource;
         }

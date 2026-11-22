@@ -5,6 +5,7 @@ import vn.edu.p2p.common.dto.FileSourcesRequest;
 import vn.edu.p2p.common.dto.FileSourcesResponse;
 import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.common.security.SecurityProfile;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.time.Clock;
@@ -91,14 +92,20 @@ public final class FileSourceService {
             String trustedHash = repository.findReadyCatalogHash(request.fileId())
                     .orElseThrow(() -> new FileSourceException("FILE_NOT_READY",
                             "File is not published or catalog hash is unavailable"));
-            List<FileSourceInfo> sources = repository.findOnlineSources(
-                            request.fileId(),
-                            requester.peerId()
-                    )
-                    .stream()
-                    .map(source -> toInfo(source, request.fileId(), requester.peerId().toString(),
-                            requesterPublicKey))
-                    .toList();
+            // The Tracker-authenticated public key is the P2P TLS trust anchor.
+            // Never use a key supplied by an arbitrary search or direct P2P response.
+            java.util.ArrayList<FileSourceInfo> sources = new java.util.ArrayList<>();
+            for (FileSourceRecord source : repository.findOnlineSources(
+                    request.fileId(), requester.peerId())) {
+                String sourceKey = peerRepository.findPublicKey(source.peerId()).orElse(null);
+                if (signingKey != null
+                        && SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION
+                        && (sourceKey == null || sourceKey.isBlank())) {
+                    continue; // Fail closed: cannot advertise an unverified uploader.
+                }
+                sources.add(toInfo(source, request.fileId(), requester.peerId().toString(),
+                        requesterPublicKey, sourceKey));
+            }
 
             return new FileSourcesResponse(request.fileId(), sources, trustedHash);
         } catch (SQLException e) {
@@ -111,7 +118,7 @@ public final class FileSourceService {
     }
 
     private FileSourceInfo toInfo(FileSourceRecord source, long fileId, String requesterPeerId,
-                                  PublicKey requesterPublicKey) {
+                                  PublicKey requesterPublicKey, String uploaderPublicKey) {
         long lastSeen = source.lastSeen() == null
                 ? 0L
                 : source.lastSeen()
@@ -127,7 +134,8 @@ public final class FileSourceService {
                 lastSeen,
                 signingKey == null ? null : PeerAccessTickets.issue(signingKey, ticketKeyId,
                         fileId, requesterPeerId, source.peerId().toString(), requesterPublicKey,
-                        clock.instant(), ticketTtlSeconds)
+                        clock.instant(), ticketTtlSeconds),
+                uploaderPublicKey
         );
     }
 }

@@ -10,6 +10,15 @@ public record LoginRequest(
         int listeningPort,
         String peerId,
         String deviceName,
-        String peerPublicKey
+        String peerPublicKey,
+        Long peerProofTimestamp,
+        String peerProofNonce,
+        String peerProofSignature
 ) {
+    /** Compatibility for development fixtures; production logins require a device proof. */
+    public LoginRequest(String username, String password, int listeningPort, String peerId,
+                        String deviceName, String peerPublicKey) {
+        this(username, password, listeningPort, peerId, deviceName, peerPublicKey,
+                null, null, null);
+    }
 }
