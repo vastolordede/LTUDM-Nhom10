@@ -194,6 +194,7 @@ public final class ConnectionPlanner {
     private final RendezvousClient rendezvous; // null = relay tắt
     private final String sessionId;
     private final Map<String, String> peerByEndpoint = new ConcurrentHashMap<>();
+    private final Map<String, String> trustedKeyByEndpoint = new ConcurrentHashMap<>();
     private final Map<String, Long> relayUntil = new ConcurrentHashMap<>();
     private final Map<String, Mode> lastMode = new ConcurrentHashMap<>();
     private final Set<Socket> activeRelaySockets = ConcurrentHashMap.newKeySet();
@@ -242,19 +243,33 @@ public final class ConnectionPlanner {
     /** Ghi nhớ peerId của từng endpoint để biết relay tới ai. */
     public void remember(List<FileSourceInfo> sources) {
         for (FileSourceInfo s : sources) {
-            peerByEndpoint.put(s.ipAddress() + ":" + s.listeningPort(), s.peerId());
+            String endpoint = s.ipAddress() + ":" + s.listeningPort();
+            peerByEndpoint.put(endpoint, s.peerId());
+            if (s.peerPublicKey() != null && !s.peerPublicKey().isBlank()) {
+                trustedKeyByEndpoint.put(endpoint, s.peerPublicKey());
+            } else {
+                trustedKeyByEndpoint.remove(endpoint);
+            }
         }
     }
 
     public Socket open(String host, int port) throws IOException {
         String key = host + ":" + port;
+        String expectedPeer = peerByEndpoint.get(key);
+        String expectedKey = trustedKeyByEndpoint.get(key);
+        if (direct.identityBased() && (expectedPeer == null || expectedKey == null)) {
+            throw new javax.net.ssl.SSLHandshakeException(
+                    "Peer identity not authenticated by Tracker; refresh sources");
+        }
         Long until = relayUntil.get(key);
         boolean skipDirect = until != null && until > System.currentTimeMillis();
         IOException failure = null;
 
         if (!skipDirect) {
             try {
-                Socket socket = direct.openClientSocket(host, port);
+                Socket socket = direct.identityBased()
+                        ? direct.openClientSocket(host, port, expectedPeer, expectedKey)
+                        : direct.openClientSocket(host, port);
                 report(key, isPrivateAddress(host) ? Mode.LAN : Mode.DIRECT);
                 return socket;
             } catch (IOException e) {
@@ -284,7 +299,9 @@ public final class ConnectionPlanner {
                 Socket relay = rendezvous.connectViaRelay(sessionId, peerId, direct.readTimeoutMillis());
                 Socket socket;
                 try {
-                    socket = direct.wrapClient(relay, host, port);
+                    socket = direct.identityBased()
+                            ? direct.wrapClient(relay, host, port, expectedPeer, expectedKey)
+                            : direct.wrapClient(relay, host, port);
                 } catch (IOException tlsFail) {
                     relay.close();
                     throw tlsFail;

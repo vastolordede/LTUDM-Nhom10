@@ -163,3 +163,14 @@ Chính sách mã hóa không đồng nghĩa chứng chỉ được tạo/đăng 
 đã tạo và phân phối gói cài đặt chứa chứng chỉ, truststore, khóa công khai Tracker
 và địa chỉ DNS/port chính xác. Thiếu thành phần bảo mật -> không kết nối, không hạ cấp.
 Chưa có tự cấp TLS danh tính cho Peer mới có IP/DNS động.
+
+## Secure Peer Identity TLS – protocol v4 (candidate change)
+
+> Lưu ý: Các mục setup SAN theo IP phía trên là tài liệu v3 trước bản sửa. Ở v4,
+> Client tạo X.509 từ khóa Ed25519 của chính Peer; Tracker gửi public key Peer nguồn
+> qua TLS; Downloader pin khóa chứng chỉ và UUID thay vì xác minh IP. IP/port chỉ là
+> endpoint động. Không cần cấp chứng chỉ riêng cho từng IP, và không hạ cấp bảo mật.
+>
+> **Client v4 chỉ tương thích Tracker v4**; VPS `dev` phải cập nhật theo
+> `docs/AWS_EC2_TRACKER_UPGRADE_HANDOFF.md` sau backup. Khởi động người dùng dùng
+> `CLIENT_PUBLIC_BOOTSTRAP` đã phân phối an toàn (chỉ có CA/Tracker public key).

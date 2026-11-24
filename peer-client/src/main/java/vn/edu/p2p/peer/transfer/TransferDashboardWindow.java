@@ -38,8 +38,10 @@ public final class TransferDashboardWindow implements AutoCloseable {
     private static final String VIEW_PATH = "/vn/edu/p2p/peer/view/";
 
     private final LocalFileRegistry fileRegistry;
-    private final PeerP2pSocketFactory socketFactory;
-    private final PeerUploadServer uploadServer;
+    private PeerP2pSocketFactory socketFactory;
+    private PeerUploadServer uploadServer;
+    private final PeerP2pSocketConfig p2pConfig;
+    private final int configuredListeningPort;
     private ShareController shareController;
     private ExploreController exploreController;
     private MyFilesController myFilesController;
@@ -83,8 +85,13 @@ public final class TransferDashboardWindow implements AutoCloseable {
                                    ConnectivityStatusModel connectivityStatus) {
         this.connectivityStatus = connectivityStatus;
         this.fileRegistry = new LocalFileRegistry();
-        this.socketFactory = new PeerP2pSocketFactory(p2pConfig);
-        this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
+        this.p2pConfig = p2pConfig;
+        this.configuredListeningPort = listeningPort;
+        if (vn.edu.p2p.common.security.SecurityProfile.configuredMode()
+                != vn.edu.p2p.common.security.SecurityProfile.Mode.PRODUCTION) {
+            this.socketFactory = new PeerP2pSocketFactory(p2pConfig);
+            this.uploadServer = new PeerUploadServer(listeningPort, fileRegistry, socketFactory);
+        }
     }
 
     public void show(TrackerConnection connection, String sessionId, String peerId,
@@ -97,9 +104,13 @@ public final class TransferDashboardWindow implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("Dashboard was closed; create a new instance");
         }
+        KeyPair peerKeys = PeerKeyStore.defaultStore().loadOrCreate(peerId);
+        if (socketFactory == null) {
+            socketFactory = new PeerP2pSocketFactory(p2pConfig, peerId, peerKeys);
+            uploadServer = new PeerUploadServer(configuredListeningPort, fileRegistry, socketFactory);
+        }
         uploadServer.setUploaderPeerId(peerId);
         uploadServer.setTicketRevocationList(ticketRevocations);
-        KeyPair peerKeys = PeerKeyStore.defaultStore().loadOrCreate(peerId);
         uploadServer.start();
         try {
             FXMLLoader shareLoader = loader("share-view.fxml");

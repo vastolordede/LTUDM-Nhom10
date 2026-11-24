@@ -4,6 +4,10 @@ import vn.edu.p2p.common.security.TlsContextFactory;
 import vn.edu.p2p.common.config.EnvConfig;
 import vn.edu.p2p.common.security.SecurityProfile;
 import vn.edu.p2p.common.security.PeerAccessTickets;
+import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.peer.security.PeerTlsIdentity;
+import java.security.KeyPair;
+import java.security.PublicKey;
 
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -27,17 +31,19 @@ public final class PeerP2pSocketFactory {
     private final PeerP2pSocketConfig config;
     private final SSLContext serverSslContext;
     private final SSLContext clientSslContext;
+    private final boolean identityBased;
 
     public PeerP2pSocketFactory(PeerP2pSocketConfig config) {
-        SecurityProfile.Mode mode = SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development"));
+        SecurityProfile.Mode mode = SecurityProfile.configuredMode();
         if (mode != SecurityProfile.Mode.DEVELOPMENT && PeerAccessTickets.localInsecureDemoEnabled()) {
             throw new IllegalStateException("Insecure loopback demo is forbidden in LAN/PRODUCTION");
         }
-        if (mode == SecurityProfile.Mode.PRODUCTION && (!config.tlsEnabled()
-                || !EnvConfig.flag("P2P_TLS_VERIFY_HOSTNAME", true))) {
-            throw new IllegalStateException("Production P2P requires TLS and verified peer certificate SANs");
+        if (mode == SecurityProfile.Mode.PRODUCTION) {
+            throw new IllegalStateException("Production must use the identity-pinned "
+                    + "PeerP2pSocketFactory(config, peerId, peerKeys) constructor");
         }
         this.config = config;
+        this.identityBased = false;
         if (config.tlsEnabled()) {
             try {
                 this.serverSslContext = TlsContextFactory.createServerContext(
@@ -56,6 +62,82 @@ public final class PeerP2pSocketFactory {
         } else {
             this.serverSslContext = null;
             this.clientSslContext = null;
+        }
+    }
+
+    /** Secure production: the server certificate carries the same Ed25519 public key
+     * as the registered device. No hostname or IP is a trust anchor. */
+    public PeerP2pSocketFactory(PeerP2pSocketConfig config, String peerId, KeyPair peerKeys) {
+        if (!config.tlsEnabled()) {
+            throw new IllegalStateException("Peer identity mode requires TLS");
+        }
+        if (peerId == null || peerKeys == null) {
+            throw new IllegalArgumentException("Peer identity and keypair are required");
+        }
+        this.config = config;
+        this.identityBased = true;
+        this.clientSslContext = null;
+        try {
+            this.serverSslContext = PeerTlsIdentity.serverContext(peerId, peerKeys);
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException("Cannot initialize identity-bound P2P TLS", e);
+        }
+    }
+
+    public boolean identityBased() { return identityBased; }
+
+    /** Authenticate the TLS server against its stable identity from Tracker, never IP/SAN host. */
+    public Socket openClientSocket(String host, int port, String peerId, String publicKey)
+            throws IOException {
+        if (!identityBased) return openClientSocket(host, port);
+        SSLSocket sslSocket = newPinnedClientSocket(peerId, publicKey);
+        boolean connected = false;
+        try {
+            sslSocket.connect(new InetSocketAddress(host, port), config.connectTimeoutMillis());
+            sslSocket.setEnabledProtocols(supportedProtocols(sslSocket.getSupportedProtocols()));
+            sslSocket.setSoTimeout(config.readTimeoutMillis());
+            sslSocket.setTcpNoDelay(true);
+            // No HTTPS hostname verification: peer-id SAN + Ed25519 key PIN are
+            // verified by the PinnedPeerTrust during TLS handshake instead.
+            sslSocket.startHandshake();
+            connected = true;
+            return sslSocket;
+        } finally {
+            if (!connected) try { sslSocket.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    public Socket wrapClient(Socket plain, String host, int port, String peerId,
+                             String publicKey) throws IOException {
+        if (!identityBased) return wrapClient(plain, host, port);
+        SSLContext ssl = pinnedClientContext(peerId, publicKey);
+        SSLSocket wrapped = (SSLSocket) ssl.getSocketFactory().createSocket(plain, host, port, true);
+        boolean connected = false;
+        try {
+            wrapped.setEnabledProtocols(supportedProtocols(wrapped.getSupportedProtocols()));
+            wrapped.setSoTimeout(config.readTimeoutMillis());
+            wrapped.startHandshake();
+            connected = true;
+            return wrapped;
+        } finally {
+            if (!connected) try { wrapped.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    private SSLSocket newPinnedClientSocket(String peerId, String publicKey) throws IOException {
+        return (SSLSocket) pinnedClientContext(peerId, publicKey).getSocketFactory().createSocket();
+    }
+
+    private SSLContext pinnedClientContext(String peerId, String publicKey) throws IOException {
+        if (peerId == null || publicKey == null || publicKey.isBlank()) {
+            throw new javax.net.ssl.SSLHandshakeException("No authenticated Peer identity from Tracker");
+        }
+        try {
+            PublicKey key = PeerRequestProof.decodePublicKey(publicKey);
+            return PeerTlsIdentity.clientContext(peerId, key);
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            throw new javax.net.ssl.SSLHandshakeException("Invalid Tracker-supplied Peer identity: "
+                    + e.getClass().getSimpleName());
         }
     }
 
@@ -81,6 +163,8 @@ public final class PeerP2pSocketFactory {
 
     /** S07, S10: Mở kết nối P2P từ Downloader tới Uploader Peer. */
     public Socket openClientSocket(String host, int port) throws IOException {
+        if (identityBased) throw new javax.net.ssl.SSLHandshakeException(
+                "Expected Peer ID and authenticated public key are required");
         if (!config.tlsEnabled()) {
             Socket socket = new Socket();
             socket.connect(new InetSocketAddress(host, port), config.connectTimeoutMillis());
@@ -113,6 +197,8 @@ public final class PeerP2pSocketFactory {
 
         /** D81: bọc TLS lên socket relay đã nối sẵn (phía downloader). Tracker chỉ thấy dữ liệu mã hóa. */
     public Socket wrapClient(Socket plain, String host, int port) throws IOException {
+        if (identityBased) throw new javax.net.ssl.SSLHandshakeException(
+                "Expected Peer ID and authenticated public key are required for relay");
         if (!config.tlsEnabled()) {
             return plain;
         }

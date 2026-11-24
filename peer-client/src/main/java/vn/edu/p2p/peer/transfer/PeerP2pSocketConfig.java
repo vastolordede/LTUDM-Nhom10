@@ -1,5 +1,6 @@
 package vn.edu.p2p.peer.transfer;
 import vn.edu.p2p.common.config.LocalEnv;
+import vn.edu.p2p.common.security.SecurityProfile;
 
 import java.nio.file.Path;
 
@@ -48,20 +49,37 @@ public record PeerP2pSocketConfig(
         );
     }
 
-        /** Đọc cấu hình P2P TLS từ OS env > .env. Mặc định tắt (plain TCP). */
+        /** Production automatically uses TLS; only opted-in isolated tests may use plain TCP. */
         public static PeerP2pSocketConfig fromEnvironment() {
         LocalEnv dotenv = LocalEnv.load();
         String enabled = read("P2P_TLS_ENABLED", dotenv);
-        if (!"true".equalsIgnoreCase(enabled)) {
+        SecurityProfile.Mode mode = SecurityProfile.configuredMode();
+        boolean enabledByConfig = "true".equalsIgnoreCase(enabled);
+        if (!SecurityProfile.tlsRequiredByDefault(mode, enabledByConfig)) {
                 return plainTcp();
+        }
+        if (mode == SecurityProfile.Mode.PRODUCTION) {
+            // A new user needs no operator-provisioned, IP-bound Peer keystore.
+            // The upload server generates its own short-lived X.509 certificate from
+            // the existing PeerKeyStore Ed25519 key in TransferDashboardWindow.show().
+            return new PeerP2pSocketConfig(true, null, null, "PKCS12",
+                    null, null, "PKCS12", DEFAULT_CONNECT_TIMEOUT_MS,
+                    DEFAULT_READ_TIMEOUT_MS);
         }
         String ks = read("P2P_KEYSTORE", dotenv);
         String ts = read("P2P_TRUSTSTORE", dotenv);
+        String keyPassword = nullToEmpty(read("P2P_KEYSTORE_PASSWORD", dotenv));
+        String trustPassword = nullToEmpty(read("P2P_TRUSTSTORE_PASSWORD", dotenv));
+        if (keyPassword.isBlank() || trustPassword.isBlank()) {
+            throw new IllegalStateException("P2P TLS needs a provisioned device keystore, "
+                    + "trusted CA store and passwords. The administrator must provision "
+                    + "the secure installation first; unencrypted fallback is forbidden.");
+        }
         return tls(
                 dotenv.resolvePath(ks == null ? "certs/peer-p2p.p12" : ks),
-                nullToEmpty(read("P2P_KEYSTORE_PASSWORD", dotenv)),
+                keyPassword,
                 dotenv.resolvePath(ts == null ? "certs/peer-p2p-truststore.p12" : ts),
-                nullToEmpty(read("P2P_TRUSTSTORE_PASSWORD", dotenv))
+                trustPassword
         );
         }
 

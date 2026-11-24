@@ -7,6 +7,9 @@ import vn.edu.p2p.common.dto.RegisterRequest;
 import vn.edu.p2p.common.dto.RegisterResponse;
 import vn.edu.p2p.common.auth.RegisterInputPolicy;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.common.security.PeerLoginProof;
+import vn.edu.p2p.common.security.RequestReplayGuard;
+import vn.edu.p2p.common.security.SecurityProfile;
 import vn.edu.p2p.tracker.domain.PeerRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.domain.PeerStatus;
@@ -35,6 +38,7 @@ public final class DefaultAuthService implements AuthService {
     private final int heartbeatIntervalSeconds;
     private final TicketRevocationRegistry revocationRegistry;
     private final Clock clock;
+    private final RequestReplayGuard loginProofReplayGuard;
 
     public DefaultAuthService(
             UserRepository userRepository,
@@ -63,6 +67,8 @@ public final class DefaultAuthService implements AuthService {
         this.heartbeatIntervalSeconds = heartbeatIntervalSeconds;
         this.revocationRegistry = revocationRegistry;
         this.clock = clock;
+        this.loginProofReplayGuard = new RequestReplayGuard(clock,
+                java.time.Duration.ofMinutes(5), RequestReplayGuard.DEFAULT_MAX_ENTRIES);
     }
 
     @Override
@@ -93,6 +99,22 @@ public final class DefaultAuthService implements AuthService {
             }
 
             UUID peerId = parseUuid(request.peerId(), "INVALID_PEER_ID");
+            // Stable Peer identity must be proved by possession of its Ed25519 key.
+            if (SecurityProfile.configuredMode() == SecurityProfile.Mode.PRODUCTION) {
+                PeerLoginProof.Proof proof = request.peerProofTimestamp() == null ? null
+                        : new PeerLoginProof.Proof(request.peerProofTimestamp(),
+                                request.peerProofNonce(), request.peerProofSignature());
+                if (!PeerLoginProof.verify(peerPublicKey, request.username(),
+                        request.peerId(), request.listeningPort(), request.peerPublicKey(),
+                        proof, clock)) {
+                    throw new AuthException("PEER_KEY_PROOF_INVALID",
+                            "Invalid or expired Peer identity signature");
+                }
+                if (!loginProofReplayGuard.accept(peerId.toString(), proof.nonce())) {
+                    throw new AuthException("PEER_KEY_PROOF_REPLAYED",
+                            "Repeated Peer identity signature");
+                }
+            }
             OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
 
             ensurePeer(
@@ -101,6 +123,11 @@ public final class DefaultAuthService implements AuthService {
                     request.deviceName(),
                     now
             );
+            if (!peerRepository.claimPublicKey(peerId,
+                    PeerRequestProof.encodePublicKey(peerPublicKey))) {
+                throw new AuthException("PEER_KEY_MISMATCH",
+                        "An existing Peer ID cannot be rebound to a different key");
+            }
             UUID sessionId = UUID.randomUUID();
             PeerSessionRecord newSession = new PeerSessionRecord(
                     sessionId,
@@ -126,7 +153,6 @@ public final class DefaultAuthService implements AuthService {
                 ));
             }
 
-            peerRepository.updatePublicKey(peerId, PeerRequestProof.encodePublicKey(peerPublicKey));
             String fingerprint = PeerRequestProof.fingerprint(peerPublicKey);
             LOG.info(() -> "Registered Peer public key fingerprint "
                     + fingerprint.substring(0, 12) + " for Peer " + peerId);

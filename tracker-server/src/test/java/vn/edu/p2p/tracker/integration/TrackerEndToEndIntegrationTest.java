@@ -11,6 +11,8 @@ import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
 import vn.edu.p2p.common.security.PeerAccessTickets;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.common.security.PeerLoginProof;
+import java.time.Clock;
 import vn.edu.p2p.common.protocol.MessageEnvelope;
 import vn.edu.p2p.common.protocol.MessageType;
 import vn.edu.p2p.common.protocol.ProtocolCodec;
@@ -90,6 +92,11 @@ class TrackerEndToEndIntegrationTest {
         InMemoryPeerSessionRepository sessions = new InMemoryPeerSessionRepository();
 
         UUID sourcePeerId = UUID.randomUUID();
+        KeyPair sourceKeys = PeerRequestProof.generateKeyPair();
+        String sourcePublicKey = PeerRequestProof.encodePublicKey(sourceKeys.getPublic());
+        OffsetDateTime sourceNow = OffsetDateTime.now(ZoneOffset.UTC);
+        peers.create(new PeerRecord(sourcePeerId, 1L, "SOURCE-TEST", sourceNow, sourceNow));
+        peers.updatePublicKey(sourcePeerId, sourcePublicKey);
         FileSourceRepository fileSources = new FixedFileSourceRepository(
                 new FileSourceRecord(
                         101L,
@@ -179,13 +186,15 @@ class TrackerEndToEndIntegrationTest {
             }
 
             UUID peerId = UUID.randomUUID();
+            KeyPair peerKeys = PeerRequestProof.generateKeyPair();
 
             try (Socket firstClient = connect(port)) {
                 LoginResponse firstLogin = login(
                         firstClient,
                         "login-1",
                         peerId,
-                        7001
+                        7001,
+                        peerKeys
                 );
 
                 assertEquals(peerId.toString(), firstLogin.peerId());
@@ -244,13 +253,15 @@ class TrackerEndToEndIntegrationTest {
                 assertEquals("COMPLETE", source.availabilityStatus());
                 assertEquals("192.168.1.50", source.ipAddress());
                 assertEquals(7101, source.listeningPort());
+                assertEquals(sourcePublicKey, source.peerPublicKey());
 
                 try (Socket secondClient = connect(port)) {
                     LoginResponse secondLogin = login(
                             secondClient,
                             "login-2",
                             peerId,
-                            7002
+                            7002,
+                            peerKeys
                     );
 
                     assertNotEquals(
@@ -260,6 +271,9 @@ class TrackerEndToEndIntegrationTest {
                     assertEquals(1, sessions.onlineSessionCount());
                     assertFalse(sessions.isOnline(firstLogin.sessionId()));
                     assertTrue(sessions.isOnline(secondLogin.sessionId()));
+                    assertEquals(peerId.toString(), secondLogin.peerId());
+                    assertEquals(PeerRequestProof.encodePublicKey(peerKeys.getPublic()),
+                            peers.findPublicKey(peerId).orElseThrow());
 
                     MessageEnvelope oldHeartbeat = roundTrip(
                             firstClient,
@@ -343,8 +357,12 @@ class TrackerEndToEndIntegrationTest {
             Socket socket,
             String requestId,
             UUID peerId,
-            int listeningPort
+            int listeningPort,
+            KeyPair peerKeys
     ) throws Exception {
+        String publicKey = PeerRequestProof.encodePublicKey(peerKeys.getPublic());
+        PeerLoginProof.Proof proof = PeerLoginProof.sign(peerKeys.getPrivate(), "dang",
+                peerId.toString(), listeningPort, publicKey, Clock.systemUTC());
         MessageEnvelope response = roundTrip(
                 socket,
                 MessageEnvelope.request(
@@ -357,8 +375,10 @@ class TrackerEndToEndIntegrationTest {
                                         listeningPort,
                                         peerId.toString(),
                                         "INTEGRATION-TEST",
-                                        PeerRequestProof.encodePublicKey(
-                                                PeerRequestProof.generateKeyPair().getPublic())
+                                        publicKey,
+                                        proof.timestampMillis(),
+                                        proof.nonce(),
+                                        proof.signature()
                                 )
                         )
                 )

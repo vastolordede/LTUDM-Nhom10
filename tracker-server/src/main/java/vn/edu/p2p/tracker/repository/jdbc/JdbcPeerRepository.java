@@ -97,6 +97,20 @@ public final class JdbcPeerRepository implements PeerRepository {
         }
     }
 
+    @Override
+    public boolean claimPublicKey(UUID peerId, String publicKey) throws SQLException {
+        // Atomic first-enrollment or exact-key login. Never silently rotate the key.
+        String sql = "UPDATE peers SET public_key = ? WHERE peer_id = ? "
+                + "AND (public_key IS NULL OR public_key = ?)";
+        try (Connection connection = connectionFactory.open();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, publicKey);
+            statement.setObject(2, peerId);
+            statement.setString(3, publicKey);
+            return statement.executeUpdate() == 1;
+        }
+    }
+
     private static PeerRecord map(ResultSet rs) throws SQLException {
         return new PeerRecord(
                 rs.getObject("peer_id", UUID.class),

@@ -17,4 +17,12 @@ public interface PeerRepository {
     Optional<String> findPublicKey(UUID peerId) throws SQLException;
 
     void updatePublicKey(UUID peerId, String publicKey) throws SQLException;
+
+    /** First enrollment is allowed; changing an existing device key is not. */
+    default boolean claimPublicKey(UUID peerId, String publicKey) throws SQLException {
+        Optional<String> previous = findPublicKey(peerId);
+        if (previous.isPresent()) return previous.get().equals(publicKey);
+        updatePublicKey(peerId, publicKey);
+        return true;
+    }
 }

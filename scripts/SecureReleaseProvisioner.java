@@ -17,10 +17,11 @@ import java.util.regex.Pattern;
 
 /**
  * Administrative offline provisioning utility for FileShare-P2P secure releases.
- * Usage: java scripts/SecureReleaseProvisioner.java OUTPUT_DIR TRACKER_HOST PEER_ID=ADVERTISED_HOST ...
+ * Usage: java scripts/SecureReleaseProvisioner.java OUTPUT_DIR TRACKER_HOST
  * The output contains PRIVATE KEYS and MUST NOT be uploaded to Git or to a public ZIP.
- * Peer packages are unique: never copy a peer's private keystore to another peer.
- * The host passed for each Peer must match the host/IP that other Peers actually dial.
+ * The public client bootstrap contains NO Peer private key. The Peer creates its own
+ * persistent Ed25519 identity during login, independent of its current IP.
+ * Never re-run this tool for an existing Tracker: it creates NEW CA/signing keys.
  */
 public final class SecureReleaseProvisioner {
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -28,25 +29,15 @@ public final class SecureReleaseProvisioner {
     private static final Pattern HOST = Pattern.compile("[a-zA-Z0-9.-]{1,253}");
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 3) {
+        if (args.length != 2) {
             throw new IllegalArgumentException("Usage: java scripts/SecureReleaseProvisioner.java "
-                    + "OUTPUT_DIR TRACKER_HOST PEER_ID=ADVERTISED_HOST [...]");
+                    + "OUTPUT_DIR TRACKER_HOST");
         }
         Path destination = Path.of(args[0]).toAbsolutePath().normalize();
         String trackerHost = checkedHost(args[1]);
         if (Files.exists(destination)) {
             throw new IllegalStateException("Destination already exists; refusing to overwrite private keys: "
                     + destination);
-        }
-        java.util.Map<String, String> peers = new java.util.LinkedHashMap<>();
-        for (int index = 2; index < args.length; index++) {
-            String[] parts = args[index].split("=", 2);
-            if (parts.length != 2 || !ID.matcher(parts[0]).matches()) {
-                throw new IllegalArgumentException("Expected PEER_ID=ADVERTISED_HOST: " + args[index]);
-            }
-            if (peers.putIfAbsent(parts[0], checkedHost(parts[1])) != null) {
-                throw new IllegalArgumentException("Duplicate Peer ID: " + parts[0]);
-            }
         }
 
         Path admin = destination.resolve("ADMIN_KEEP_PRIVATE");
@@ -87,42 +78,31 @@ public final class SecureReleaseProvisioner {
                 + "# The administrator must supply DB_USER/DB_PASSWORD via environment or secure local configuration.\n";
         write(tracker.resolve(".env"), trackerEnv);
         restrict(tracker.resolve(".env"));
-        for (var peer : peers.entrySet()) {
-            Path peerHome = destination.resolve("PEERS").resolve(peer.getKey());
-            Path certDir = peerHome.resolve("certs");
-            Files.createDirectories(certDir);
-            String peerPass = password();
-            Path peerStore = certDir.resolve("peer-p2p.p12");
-            cert(caStore, rootPass, caCert, peerStore, peerPass,
-                    peer.getKey(), peer.getValue(), "serverAuth");
-            makeTrustStore(caCert, certDir.resolve("peer-p2p-truststore.p12"), trustPass);
-            makeTrustStore(caCert, certDir.resolve("peer-truststore.p12"), trustPass);
-            Files.copy(trackerPublic, certDir.resolve("tracker-public.key.b64"));
-            String peerEnv = "P2P_PROFILE=production\nP2P_ALLOW_INSECURE_DEV=false\n"
-                    + "TRACKER_HOST=" + trackerHost + "\nTRACKER_PORT=9000\n"
-                    + "TRACKER_TLS_ENABLED=true\n"
-                    + "TRACKER_TRUSTSTORE=certs/peer-truststore.p12\n"
-                    + "TRACKER_TRUSTSTORE_PASSWORD=" + trustPass + "\n"
-                    + "P2P_TLS_ENABLED=true\nP2P_TLS_VERIFY_HOSTNAME=true\n"
-                    + "P2P_KEYSTORE=certs/peer-p2p.p12\n"
-                    + "P2P_KEYSTORE_PASSWORD=" + peerPass + "\n"
-                    + "P2P_TRUSTSTORE=certs/peer-p2p-truststore.p12\n"
-                    + "P2P_TRUSTSTORE_PASSWORD=" + trustPass + "\n"
-                    + "P2P_TICKET_PUBLIC_KEY_FILE=certs/tracker-public.key.b64\n"
-                    + "RELAY_ENABLED=true\nRENDEZVOUS_PORT=9001\n";
-            write(peerHome.resolve(".env"), peerEnv);
-            restrict(peerHome.resolve(".env"));
-        }
+        Path clientPublic = destination.resolve("CLIENT_PUBLIC_BOOTSTRAP");
+        Path clientCerts = clientPublic.resolve("certs");
+        Files.createDirectories(clientCerts);
+        makeTrustStore(caCert, clientCerts.resolve("peer-truststore.p12"), trustPass);
+        Files.copy(trackerPublic, clientCerts.resolve("tracker-public.key.b64"));
+        String clientEnv = "P2P_PROFILE=production\nP2P_ALLOW_INSECURE_DEV=false\n"
+                + "TRACKER_HOST=" + trackerHost + "\nTRACKER_PORT=9000\n"
+                + "TRACKER_TLS_ENABLED=true\nTRACKER_TRUSTSTORE=certs/peer-truststore.p12\n"
+                + "TRACKER_TRUSTSTORE_PASSWORD=" + trustPass + "\n"
+                + "P2P_TLS_ENABLED=true\n"
+                + "P2P_TICKET_PUBLIC_KEY_FILE=certs/tracker-public.key.b64\n"
+                + "RELAY_ENABLED=true\nRENDEZVOUS_PORT=9001\n";
+        write(clientPublic.resolve(".env"), clientEnv);
+
         write(admin.resolve("SECURE_RELEASE_NOTES.txt"), "Tracker public-key fingerprint SHA-256:\n"
                 + fingerprint + "\n\nWARNING: This directory has private CA material. "
                 + "KEEP OFFLINE. Never include ADMIN_KEEP_PRIVATE in a client package.\n"
-                + "Server certificate SAN: " + trackerHost + "\nPeer SANs: " + peers + "\n"
-                + "All clients need their OWN package and an installer-protected .env.\n");
+                + "Server certificate SAN: " + trackerHost + "\n"
+                + "Clients receive ONLY a public bootstrap; Peer keys are created locally at login.\n");
         write(admin.resolve("ca-store-password.txt"), rootPass);
         restrict(admin.resolve("ca-store-password.txt"));
         System.out.println("Secure release packages provisioned: " + destination);
         System.out.println("Public ticket-key fingerprint SHA-256: " + fingerprint);
-        System.out.println("DO NOT distribute ADMIN_KEEP_PRIVATE or TRACKER_INSTALL to any Peer.");
+        System.out.println("Distribute ONLY CLIENT_PUBLIC_BOOTSTRAP through a trusted channel.");
+        System.out.println("Never rotate existing Tracker CA/ticket keys by rerunning provisioner.");
     }
 
     private static String checkedHost(String host) {
