@@ -5,6 +5,7 @@ import vn.edu.p2p.common.dto.LoginRequest;
 import vn.edu.p2p.common.dto.LoginResponse;
 import vn.edu.p2p.common.dto.LogoutRequest;
 import vn.edu.p2p.common.security.PeerRequestProof;
+import vn.edu.p2p.common.security.PeerLoginProof;
 import vn.edu.p2p.tracker.domain.AccountStatus;
 import vn.edu.p2p.tracker.domain.PeerRecord;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
@@ -212,7 +213,7 @@ class DefaultAuthServiceTest {
     }
 
     @Test
-    void loginWithDifferentValidKeyOverwritesPreviouslyRegisteredKey() throws Exception {
+    void loginWithDifferentValidKeyCannotOverwritePreviouslyRegisteredKey() throws Exception {
         FakeUserRepository users = new FakeUserRepository();
         FakePeerRepository peers = new FakePeerRepository();
         FakeSessionRepository sessions = new FakeSessionRepository();
@@ -224,13 +225,54 @@ class DefaultAuthServiceTest {
         KeyPair first = PeerRequestProof.generateKeyPair();
         KeyPair second = PeerRequestProof.generateKeyPair();
 
-        service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC",
-                PeerRequestProof.encodePublicKey(first.getPublic())), "127.0.0.1");
-        service.login(new LoginRequest("dang", "secret", 7001, peerId, "TEST-PC",
-                PeerRequestProof.encodePublicKey(second.getPublic())), "127.0.0.1");
+        LoginResponse original = service.login(signedLogin(peerId, 7001, first), "127.0.0.1");
+        AuthException error = assertThrows(AuthException.class,
+                () -> service.login(signedLogin(peerId, 7001, second), "127.0.0.1"));
 
-        assertEquals(PeerRequestProof.encodePublicKey(second.getPublic()),
+        assertEquals("PEER_KEY_MISMATCH", error.errorCode());
+        assertEquals(PeerRequestProof.encodePublicKey(first.getPublic()),
                 peers.publicKeys.get(UUID.fromString(peerId)));
+        assertEquals(1, sessions.onlineSessionCount());
+        assertEquals(0, sessions.closedSessions);
+        assertEquals(vn.edu.p2p.tracker.domain.PeerStatus.ONLINE,
+                sessions.findBySessionId(UUID.fromString(original.sessionId())).orElseThrow().status());
+    }
+
+    @Test
+    void sameKeyCanReconnectFromDifferentIpAndPort() throws Exception {
+        FakeUserRepository users = new FakeUserRepository();
+        FakePeerRepository peers = new FakePeerRepository();
+        FakeSessionRepository sessions = new FakeSessionRepository();
+        PasswordService passwords = new BCryptPasswordService(4);
+        users.user = new UserRecord(1L, "dang", passwords.hash("secret"),
+                AccountStatus.ACTIVE, OffsetDateTime.now());
+        DefaultAuthService service = new DefaultAuthService(users, peers, sessions, passwords, 10);
+        String peerId = UUID.randomUUID().toString();
+        KeyPair keys = PeerRequestProof.generateKeyPair();
+
+        LoginResponse first = service.login(signedLogin(peerId, 7001, keys), "192.0.2.10");
+        LoginResponse second = service.login(signedLogin(peerId, 7002, keys), "198.51.100.20");
+
+        assertEquals(peerId, second.peerId());
+        assertNotEquals(first.sessionId(), second.sessionId());
+        assertEquals(PeerRequestProof.encodePublicKey(keys.getPublic()),
+                peers.publicKeys.get(UUID.fromString(peerId)));
+        assertEquals(1, sessions.onlineSessionCount());
+        assertEquals(1, sessions.closedSessions);
+        PeerSessionRecord active = sessions.findBySessionId(UUID.fromString(second.sessionId())).orElseThrow();
+        assertEquals("198.51.100.20", active.ipAddress());
+        assertEquals(7002, active.listeningPort());
+        assertEquals(vn.edu.p2p.tracker.domain.PeerStatus.ONLINE, active.status());
+        assertEquals(vn.edu.p2p.tracker.domain.PeerStatus.LOGGED_OUT,
+                sessions.findBySessionId(UUID.fromString(first.sessionId())).orElseThrow().status());
+    }
+
+    private static LoginRequest signedLogin(String peerId, int port, KeyPair keys) {
+        String publicKey = PeerRequestProof.encodePublicKey(keys.getPublic());
+        PeerLoginProof.Proof proof = PeerLoginProof.sign(keys.getPrivate(), "dang", peerId,
+                port, publicKey, Clock.systemUTC());
+        return new LoginRequest("dang", "secret", port, peerId, "TEST-PC", publicKey,
+                proof.timestampMillis(), proof.nonce(), proof.signature());
     }
 
     @Test
