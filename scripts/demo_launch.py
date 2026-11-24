@@ -170,7 +170,7 @@ def package(bootstrap, output):
         (dest/'RUN_CLIENT.cmd').write_text('@echo off\r\ncd /d "%~dp0"\r\njava -jar FileShare-P2P.jar\r\nif errorlevel 1 pause\r\n', encoding='ascii', newline='')
         (dest/'README.txt').write_text('Extract entire folder. With Java 21 installed, double-click RUN_CLIENT.cmd or run java -jar FileShare-P2P.jar. Keep lib and CLIENT_PUBLIC_BOOTSTRAP beside the launcher. No user TLS/key setup. Tracker must be online and protocol v4. This is not a standalone fat JAR or bundled JRE.\n', encoding='utf-8')
         output.parent.mkdir(parents=True, exist_ok=True)
-        dest.rename(output)
+        shutil.copytree(dest, output)
     archive = output.with_suffix('.zip')
     if archive.exists():
         raise RuntimeError('Release directory ready; existing ZIP preserved: ' + str(archive))

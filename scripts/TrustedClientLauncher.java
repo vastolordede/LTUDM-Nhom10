@@ -36,7 +36,7 @@ public final class TrustedClientLauncher {
         if (!Files.isDirectory(lib)) throw new IllegalStateException("Distribution lib directory missing");
         String java = Path.of(System.getProperty("java.home"), "bin",
                 System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java").toString();
-        ProcessBuilder pb = new ProcessBuilder(java, "-cp", lib.resolve("*").toString(), "vn.edu.p2p.peer.PeerLauncher");
+        ProcessBuilder pb = new ProcessBuilder(java, "-cp", lib.toString() + lib.getFileSystem().getSeparator() + "*", "vn.edu.p2p.peer.PeerLauncher");
         pb.directory(base.toFile());
         Map<String,String> env = pb.environment();
         env.keySet().removeIf(TrustedClientLauncher::overridesTrust);
