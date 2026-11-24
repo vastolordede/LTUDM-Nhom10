@@ -1,3 +1,5 @@
+> **Demo v4 (Windows / EC2):** xem [FINAL_DEMO_AWS.md](docs/FINAL_DEMO_AWS.md). Sử dụng launcher local hoặc gói client có bootstrap tin cậy; không cấu hình TLS thủ công cho người dùng.
+
 # FileShare-P2P
 Phạm Quách Thành Đặng - 3124410070
 Nguyễn Thái Thảo - 3124410329

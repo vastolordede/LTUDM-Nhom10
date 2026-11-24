@@ -133,7 +133,7 @@ public final class LoginController {
             if (newScene != null) Platform.runLater(this::centerAuthenticationContent);
         });
         Platform.runLater(this::centerAuthenticationContent);
-        listeningPortField.setText("7001");
+        listeningPortField.setText(Integer.toString(EnvConfig.integer("P2P_LISTEN_PORT", 7001)));
         openDashboardButton.setDisable(true);
         openDashboardButton.setVisible(false);
         openDashboardButton.setManaged(false);

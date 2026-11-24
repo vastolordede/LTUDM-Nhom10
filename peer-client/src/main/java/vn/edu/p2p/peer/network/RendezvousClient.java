@@ -73,8 +73,7 @@ public final class RendezvousClient {
             transport.setTcpNoDelay(true);
             Socket socket = transport;
             if (trackedTlsContext != null) {
-                SSLSocket sslSocket = (SSLSocket) trackedTlsContext.getSocketFactory()
-                        .createSocket(transport, host, port, true);
+                SSLSocket sslSocket = TrackerTlsIdentity.wrap(trackedTlsContext, transport, host, port);
                 sslSocket.setEnabledProtocols(supportedProtocols(sslSocket.getSupportedProtocols()));
                 sslSocket.setSoTimeout(HANDSHAKE_TIMEOUT_MS);
                 sslSocket.setTcpNoDelay(true);
@@ -82,6 +81,7 @@ public final class RendezvousClient {
                 parameters.setEndpointIdentificationAlgorithm("HTTPS");
                 sslSocket.setSSLParameters(parameters);
                 sslSocket.startHandshake();
+                TrackerTlsIdentity.verify(sslSocket, host);
                 socket = sslSocket;
             }
             if (closed.get() || cancellationEpoch.get() != epoch) {
