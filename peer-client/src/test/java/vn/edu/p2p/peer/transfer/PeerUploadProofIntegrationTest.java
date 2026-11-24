@@ -129,10 +129,10 @@ class PeerUploadProofIntegrationTest {
             assertMalformedFrameClosed(server.listeningPort(), 0, null);
             assertMalformedFrameClosed(server.listeningPort(), ProtocolCodec.MAX_JSON_BYTES + 1, null);
             assertMalformedFrameClosed(server.listeningPort(), 40,
-                    "{\"version\":3".getBytes(StandardCharsets.UTF_8));
+                    ("{\"version\":" + MessageEnvelope.CURRENT_VERSION).getBytes(StandardCharsets.UTF_8));
             assertMalformedFrameClosed(server.listeningPort(), 3,
                     "not".getBytes(StandardCharsets.UTF_8));
-            byte[] unknownType = "{\"version\":3,\"type\":\"UNKNOWN_REQUEST\"}"
+            byte[] unknownType = ("{\"version\":" + MessageEnvelope.CURRENT_VERSION + ",\"type\":\"UNKNOWN_REQUEST\"}")
                     .getBytes(StandardCharsets.UTF_8);
             assertMalformedFrameClosed(server.listeningPort(), unknownType.length, unknownType);
 
@@ -154,7 +154,7 @@ class PeerUploadProofIntegrationTest {
             assertDenied(nullResult);
 
             MessageEnvelope invalidPiece = ProtocolCodec.fromJson(
-                    "{\"version\":3,\"type\":\"REQUEST_PIECE\",\"requestId\":\"invalid-piece\","
+                    "{\"version\":" + MessageEnvelope.CURRENT_VERSION + ",\"type\":\"REQUEST_PIECE\",\"requestId\":\"invalid-piece\","
                             + "\"payload\":{\"fileId\":0,\"pieceIndex\":-1}}");
             Exchange invalidResult = exchange(fixture, invalidPiece, false);
             assertEquals(ResponseStatus.ERROR, invalidResult.response().status());
@@ -168,6 +168,23 @@ class PeerUploadProofIntegrationTest {
                             UPLOADER_ID, FILE_ID, 2, fixture.ticket()), true);
             assertEquals(ResponseStatus.ERROR, unavailablePiece.response().status());
             assertEquals("PIECE_NOT_AVAILABLE", unavailablePiece.response().errorCode());
+        }
+    }
+
+    @Test
+    @Timeout(value = 5, unit = java.util.concurrent.TimeUnit.SECONDS)
+    void legacyProtocolVersionIsRejectedBeforeServingPiece() throws Exception {
+        Fixture fixture = createFixture();
+        try (PeerUploadServer server = fixture.server()) {
+            MessageEnvelope valid = pieceRequest(fixture,
+                    fixture.requesterKeys().getPrivate(), UPLOADER_ID, FILE_ID, 0, fixture.ticket());
+            MessageEnvelope legacy = new MessageEnvelope(3, valid.type(), valid.requestId(),
+                    valid.status(), valid.errorCode(), valid.message(), valid.payload());
+            Exchange result = exchange(fixture, legacy, true);
+            assertEquals(ResponseStatus.ERROR, result.response().status());
+            assertEquals("UNSUPPORTED_PROTOCOL_VERSION", result.response().errorCode());
+            assertTrue(result.pieceBytes() == null || result.pieceBytes().length == 0);
+            assertEquals(0L, server.totalBytesUploaded());
         }
     }
 
