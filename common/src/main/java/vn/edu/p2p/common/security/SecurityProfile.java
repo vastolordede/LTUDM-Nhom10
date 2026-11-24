@@ -53,8 +53,8 @@ public final class SecurityProfile {
                                    boolean hostnameVerified, boolean insecureLoopbackDemo) {
         requireTracker(mode, trackerTls, insecureLoopbackDemo);
         if (mode == Mode.PRODUCTION && (!p2pTls || !hostnameVerified)) {
-            throw new IllegalStateException("PRODUCTION requires P2P_TLS_ENABLED=true and "
-                    + "P2P_TLS_VERIFY_HOSTNAME=true with matching peer certificate SANs");
+            throw new IllegalStateException("PRODUCTION requires TLS and verified Peer identity. "
+                    + "Peer public keys must match the certificate and trusted Tracker response");
         }
     }
 }
