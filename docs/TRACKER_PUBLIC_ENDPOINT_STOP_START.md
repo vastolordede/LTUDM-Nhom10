@@ -1,3 +1,5 @@
+> **Bản demo cuối:** xem `docs/FINAL_DEMO_AWS.md` trước. Có phương án giữ nguyên chứng chỉ hiện tại bằng danh tính TLS cố định + SHA-256 pin, không bắt buộc DNS hoặc cấp lại CA. Các hướng dẫn cũ bên dưới là phương án triển khai thay thế.
+
 # Tracker Endpoint sau Stop/Start EC2 – Release Gate
 
 **Trạng thái:** BẮT BUỘC KIỂM TRA KHI QUAY LẠI MÁY AWS. Tài liệu này không chứng nhận VPS đã hoạt động sau Start và không tự sửa tài nguyên AWS.

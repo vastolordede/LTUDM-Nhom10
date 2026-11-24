@@ -1,3 +1,5 @@
+> **Bản demo cuối:** xem `docs/FINAL_DEMO_AWS.md` trước. Có phương án giữ nguyên chứng chỉ hiện tại bằng danh tính TLS cố định + SHA-256 pin, không bắt buộc DNS hoặc cấp lại CA. Các hướng dẫn cũ bên dưới là phương án triển khai thay thế.
+
 # VIỆC CẦN LÀM KHI QUAY LẠI MÁY QUẢN LÝ AWS
 
 **Mục đích:** cập nhật Tracker để tương thích với Client dùng giao thức v4 và chứng chỉ TLS gắn với Peer ID ổn định. **Không chạy lệnh nào trong tài liệu này trên môi trường AWS hiện tại nếu chưa có sao lưu/phê duyệt.**

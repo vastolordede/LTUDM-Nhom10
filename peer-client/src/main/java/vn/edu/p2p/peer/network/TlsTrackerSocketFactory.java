@@ -44,12 +44,13 @@ final class TlsTrackerSocketFactory {
             int connectTimeoutMillis,
             int readTimeoutMillis
     ) throws IOException {
-        SSLSocket socket = (SSLSocket)
-                sslContext.getSocketFactory().createSocket();
+        Socket transport = new Socket();
+        SSLSocket socket = null;
 
         boolean connected = false;
         try {
-            socket.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
+            transport.connect(new InetSocketAddress(host, port), connectTimeoutMillis);
+            socket = TrackerTlsIdentity.wrap(sslContext, transport, host, port);
             socket.setEnabledProtocols(supportedProtocols(socket.getSupportedProtocols()));
             socket.setSoTimeout(readTimeoutMillis);
             socket.setTcpNoDelay(true);
@@ -57,12 +58,14 @@ final class TlsTrackerSocketFactory {
             params.setEndpointIdentificationAlgorithm("HTTPS");
             socket.setSSLParameters(params);
             socket.startHandshake();
+            TrackerTlsIdentity.verify(socket, host);
             connected = true;
             return socket;
         } finally {
             if (!connected) {
                 try {
-                    socket.close();
+                    if (socket != null) socket.close();
+                    else transport.close();
                 } catch (IOException ignored) {
                     // Preserve the connection or handshake failure.
                 }

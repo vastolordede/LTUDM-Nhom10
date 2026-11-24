@@ -1,0 +1,3 @@
+# Runtime secrets belong only to the EC2 operator.
+/local-secrets/
+/.env
