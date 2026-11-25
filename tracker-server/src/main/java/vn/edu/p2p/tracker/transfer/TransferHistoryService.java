@@ -87,8 +87,11 @@ public final class TransferHistoryService {
         UUID sessionId = parseUuid(request.sessionId(), "sessionId");
         UUID destinationPeerId = sessionPeerResolver.resolvePeerId(sessionId);
 
+        if (request.page() < 0 || request.page() > 100_000) {
+            throw new FileCatalogException("Invalid history page");
+        }
         List<TransferHistoryItemDto> items =
-                transferHistoryRepository.findByDestinationPeer(destinationPeerId);
+                transferHistoryRepository.findByDestinationPeer(destinationPeerId, request.page());
         return new TransferHistoryResponse(items);
     }
 

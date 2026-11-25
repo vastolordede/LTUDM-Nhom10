@@ -22,7 +22,7 @@
     </padding>
 
     <Label text="P2P FILE SHARING" styleClass="title"/>
-    <Label fx:id="authModeLabel" text="Đăng nhập vào Tracker" styleClass="subtitle"/>
+    <Label fx:id="authModeLabel" text="Đăng nhập" styleClass="subtitle"/>
 
     <!-- Two independent credential forms. Only the active form is visible/managed. -->
     <VBox fx:id="loginForm" spacing="12" alignment="CENTER">
@@ -47,7 +47,7 @@
                 prefWidth="320" onAction="#onShowLoginForm"/>
     </VBox>
 
-    <Button fx:id="openDashboardButton" text="Mở Peer Center" disable="true"
+    <Button fx:id="openDashboardButton" text="Mở ứng dụng" disable="true"
             onAction="#onOpenDashboard"/>
 
     <Label fx:id="statusLabel" wrapText="true" maxWidth="330" styleClass="status"/>

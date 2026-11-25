@@ -46,8 +46,6 @@ public final class ShareController {
     @FXML
     private Button chooseFileButton;
 
-    @FXML
-    private Button shareButton;
 
     @FXML
     private Label selectedFileLabel;
@@ -57,6 +55,14 @@ public final class ShareController {
 
     @FXML
     private Label statusLabel;
+    @FXML private Button previousSharePage, nextSharePage;
+    @FXML private Label sharePageLabel;
+    @FXML private javafx.scene.layout.HBox sharePageNumbers, historyPageNumbers;
+    @FXML private javafx.scene.control.TreeView<String> shareHistoryView;
+    @FXML private javafx.scene.layout.VBox shareHistoryFilterHost;
+    @FXML private Button previousHistoryPage, nextHistoryPage;
+    @FXML private Label historyPageLabel;
+    private ShareHistoryPager historyPager;
    
     @FXML
     private Button chooseFolderButton;
@@ -83,14 +89,8 @@ public final class ShareController {
     @FXML
     private void initialize() {
         statusLabel.setText("");
-        sharedFilesListView.setItems(sharedFiles);
-        sharedFilesListView.setCellFactory(list -> new ListCell<>() {
-            @Override
-            protected void updateItem(SharedFileEntry item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty || item == null ? null : item.fileName());
-            }
-        });
+        new ShareListPager(sharedFilesListView, sharedFiles, previousSharePage, nextSharePage, sharePageLabel, sharePageNumbers);
+        historyPager=new ShareHistoryPager(shareHistoryView,historyPageNumbers,historyPageLabel,previousHistoryPage,nextHistoryPage,shareHistoryFilterHost);
     }
 
     /**
@@ -106,7 +106,20 @@ public final class ShareController {
         this.sessionId = sessionId;
         this.fileRegistry = registry;
         this.folderClientService = new FolderClientService(connection);
+        loadShareHistory();
         restoreSharedFiles();
+    }
+
+    private void loadShareHistory() {
+        var store=SharedFilesStore.current(); if(store==null)return;
+        long generation=AuthClientService.sessionGeneration();
+        submitIfOpen(()->{try{var rows=store.history().load();postToCurrentSession(generation,()->historyPager.update(rows));}
+            catch(Exception e){postToCurrentSession(generation,()->statusLabel.setText("Không đọc được lịch sử chia sẻ cục bộ."));}});
+    }
+    private String recordHistory(SharedFilesStore store,long time,String title,List<ShareHistoryStore.Item> items,long generation) {
+        if(store==null)return "";
+        try { store.history().append(time,title,items);var batches=store.history().load();postToCurrentSession(generation,()->historyPager.update(batches));return ""; }
+        catch(Exception e){return " Không lưu được lượt chia sẻ vào lịch sử cục bộ.";}
     }
 
     /** D70: publish lại các file đã Share ở lần chạy trước (còn tồn tại, đúng kích thước). */
@@ -134,22 +147,23 @@ public final class ShareController {
             }
             for (SharedFilesStore.Entry saved : entries) {
                 if (!isCurrentSession(generation)) return;
-                try {
+                try { synchronized (fileRegistry.shareMutationLock()) {
                     Path path = Path.of(saved.path());
                     FileMetadata metadata = metadataBuilder.build(path);
-                    ShareFileResponse r = service.publish(session, metadata);
+                    ShareFileResponse r = service.publish(session, metadata, Boolean.FALSE.equals(saved.independent()), true);
                     if (!isCurrentSession(generation)) return;
                     fileRegistry.registerCompleteFile(r.fileId(), path, metadata);
                     if (!metadata.fileHash().equalsIgnoreCase(saved.fileHash())) {
                         store.removeByHash(saved.fileHash());
                         store.add(new SharedFilesStore.Entry(saved.path(), metadata.fileName(),
-                                metadata.fileSize(), metadata.fileHash()));
+                                metadata.fileSize(), metadata.fileHash(), saved.independent(), saved.directAt(), saved.groups()));
                     }
+                    var row = SharedFileEntry.describe(r.fileId(), metadata.fileName(), metadata.fileHash(), metadata.fileSize(), store.load());
                     postToCurrentSession(generation, () -> {
                         sharedFiles.removeIf(x -> x.fileId() == r.fileId());
-                        sharedFiles.add(new SharedFileEntry(r.fileId(), metadata.fileName()));
+                        sharedFiles.add(row);
                     });
-                } catch (Exception restoreError) {
+                }} catch (Exception restoreError) {
                     postToCurrentSession(generation, () -> statusLabel.setText(
                             "Không thể khôi phục một file chia sẻ; kiểm tra file nguồn và Tracker."));
                 }
@@ -174,9 +188,9 @@ public final class ShareController {
         }
 
         selectedFile = file.toPath();
-        selectedFileLabel.setText(file.getName() + "  (" + file.length() + " bytes)");
-        shareButton.setDisable(false);
+        selectedFileLabel.setText(file.getName() + "  (" + vn.edu.p2p.peer.view.UserFacingStatus.bytes(file.length()) + ")");
         statusLabel.setText("");
+        onShareFile();
     }
 
     /** T03-T09: build FileMetadata, then T11: publish it to the Tracker. */
@@ -188,58 +202,52 @@ public final class ShareController {
         }
 
         if (shareFileClientService == null || sessionId == null) {
-            statusLabel.setText("Chưa cấu hình phiên đăng nhập cho màn hình Share.");
+            statusLabel.setText("Vui lòng đăng nhập lại để chia sẻ.");
             return;
         }
 
-        shareButton.setDisable(true);
-        statusLabel.setText("Đang đọc, băm file và gửi lên Tracker...");
+        setShareBusy(true);
+        statusLabel.setText("Đang chuẩn bị tệp chia sẻ…");
         Path sharedPath = selectedFile;
         long generation = AuthClientService.sessionGeneration();
 
         submitIfOpen(() -> {
             try {
                 FileMetadata metadata = metadataBuilder.build(sharedPath);
-                ShareFileResponse response = shareFileClientService.publish(sessionId, metadata);
-                postToCurrentSession(generation, () -> onShareSuccess(metadata, response, sharedPath));
+                synchronized (mutationLock()) {
+                    if (!isCurrentSession(generation)) return;
+                    ShareFileResponse response = shareFileClientService.publish(sessionId, metadata);
+                    if (!isCurrentSession(generation)) return;
+                    if (fileRegistry != null) fileRegistry.registerCompleteFile(response.fileId(), sharedPath, metadata);
+                    SharedFilesStore store=SharedFilesStore.current();
+                    var entry=SharedFilesStore.Entry.direct(sharedPath.toAbsolutePath().toString(),metadata.fileName(),metadata.fileSize(),metadata.fileHash(),System.currentTimeMillis());
+                    List<SharedFilesStore.Entry> ledger=List.of(entry); String warning="";
+                    try { if(store!=null){store.add(entry);ledger=store.load();} } catch(Exception ex){warning=" Không lưu được lịch sử chia sẻ cục bộ.";}
+                    var row=SharedFileEntry.describe(response.fileId(),metadata.fileName(),metadata.fileHash(),metadata.fileSize(),ledger);
+                    String message=warning+recordHistory(store,entry.directAt(),"Tệp riêng",List.of(new ShareHistoryStore.Item(metadata.fileName(),metadata.fileSize())),generation);
+                    postToCurrentSession(generation, () -> onShareSuccess(row, message));
+                }
             } catch (Exception e) {
-                postToCurrentSession(generation, () -> onError("Lỗi khi chia sẻ file: " + e.getMessage()));
+                java.util.logging.Logger.getLogger(ShareController.class.getName()).warning("Share failed: " + e.getClass().getSimpleName());
+                postToCurrentSession(generation, () -> onError("Không thể chia sẻ tệp. Kiểm tra tệp và kết nối, sau đó thử lại."));
             }
         });
     }
 
-    private void onShareSuccess(FileMetadata metadata, ShareFileResponse response, Path sharedPath) {
-        if (fileRegistry != null) {
-            fileRegistry.registerCompleteFile(response.fileId(), sharedPath, metadata);
-        }
+    private void setShareBusy(boolean busy) { chooseFileButton.setDisable(busy); chooseFolderButton.setDisable(busy); }
 
-        SharedFilesStore store = SharedFilesStore.current();
-        if (store != null) {
-            try {
-                store.add(new SharedFilesStore.Entry(sharedPath.toAbsolutePath().toString(),
-                        metadata.fileName(), metadata.fileSize(), metadata.fileHash()));
-            } catch (IOException ignored) {
-            }
-        }
+    private Object mutationLock() { return fileRegistry == null ? this : fileRegistry.shareMutationLock(); }
 
-        String note = response.isNewFile()
-                ? "File mới trong catalog"
-                : "File đã tồn tại trên Tracker (trùng SHA-256), dùng lại file_id="
-                        + response.fileId();
-
-        statusLabel.setText(
-                "Chia sẻ thành công \"" + metadata.fileName() + "\" - "
-                        + metadata.pieceCount() + " piece. " + note
-        );
-
-        sharedFiles.removeIf(entry -> entry.fileId() == response.fileId());
-        sharedFiles.add(new SharedFileEntry(response.fileId(), metadata.fileName()));
-        shareButton.setDisable(false);
+    private void onShareSuccess(SharedFileEntry row, String warning) {
+        statusLabel.setText("Đã chia sẻ tệp \"" + row.fileName() + "\"." + warning);
+        sharedFiles.removeIf(entry -> entry.fileId() == row.fileId());
+        sharedFiles.add(row);
+        setShareBusy(false);
     }
 
     private void onError(String message) {
         statusLabel.setText(message);
-        shareButton.setDisable(false);
+        setShareBusy(false);
     }
 
     public void shutdown() {
@@ -278,58 +286,74 @@ public final class ShareController {
     private void onShareFolder() {
         if (closed.get()) return;
         if (shareFileClientService == null || folderClientService == null || sessionId == null) {
-            statusLabel.setText("Chưa cấu hình phiên đăng nhập cho màn hình Share.");
+            statusLabel.setText("Vui lòng đăng nhập lại để chia sẻ.");
             return;
         }
         File dir = new DirectoryChooser().showDialog(chooseFolderButton.getScene().getWindow());
         if (dir == null) {
             return;
         }
-        chooseFolderButton.setDisable(true);
-        statusLabel.setText("Đang quét thư mục...");
+        setShareBusy(true);
+        statusLabel.setText("Đang quét thư mục…");
         SharedFilesStore store = SharedFilesStore.current();
         long generation = AuthClientService.sessionGeneration();
 
         submitIfOpen(() -> {
-            try {
-                List<FolderScanner.Entry> entries = FolderScanner.scan(dir.toPath());
-                List<String> directories = FolderScanner.scanDirectories(dir.toPath());
-                List<FolderEntryDto> dto = new ArrayList<>();
-                int done = 0;
-                for (FolderScanner.Entry entry : entries) {
-                    if (!isCurrentSession(generation)) return;
-                    // Zero-byte files are valid: 0 pieces and SHA-256(empty).
-                    final int n = ++done;
-                    postToCurrentSession(generation, () -> statusLabel.setText(
-                            "Đang chia sẻ " + n + "/" + entries.size() + ": " + entry.relativePath()));
-                    FileMetadata metadata = metadataBuilder.build(entry.absolutePath());
-                    ShareFileResponse r = shareFileClientService.publish(sessionId, metadata);
-                    if (!isCurrentSession(generation)) return;
-                    if (fileRegistry != null) {
-                        fileRegistry.registerCompleteFile(r.fileId(), entry.absolutePath(), metadata);
+            record Pending(long id, Path path, FileMetadata metadata, String relative) {}
+            List<Pending> staged = new ArrayList<>();
+            synchronized (mutationLock()) {
+                boolean folderCommitted=false;
+                try {
+                    List<FolderScanner.Entry> entries = FolderScanner.scan(dir.toPath());
+                    List<String> directories = FolderScanner.scanDirectories(dir.toPath());
+                    List<FolderEntryDto> dto = new ArrayList<>();
+                    int done=0;
+                    for (FolderScanner.Entry entry:entries) {
+                        if (!isCurrentSession(generation)) throw new IOException("Phiên đã kết thúc");
+                        final int n=++done;
+                        postToCurrentSession(generation,()->statusLabel.setText("Đang chia sẻ "+n+"/"+entries.size()+": "+entry.relativePath()));
+                        FileMetadata metadata=metadataBuilder.build(entry.absolutePath());
+                        ShareFileResponse res=shareFileClientService.publish(sessionId,metadata,true,false);
+                        staged.add(new Pending(res.fileId(),entry.absolutePath(),metadata,entry.relativePath()));
+                        dto.add(new FolderEntryDto(res.fileId(),entry.relativePath()));
                     }
-                    if (store != null) {
-                        store.add(new SharedFilesStore.Entry(entry.absolutePath().toAbsolutePath().toString(),
-                                metadata.fileName(), metadata.fileSize(), metadata.fileHash()));
+                    if(!isCurrentSession(generation)) throw new IOException("Phiên đã kết thúc");
+                    var res=folderClientService.share(sessionId,dir.getName(),dto,directories);
+                    folderCommitted=true;
+                    var group=new SharedFilesStore.Group(res.groupId(),dir.getName(),System.currentTimeMillis());
+                    List<SharedFilesStore.Entry> newEntries=new ArrayList<>();
+                    for(var x:staged) {
+                        if(fileRegistry!=null)fileRegistry.registerCompleteFile(x.id(),x.path(),x.metadata());
+                        newEntries.add(SharedFilesStore.Entry.folder(x.path().toAbsolutePath().toString(),x.metadata().fileName(),x.metadata().fileSize(),x.metadata().fileHash(),group));
                     }
-                    dto.add(new FolderEntryDto(r.fileId(), entry.relativePath()));
-                    postToCurrentSession(generation, () -> {
-                        sharedFiles.removeIf(x -> x.fileId() == r.fileId());
-                        sharedFiles.add(new SharedFileEntry(r.fileId(), entry.relativePath()));
+                    List<SharedFilesStore.Entry> ledger=newEntries; String warning="";
+                    try { if(store!=null){store.addAll(newEntries);ledger=store.load();} }catch(Exception ex){warning=" Không lưu được lịch sử chia sẻ cục bộ.";}
+                    List<SharedFileEntry> rows=new ArrayList<>();
+                    for(var x:staged) rows.add(SharedFileEntry.describe(x.id(),x.relative(),x.metadata().fileHash(),x.metadata().fileSize(),ledger));
+                    List<ShareHistoryStore.Item> historyItems=new ArrayList<>(staged.stream().map(x->new ShareHistoryStore.Item(x.relative(),x.metadata().fileSize())).toList());
+                    var emptyDirectories=ShareHistoryPaths.emptyLeafDirectories(directories,staged.stream().map(Pending::relative).toList());
+                    for(String directory:emptyDirectories) historyItems.add(new ShareHistoryStore.Item(directory+"/",-1));
+                    String note=warning+recordHistory(store,group.sharedAt(),"Thư mục "+dir.getName(),historyItems,generation);
+                    postToCurrentSession(generation,()->{
+                        var merged=new java.util.LinkedHashMap<Long,SharedFileEntry>();
+                        for(var x:sharedFiles)merged.put(x.fileId(),x);
+                        for(var x:rows)merged.put(x.fileId(),x);
+                        sharedFiles.setAll(merged.values());
+                        statusLabel.setText("Đã chia sẻ thư mục "+dir.getName()+" ("+res.fileCount()+" tệp)."+note);
+                        setShareBusy(false);
+                    });
+                } catch(Exception e) {
+                    // A failed batch must not revoke an independent share or a file used by another folder.
+                    if(!folderCommitted) for(var x:staged) {
+                        try { var stopped=shareFileClientService.unshare(sessionId,x.id(),true);
+                            if(stopped.stopped()) ShareState.stopFile(fileRegistry,store,x.id());
+                        } catch(Exception ignored) { /* Tracker may be offline; no local file is enabled for this batch. */ }
+                    }
+                    postToCurrentSession(generation,()->{
+                        statusLabel.setText("Không hoàn tất chia sẻ thư mục. Kiểm tra kết nối và thử lại.");
+                        setShareBusy(false);
                     });
                 }
-                var res = folderClientService.share(sessionId, dir.getName(), dto, directories);
-                postToCurrentSession(generation, () -> {
-                    statusLabel.setText("Đã chia sẻ thư mục \"" + dir.getName() + "\" (" + res.fileCount() + " file).");
-                    chooseFolderButton.setDisable(false);
-                });
-            } catch (Exception e) {
-                postToCurrentSession(generation, () -> {
-                    statusLabel.setText("Không thể hoàn tất chia sẻ thư mục: " + e.getMessage()
-                            + ". Một số file con có thể đã được công bố; kiểm tra Tệp của tôi "
-                            + "trước khi thử lại.");
-                    chooseFolderButton.setDisable(false);
-                });
             }
         });
     }

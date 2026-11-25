@@ -1,13 +1,14 @@
 package vn.edu.p2p.peer.transfer;
 
 import javafx.application.Platform;
+import vn.edu.p2p.peer.view.UserFacingStatus;
+import static vn.edu.p2p.peer.view.UserFacingStatus.Tone.*;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
 import javafx.scene.control.ProgressBar;
@@ -40,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * tốc độ Download thực tế và tốc độ Upload thực tế của Peer).
  */
 public final class DownloadController {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(DownloadController.class.getName());
 
     /** Selected from Explore/Search, never entered as a raw ID. */
     private long selectedFileId;
@@ -48,9 +50,6 @@ public final class DownloadController {
 
     @FXML
     private TextField fileNameField;
-
-    @FXML
-    private ComboBox<PieceScheduler.Strategy> strategyComboBox;
 
     @FXML
     private TextField outputDirField;
@@ -108,6 +107,7 @@ public final class DownloadController {
 
     private Path selectedOutputDir;
     private AtomicBoolean activeCancelSignal;
+    private boolean downloadBusy;
     private volatile PeerDownloadClient activeDownloadClient;
     private final AtomicBoolean closed = new AtomicBoolean();
     private long lastUploadedBytes = 0L;
@@ -116,8 +116,6 @@ public final class DownloadController {
     @FXML
     private void initialize() {
         sourcesStatusListView.setItems(sourceLogs);
-        strategyComboBox.setItems(FXCollections.observableArrayList(PieceScheduler.Strategy.values()));
-        strategyComboBox.getSelectionModel().select(PieceScheduler.Strategy.RAREST_FIRST);
 
         selectedOutputDir = Path.of(System.getProperty("user.home"), "Downloads");
         fileNameField.setEditable(false);
@@ -156,15 +154,18 @@ public final class DownloadController {
      * Nhận thông tin file được chọn trực tiếp từ màn hình Search (S42 tích hợp Search -> Download).
      */
     public void prefillFromSearchResult(SearchResultItem item) {
-        if (item == null) {
+        if (item == null || downloadBusy) {
             return;
         }
+        progressBar.setProgress(0);
+        progressPercentLabel.setText("Tiến độ: 0%");
+        sourceLogs.clear();
         selectedFileId = item.fileId();
         startDownloadButton.setDisable(false);
         selectedFileSize = item.fileSize();
         selectedFileHash = item.fileHash();
         fileNameField.setText(item.fileName());
-        statusLabel.setText("Đã chọn: " + item.fileName() + " (" + item.fileSize() + " bytes). Nhấn Bắt đầu tải.");
+        UserFacingStatus.set(statusLabel, "Đã chọn " + item.fileName() + " (" + UserFacingStatus.bytes(item.fileSize()) + ").", NEUTRAL);
     }
 
     @FXML
@@ -184,14 +185,14 @@ public final class DownloadController {
 
     @FXML
     private void onStartDownload() {
-        if (closed.get()) return;
+        if (closed.get() || downloadBusy) return;
         if (fileSourceClientService == null || sessionId == null) {
-            statusLabel.setText("Chưa cấu hình phiên đăng nhập cho màn hình Download.");
+            UserFacingStatus.set(statusLabel, "Vui lòng đăng nhập lại để tải tệp.", FAILURE);
             return;
         }
 
         if (selectedFileId <= 0 || selectedFileSize < 0) {
-            statusLabel.setText("Hãy chọn file từ tab Khám phá trước khi tải.");
+            UserFacingStatus.set(statusLabel, "Hãy chọn tệp từ Khám phá trước khi tải.", NEUTRAL);
             return;
         }
         final long fileId = selectedFileId;
@@ -203,26 +204,26 @@ public final class DownloadController {
 
         // Keep an untrusted UI name inside the chosen folder. No absolute paths or '..'.
         String nameError = SafeFileName.validate(targetFileName);
-        if (nameError != null) { statusLabel.setText(nameError); return; }
+        if (nameError != null) { UserFacingStatus.set(statusLabel, "Tên tệp không hợp lệ. Hãy chọn tệp khác.", FAILURE); return; }
         Path targetFilePath = selectedOutputDir.resolve(targetFileName).normalize();
         if (!targetFilePath.startsWith(selectedOutputDir.toAbsolutePath().normalize())) {
-            statusLabel.setText("Duong dan dich nam ngoai thu muc da chon."); return;
+            UserFacingStatus.set(statusLabel, "Nơi lưu không hợp lệ. Hãy chọn lại thư mục.", FAILURE); return;
         }
         if (!targetFilePath.getParent().equals(selectedOutputDir.toAbsolutePath().normalize())
                 && !targetFilePath.getParent().toAbsolutePath().normalize()
                         .equals(selectedOutputDir.toAbsolutePath().normalize())) {
-            statusLabel.setText("File phai nam trong thu muc da chon.");
+            UserFacingStatus.set(statusLabel, "Nơi lưu không hợp lệ. Hãy chọn lại thư mục.", FAILURE);
             return;
         }
         if (Files.isDirectory(targetFilePath)) {
-            statusLabel.setText("Duong dan dich la thu muc, khong phai file.");
+            UserFacingStatus.set(statusLabel, "Tên tệp trùng với thư mục có sẵn. Hãy chọn nơi lưu khác.", FAILURE);
             return;
         }
         if (!Files.exists(targetFilePath)) {
             try {
                 DownloadPreflight.check(targetFilePath, selectedFileSize);
             } catch (DownloadPreflight.PreflightException ex) {
-                statusLabel.setText(ex.getMessage()); return;
+                LOG.warning("Download preflight failed: " + ex.getClass().getSimpleName()); UserFacingStatus.set(statusLabel, "Không thể lưu tệp. Kiểm tra dung lượng và quyền ghi thư mục.", FAILURE); return;
             }
         }
         if (Files.exists(targetFilePath)) {
@@ -232,17 +233,16 @@ public final class DownloadController {
             alert.setHeaderText("Xac nhan file da ton tai");
             if (alert.showAndWait().orElse(ButtonType.NO) != ButtonType.YES) return;
         }
-        PieceScheduler.Strategy strategy = strategyComboBox.getValue() != null
-                ? strategyComboBox.getValue()
-                : PieceScheduler.Strategy.ROUND_ROBIN;
+        PieceScheduler.Strategy strategy = PieceScheduler.Strategy.AUTO;
 
+        downloadBusy = true;
         activeCancelSignal = new AtomicBoolean(false);
         long generation = AuthClientService.sessionGeneration();
         startDownloadButton.setDisable(true);
         cancelDownloadButton.setDisable(false);
         sourceLogs.clear();
         progressBar.setProgress(0.0);
-        statusLabel.setText("Đang truy vấn danh sách Peer nguồn từ Tracker...");
+        UserFacingStatus.set(statusLabel, "Đang tìm nguồn tải…", NEUTRAL);
 
         downloadExecutor.submit(() -> executeDownloadTask(fileId, targetFilePath, strategy,
                 trustedSearchHash, generation));
@@ -254,7 +254,7 @@ public final class DownloadController {
             activeCancelSignal.set(true);
             PeerDownloadClient client = activeDownloadClient;
             if (client != null) client.cancelActiveRequests();
-            statusLabel.setText("Đang tạm dừng phiên tải (có thể bấm Bắt đầu tải để Resume sau)...");
+            UserFacingStatus.set(statusLabel, "Đang tạm dừng. Bạn có thể tải tiếp sau.", NEUTRAL);
         }
     }
 
@@ -278,14 +278,13 @@ public final class DownloadController {
 
             postToUi(generation, () -> {
                 for (FileSourceInfo src : sources) {
-                    sourceLogs.add("Nguồn: " + src.ipAddress() + ":" + src.listeningPort()
-                            + " [" + src.availabilityStatus() + "] (Peer=" + shortPeer(src.peerId()) + ")");
+                    sourceLogs.add("Thiết bị " + shortPeer(src.peerId()) + " · " + ("COMPLETE".equals(src.availabilityStatus()) ? "Có đủ tệp" : "Có một phần tệp"));
                 }
             });
 
             if (sources.isEmpty()) {
                 postToUi(generation, () -> {
-                    statusLabel.setText("Không có Peer nào đang online giữ file này.");
+                    UserFacingStatus.set(statusLabel, "Chưa có nguồn tải khả dụng. Hãy thử lại sau.", FAILURE);
                     resetButtons();
                 });
                 return;
@@ -305,7 +304,7 @@ public final class DownloadController {
             if (planner != null) {
                 planner.remember(sources);
                 planner.setListener((peerId, mode) -> postToUi(generation,
-                        () -> sourceLogs.add("Peer " + shortPeer(peerId) + " -> kết nối " + mode)));
+                        () -> sourceLogs.add("Thiết bị " + shortPeer(peerId) + " · " + UserFacingStatus.mode(mode))));
                 downloadClient.withPlanner(planner);
             }
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
@@ -332,18 +331,16 @@ public final class DownloadController {
                     postToUi(generation, () -> {
                         progressBar.setProgress(fraction);
                         progressPercentLabel.setText(String.format(
-                                "Tiến độ: %.1f%% (%d / %d pieces)",
-                                percent, completedPieces, totalPieces
+                                "Tiến độ: %.1f%%", percent
                         ));
-                        downloadSpeedLabel.setText("Tốc độ tải (DL): " + formatSpeed(downloadSpeedBytesPerSec));
+                        downloadSpeedLabel.setText("Tốc độ tải xuống: " + formatSpeed(downloadSpeedBytesPerSec));
                     });
                 }
 
                 @Override
                 public void onSourceStatusChanged(String peerId, String status, String message) {
-                    postToUi(generation, () -> sourceLogs.add(
-                            "Peer " + shortPeer(peerId) + " -> " + status + ": " + message
-                    ));
+                    LOG.fine(() -> "Source status: " + status);
+                    postToUi(generation, () -> sourceLogs.add("Thiết bị " + shortPeer(peerId) + " · " + UserFacingStatus.source(status)));
                 }
             };
 
@@ -360,10 +357,9 @@ public final class DownloadController {
                     && !current.failureReason().toLowerCase(java.util.Locale.ROOT)
                             .contains("ticket refresh failed")
                     && !activeCancelSignal.get(); attempt++) {
-                final int n = attempt;
                 Thread.sleep(2000);
                 postToUi(generation,
-                        () -> sourceLogs.add("Nguon bi roi, hoi lai Tracker (lan " + n + "/3)..."));
+                        () -> sourceLogs.add("Mất kết nối nguồn tải, đang tìm nguồn khác…"));
                 List<FileSourceInfo> fresh = fileSourceClientService.findSources(sessionId, fileId).sources();
                 if (fresh.isEmpty()) {
                     break;
@@ -376,6 +372,12 @@ public final class DownloadController {
                         initialTransferId, catalogHash);
                 targetFilePath = current.outputFile();
             }
+            boolean noSources = false;
+            if ("FAILED".equals(current.status()) && !activeCancelSignal.get()) {
+                try { noSources = fileSourceClientService.findSources(sessionId, fileId).sources().isEmpty(); }
+                catch (Exception ignored) { /* keep original error if Tracker unreachable */ }
+            }
+            final boolean sourceUnavailable = noSources;
             final DownloadSessionResult result = current;
             final Path finalTargetFilePath = result.outputFile();
 
@@ -389,20 +391,21 @@ public final class DownloadController {
             postToUi(generation, () -> {
                 if ("COMPLETED".equals(result.status())) {
                     progressBar.setProgress(1.0);
-                    statusLabel.setText("Tải thành công & khớp SHA-256! File lưu tại: "
-                            + finalTargetFilePath);
+                    UserFacingStatus.set(statusLabel, "Tải thành công. Tệp đã được lưu tại: " + finalTargetFilePath, SUCCESS);
+                } else if (sourceUnavailable) {
+                    UserFacingStatus.set(statusLabel, "Không còn nguồn chia sẻ. Bạn có thể tải tiếp khi có nguồn mới.", FAILURE);
                 } else {
-                    statusLabel.setText("Phiên tải kết thúc (" + result.status() + "): "
-                            + (result.failureReason() != null
-                            ? safeDownloadFailure(new IOException(result.failureReason())) : "")
-                            + " File dở dang (nếu có) được giữ tại: " + finalTargetFilePath);
+                    boolean cancelled = "CANCELLED".equals(result.status());
+                    LOG.fine(() -> "Download result: " + result.status());
+                    UserFacingStatus.set(statusLabel, cancelled ? "Đã dừng tải. Bạn có thể tải tiếp sau." : "Tải thất bại. Hãy kiểm tra kết nối và thử lại.", cancelled ? NEUTRAL : FAILURE);
                 }
-                downloadSpeedLabel.setText("Tốc độ tải (DL): 0.0 KB/s");
+                downloadSpeedLabel.setText("Tốc độ tải xuống: 0.0 KB/s");
                 resetButtons();
             });
         } catch (Exception e) {
             postToUi(generation, () -> {
-                statusLabel.setText("Lỗi khi tải file: " + safeDownloadFailure(e));
+                LOG.warning("Download failed: " + TrackerConnectionDiagnostics.classify(e));
+                UserFacingStatus.set(statusLabel, "Không thể tải tệp. Kiểm tra kết nối, nguồn tải và thử lại.", FAILURE);
                 resetButtons();
             });
         }
@@ -460,12 +463,13 @@ public final class DownloadController {
         long generation = AuthClientService.sessionGeneration();
         postToUi(generation, () -> {
             if (uploadSpeedLabel != null) {
-                uploadSpeedLabel.setText("Tốc độ phát (UL): " + formatSpeed(speed));
+                uploadSpeedLabel.setText("Tốc độ tải lên: " + formatSpeed(speed));
             }
         });
     }
 
     private void resetButtons() {
+        downloadBusy = false;
         startDownloadButton.setDisable(false);
         cancelDownloadButton.setDisable(true);
     }

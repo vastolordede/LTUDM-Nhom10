@@ -37,6 +37,12 @@ public final class MyFilesController {
 
     @FXML
     private Label statusLabel;
+    @FXML private Button previousSharePage, nextSharePage, stopFolderButton;
+    @FXML private Label sharePageLabel;
+    @FXML private javafx.scene.layout.HBox sharePageNumbers;
+    private ObservableList<SharedFileEntry> sharedFiles;
+    private FolderClientService folderClientService;
+    private boolean busy;
 
     private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "peer-myfiles-io");
@@ -54,17 +60,8 @@ public final class MyFilesController {
     private void initialize() {
         statusLabel.setText("");
 
-        myFilesListView.setCellFactory(list -> new ListCell<>() {
-            @Override
-            protected void updateItem(SharedFileEntry item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty || item == null ? null : item.fileName());
-            }
-        });
-
-        stopSharingButton.disableProperty().bind(
-                myFilesListView.getSelectionModel().selectedItemProperty().isNull()
-        );
+        myFilesListView.getSelectionModel().selectedItemProperty().addListener((o,a,b)->updateButtons());
+        updateButtons();
     }
 
     /**
@@ -78,7 +75,9 @@ public final class MyFilesController {
     ) {
         this.shareFileClientService = new ShareFileClientService(connection);
         this.sessionId = sessionId;
-        myFilesListView.setItems(sharedFiles);
+        this.sharedFiles=sharedFiles;
+        this.folderClientService=new FolderClientService(connection);
+        new ShareListPager(myFilesListView,sharedFiles,previousSharePage,nextSharePage,sharePageLabel,sharePageNumbers);
     }
 
     public void configure(TrackerConnection connection, String sessionId,
@@ -90,23 +89,33 @@ public final class MyFilesController {
     /** T22: stop sharing the selected file. */
     @FXML
     private void onStopSharing() {
-        if (closed.get()) return;
+        if (closed.get() || busy) return;
         SharedFileEntry selected = myFilesListView.getSelectionModel().getSelectedItem();
         if (selected == null || shareFileClientService == null) {
             return;
         }
 
-        statusLabel.setText("Đang ngừng chia sẻ \"" + selected.fileName() + "\"...");
+        busy=true; updateButtons();
+        statusLabel.setText("Đang ngừng chia sẻ \"" + selected.fileName() + "\"…");
 
         long generation = AuthClientService.sessionGeneration();
         submitIfOpen(() -> {
             try {
-                shareFileClientService.unshare(sessionId, selected.fileId());
-                postToCurrentSession(generation, () -> onStopSuccess(selected));
+                synchronized (fileRegistry == null ? this : fileRegistry.shareMutationLock()) {
+                    if (fileRegistry != null) fileRegistry.disableSharing(selected.fileId());
+                    shareFileClientService.unshare(sessionId, selected.fileId());
+                    String note=ShareState.stopFile(fileRegistry,SharedFilesStore.current(),selected.fileId());
+                    postToCurrentSession(generation, () -> {
+                        sharedFiles.removeIf(x->x.fileId()==selected.fileId());
+                        statusLabel.setText("Đã ngừng chia sẻ tệp " + selected.fileName()+"."+note);
+                        busy=false; updateButtons();
+                    });
+                }
             } catch (Exception e) {
-                postToCurrentSession(generation, () ->
-                        statusLabel.setText("Lỗi khi ngừng chia sẻ: " + e.getMessage())
-                );
+                postToCurrentSession(generation, () -> {
+                    statusLabel.setText("Đã dừng tải lên trên thiết bị này. Máy chủ chưa xác nhận; hãy thử lại.");
+                    busy=false; updateButtons();
+                });
             }
         });
     }
@@ -124,21 +133,30 @@ public final class MyFilesController {
         });
     }
 
-    private void onStopSuccess(SharedFileEntry entry) {
-        SharedFilesStore store = SharedFilesStore.current();
-        if (fileRegistry != null) {
-            if (store != null) {
-                fileRegistry.find(entry.fileId()).ifPresent(reg -> {
-                    try {
-                        store.removeByHash(reg.metadata().fileHash());
-                    } catch (java.io.IOException ignored) {
-                    }
+    private void updateButtons() {
+        var selected=myFilesListView.getSelectionModel().getSelectedItem();
+        stopSharingButton.setDisable(busy||selected==null);
+        stopFolderButton.setDisable(busy||selected==null||selected.groups().isEmpty());
+    }
+
+    @FXML private void onStopFolder() {
+        var row=myFilesListView.getSelectionModel().getSelectedItem();
+        if(closed.get()||busy||row==null||row.groups().isEmpty())return;
+        var choice=new javafx.scene.control.ChoiceDialog<>(row.groups().getFirst(),row.groups());
+        choice.setTitle("Ngừng chia sẻ thư mục"); choice.setHeaderText("Chọn lượt chia sẻ cần ngừng");
+        var selected=choice.showAndWait(); if(selected.isEmpty())return;
+        busy=true; updateButtons(); long generation=AuthClientService.sessionGeneration();
+        submitIfOpen(()->{
+            try { synchronized(fileRegistry==null?this:fileRegistry.shareMutationLock()) {
+                var result=folderClientService.unshareFolder(sessionId,selected.get().groupId());
+                String note=ShareState.stopFolder(fileRegistry,SharedFilesStore.current(),result);
+                postToCurrentSession(generation,()->{
+                    ShareState.updateFolderRows(sharedFiles,result);
+                    statusLabel.setText("Đã ngừng chia sẻ thư mục. Tệp chia sẻ riêng hoặc thuộc thư mục khác vẫn được giữ."+note);
+                    busy=false;updateButtons();
                 });
-            }
-            fileRegistry.unregisterFile(entry.fileId());
-        }
-        myFilesListView.getItems().remove(entry);
-        statusLabel.setText("Đã ngừng chia sẻ \"" + entry.fileName() + "\".");
+            }}catch(Exception e){postToCurrentSession(generation,()->{statusLabel.setText("Không thể ngừng chia sẻ thư mục.");busy=false;updateButtons();});}
+        });
     }
 
     public void shutdown() {

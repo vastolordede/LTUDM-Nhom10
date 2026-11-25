@@ -208,6 +208,13 @@ public final class ConnectionPlanner {
         this.sessionId = sessionId;
     }
 
+    public Mode lastModeForPeer(String peerId) {
+        for (var e:peerByEndpoint.entrySet()) if (e.getValue().equals(peerId)) {
+            Mode mode=lastMode.get(e.getKey()); if(mode!=null)return mode;
+        }
+        return null;
+    }
+
     public void setListener(BiConsumer<String, Mode> listener) {
         this.listener = listener;
     }

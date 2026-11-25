@@ -69,7 +69,7 @@ public final class TrackerApplication {
     private static void run() throws Exception {
         TrackerSettings settings = TrackerSettings.load();
         SecurityProfile.requireTracker(
-                SecurityProfile.parse(EnvConfig.get("P2P_PROFILE", "development")),
+                SecurityProfile.configuredMode(),
                 settings.tls().enabled(), PeerAccessTickets.localInsecureDemoEnabled());
         TrackerLogging.configure(settings.logLevel());
 
@@ -128,7 +128,7 @@ public final class TrackerApplication {
 
         // D64, D72, D73: chia sẻ thư mục
         FolderCatalogService folderCatalogService =
-                new FolderCatalogService(sessionPeerResolver, connectionFactory);
+                new FolderCatalogService(sessionPeerResolver, connectionFactory, revocationRegistry);
 
         TrackerRequestDispatcher dispatcher =
                 new TrackerRequestDispatcher(

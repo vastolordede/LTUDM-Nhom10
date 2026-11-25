@@ -15,6 +15,7 @@ import vn.edu.p2p.common.dto.FolderUnshareResponse;
 import vn.edu.p2p.common.dto.RecordFolderDownloadRequest;
 import vn.edu.p2p.common.dto.RecordFolderDownloadResponse;
 import vn.edu.p2p.tracker.config.DatabaseConnectionFactory;
+import vn.edu.p2p.tracker.security.TicketRevocationRegistry;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -32,11 +33,19 @@ public final class FolderCatalogService {
     private static final int MAX_FILES = 2000;
     private final SessionPeerResolver sessionPeerResolver;
     private final DatabaseConnectionFactory connectionFactory;
+    private final TicketRevocationRegistry revocations;
 
     public FolderCatalogService(SessionPeerResolver sessionPeerResolver,
                                 DatabaseConnectionFactory connectionFactory) {
+        this(sessionPeerResolver, connectionFactory, new TicketRevocationRegistry());
+    }
+
+    public FolderCatalogService(SessionPeerResolver sessionPeerResolver,
+                                DatabaseConnectionFactory connectionFactory,
+                                TicketRevocationRegistry revocations) {
         this.sessionPeerResolver = sessionPeerResolver;
         this.connectionFactory = connectionFactory;
+        this.revocations = revocations;
     }
 
     public FolderShareResponse share(FolderShareRequest request) throws FileCatalogException, SQLException {
@@ -59,6 +68,13 @@ public final class FolderCatalogService {
                 throw new FileCatalogException("Invalid or duplicate folder path");
             }
         }
+        synchronized (CatalogMutationLock.LOCK) {
+            return shareLocked(request, peerId);
+        }
+    }
+
+    private FolderShareResponse shareLocked(FolderShareRequest request, UUID peerId)
+            throws SQLException, FileCatalogException {
         try (Connection c = connectionFactory.open()) {
             c.setAutoCommit(false);
             try {
@@ -146,15 +162,21 @@ public final class FolderCatalogService {
         }
     }
 
-    /** R94: remove folder associations without touching independently shared file records.
-     *  Historical folder download sessions remain referenced by file_groups.
-     */
+    /** Stop folder-only sources, retaining independent shares and other folder references.
+     * Historical folder download sessions remain referenced by file_groups. */
     public FolderUnshareResponse unshare(FolderUnshareRequest request)
             throws FileCatalogException, SQLException {
         if (request == null || request.groupId() <= 0) {
             throw new FileCatalogException("Invalid folder group ID");
         }
         UUID peerId = sessionPeerResolver.resolvePeerId(parse(request.sessionId()));
+        synchronized (CatalogMutationLock.LOCK) {
+            return unshareLocked(request, peerId);
+        }
+    }
+
+    private FolderUnshareResponse unshareLocked(FolderUnshareRequest request, UUID peerId)
+            throws SQLException, FileCatalogException {
         try (Connection c = connectionFactory.open()) {
             c.setAutoCommit(false);
             try {
@@ -167,18 +189,33 @@ public final class FolderCatalogService {
                     }
                 }
                 int removed = 0;
+                Set<Long> candidates = new HashSet<>();
                 try (PreparedStatement del = c.prepareStatement(
-                        "DELETE FROM group_files WHERE group_id = ?")) {
+                        "DELETE FROM group_files WHERE group_id = ? RETURNING file_id")) {
                     del.setLong(1, request.groupId());
-                    removed += del.executeUpdate();
+                    try (ResultSet rs = del.executeQuery()) {
+                        while (rs.next()) { candidates.add(rs.getLong(1)); removed++; }
+                    }
                 }
                 try (PreparedStatement del = c.prepareStatement(
                         "DELETE FROM folder_directories WHERE group_id = ?")) {
                     del.setLong(1, request.groupId());
                     removed += del.executeUpdate();
                 }
+                List<Long> stopped = new ArrayList<>();
+                try (PreparedStatement event = c.prepareStatement(
+                        "INSERT INTO share_events (peer_id, file_id, event_type) VALUES (?, ?, 'SHARE_STOP')")) {
+                    for (long fileId : candidates) {
+                        if (ShareScopeSql.stopIfUnreferenced(c, peerId, fileId)) {
+                            stopped.add(fileId);
+                            event.setObject(1, peerId); event.setLong(2, fileId); event.addBatch();
+                        }
+                    }
+                    if (!stopped.isEmpty()) event.executeBatch();
+                }
                 c.commit();
-                return new FolderUnshareResponse(request.groupId(), removed > 0);
+                for (long fileId : stopped) revocations.revokeFile(peerId.toString(), fileId);
+                return new FolderUnshareResponse(request.groupId(), removed > 0, stopped);
             } catch (Exception ex) {
                 c.rollback();
                 if (ex instanceof SQLException e) throw e;
@@ -205,7 +242,7 @@ public final class FolderCatalogService {
         };
         String sql = """
                 SELECT g.group_id, g.group_name,
-                  (SELECT COUNT(*) FROM group_files x
+                  (SELECT COUNT(DISTINCT x.relative_path) FROM group_files x
                      JOIN peer_files pf ON pf.file_id = x.file_id AND pf.is_sharing = TRUE
                      JOIN v_online_peers op ON op.peer_id = pf.peer_id
                      WHERE x.group_id = g.group_id) AS file_count,

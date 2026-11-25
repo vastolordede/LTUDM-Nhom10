@@ -5,7 +5,10 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
-import javafx.scene.control.Tooltip;
+import vn.edu.p2p.peer.view.UserFacingStatus;
+import javafx.scene.control.Tab;
+import javafx.scene.control.TabPane;
+import javafx.scene.control.ScrollPane;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import java.util.LinkedHashMap;
@@ -134,6 +137,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             folderController = folderLoader.getController();
             folderController.configure(connection, sessionId, fileRegistry, socketFactory,
                     peerKeys.getPrivate());
+            folderController.setSharedFiles(shareController.sharedFiles());
 
             FXMLLoader exploreLoader = loader("explore-view.fxml");
             Parent exploreRoot = exploreLoader.load();
@@ -145,13 +149,17 @@ public final class TransferDashboardWindow implements AutoCloseable {
             historyController.configure(connection, sessionId);
 
             views = new LinkedHashMap<>();
-            views.put("Khám phá", exploreRoot);
-            views.put("Chia sẻ", shareRoot);
-            views.put("Tệp của tôi", myFilesRoot);
-            views.put("Đang tải", downloadRoot);
-            views.put("Chi tiết thư mục", folderRoot);
-            views.put("Lịch sử", historyRoot);
+            views.put("Khám phá", scrollable(exploreRoot));
+            views.put("Chia sẻ", scrollable(shareRoot));
+            views.put("Tệp của tôi", scrollable(myFilesRoot));
+            Tab fileTab = new Tab("Tệp", scrollable(downloadRoot));
+            Tab folderTab = new Tab("Thư mục", scrollable(folderRoot));
+            fileTab.setClosable(false); folderTab.setClosable(false);
+            TabPane downloads = new TabPane(fileTab, folderTab);
+            views.put("Tải xuống", downloads);
+            views.put("Lịch sử", scrollable(historyRoot));
             contentPane = new StackPane();
+            contentPane.setMinSize(0,0);
             contentPane.getStyleClass().add("content-pane");
             contentPane.getChildren().addAll(views.values());
             navButtons = new LinkedHashMap<>();
@@ -173,7 +181,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             Region sideSpacer = new Region();
             VBox.setVgrow(sideSpacer, Priority.ALWAYS);
             sidebar.getChildren().add(sideSpacer);
-            sidebarStatus = new Label(connectivityStatus.snapshot().summary());
+            sidebarStatus = new Label("Chia sẻ tệp an toàn");
             sidebarStatus.getStyleClass().add("sidebar-footer");
             sidebarStatus.setWrapText(true);
             sidebar.getChildren().add(sidebarStatus);
@@ -183,11 +191,14 @@ public final class TransferDashboardWindow implements AutoCloseable {
             exploreController.configure(connection, sessionId,
                     item -> {
                         downloadController.prefillFromSearchResult(item);
-                        showSection("Đang tải");
+                        downloads.getSelectionModel().select(fileTab);
+                        showSection("Tải xuống");
                     }, folder -> {
                         folderController.prefillFromExplore(folder);
-                        showSection("Chi tiết thư mục");
+                        downloads.getSelectionModel().select(folderTab);
+                        showSection("Tải xuống");
                     });
+            shareController.sharedFiles().addListener((javafx.collections.ListChangeListener<vn.edu.p2p.peer.share.SharedFileEntry>) change -> exploreController.catalogChanged());
             showSection("Khám phá");
 
             logoutButton = new Button("Đăng xuất");
@@ -195,13 +206,14 @@ public final class TransferDashboardWindow implements AutoCloseable {
             logoutButton.setOnAction(event -> {
                 if (onLogoutRequested != null) onLogoutRequested.run();
             });
-            dashboardMessage = new Label(connectivityStatus.snapshot().summary());
+            dashboardMessage = new Label(UserFacingStatus.connectivity(connectivityStatus.snapshot()));
             dashboardMessage.getStyleClass().add("connection-label");
+            dashboardMessage.setWrapText(true); dashboardMessage.setMinWidth(0); dashboardMessage.setMaxWidth(650);
             HBox toolbar = new HBox(12);
             toolbar.setAlignment(Pos.CENTER_LEFT);
             toolbar.setPadding(new Insets(12, 18, 12, 18));
             toolbar.getStyleClass().add("app-toolbar");
-            Label heading = new Label("FILESHARE  /  PEER CENTER");
+            Label heading = new Label("FILESHARE");
             heading.getStyleClass().add("toolbar-title");
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
@@ -212,37 +224,38 @@ public final class TransferDashboardWindow implements AutoCloseable {
             root.setCenter(body);
 
             stage = new Stage();
-            stage.setTitle("FileShare-P2P - Peer Center (Port: " + uploadServer.listeningPort() + ")");
+            stage.setTitle("FileShare-P2P");
             Scene scene = new Scene(root, 1024, 700);
             var css = TransferDashboardWindow.class.getResource(VIEW_PATH + "styles.css");
             if (css != null) scene.getStylesheets().add(css.toExternalForm());
             stage.setScene(scene);
             stage.setMinWidth(850);
             stage.setMinHeight(560);
-            // Hide keeps the peer available for uploads; logout closes all background work.
+            // Closing the dashboard returns to login through the normal session teardown.
             stage.setOnCloseRequest(event -> {
                 event.consume();
-                stage.hide();
+                if (onLogoutRequested != null) onLogoutRequested.run();
+                else close();
             });
             stage.show();
             connectivitySubscription = connectivityStatus.subscribe(snapshot ->
                     Platform.runLater(() -> {
                         if (!closed && dashboardMessage != null) {
-                            dashboardMessage.setText(snapshot.summary());
-                            dashboardMessage.setTooltip(snapshot.guidance().isBlank() ? null
-                                    : new Tooltip(snapshot.guidance()));
+                            dashboardMessage.setText(UserFacingStatus.connectivity(snapshot));
                         }
-                        if (!closed && sidebarStatus != null) {
-                            sidebarStatus.setText(snapshot.summary());
-                            sidebarStatus.setTooltip(snapshot.guidance().isBlank() ? null
-                                    : new Tooltip(snapshot.guidance()));
-                        }
+
                     }));
             configureConnectivity(connection, sessionId);
         } catch (IOException | RuntimeException e) {
             close();
             throw e;
         }
+    }
+
+    private static ScrollPane scrollable(Parent content) {
+        ScrollPane pane = new ScrollPane(content);
+        pane.setFitToWidth(true); pane.setFitToHeight(true);
+        pane.setMinSize(0, 0); return pane;
     }
 
     private static FXMLLoader loader(String viewName) throws IOException {
@@ -262,6 +275,7 @@ public final class TransferDashboardWindow implements AutoCloseable {
             button.getStyleClass().remove("nav-selected");
             if (key.equals(name)) button.getStyleClass().add("nav-selected");
         });
+        if (exploreController != null) exploreController.setActive("Khám phá".equals(name));
         if ("Lịch sử".equals(name) && historyController != null) {
             historyController.onRefreshHistory();
         }

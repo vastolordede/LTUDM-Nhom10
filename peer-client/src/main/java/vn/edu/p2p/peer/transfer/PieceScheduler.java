@@ -28,7 +28,8 @@ public final class PieceScheduler {
     public enum Strategy {
         ROUND_ROBIN,
         RAREST_FIRST,
-        RANKED
+        RANKED,
+        AUTO
     }
 
     public record Assignment(
@@ -104,7 +105,8 @@ public final class PieceScheduler {
             return Optional.empty();
         }
 
-        int chosenPiece = (strategy == Strategy.RAREST_FIRST || strategy == Strategy.RANKED)
+        Strategy effective = strategy == Strategy.AUTO ? automaticStrategy() : strategy;
+        int chosenPiece = (effective == Strategy.RAREST_FIRST || effective == Strategy.RANKED)
                 ? selectRarestPendingPiece()
                 : selectSequentialPendingPiece();
 
@@ -112,7 +114,7 @@ public final class PieceScheduler {
             return Optional.empty();
         }
 
-        FileSourceInfo chosenSource = (strategy == Strategy.RANKED)
+        FileSourceInfo chosenSource = (effective == Strategy.RANKED)
                 ? selectRankedSourceForPiece(chosenPiece)
                 : selectRoundRobinSourceForPiece(chosenPiece);
         if (chosenSource == null) {
@@ -124,6 +126,27 @@ public final class PieceScheduler {
         assignedAt.put(chosenPiece, System.nanoTime());
         inFlightByPeer.merge(chosenSource.peerId(), 1, Integer::sum);
         return Optional.of(new Assignment(chosenPiece, chosenSource));
+    }
+
+    /** Re-evaluate at each assignment using live bitfields and measured piece latency. */
+    synchronized Strategy automaticStrategy() {
+        if (activeSources.size() <= 1) return Strategy.ROUND_ROBIN;
+        // If pending pieces differ in availability, keep rare pieces moving first.
+        int min = Integer.MAX_VALUE, max = 0;
+        for (int i = 0; i < pieceCount; i++) if (states[i] == PieceState.PENDING) {
+            int n = countSourcesHavingPiece(i);
+            if (n > 0) { min = Math.min(min, n); max = Math.max(max, n); }
+            if (min < max) return Strategy.RAREST_FIRST;
+        }
+        double fastest = Double.MAX_VALUE, slowest = 0;
+        int measured = 0;
+        for (String peer : activeSources.keySet()) {
+            if (corruptStrikes.getOrDefault(peer, 0) > 0) return Strategy.RANKED;
+            Double ms = avgMillis.get(peer);
+            if (ms != null) { fastest = Math.min(fastest, ms); slowest = Math.max(slowest, ms); measured++; }
+        }
+        if (measured >= 2 && slowest > 1.5 * Math.max(fastest, 1.0)) return Strategy.RANKED;
+        return Strategy.ROUND_ROBIN;
     }
 
     private int selectSequentialPendingPiece() {

@@ -93,7 +93,11 @@ public final class TransferHistoryClientService {
      * S38: Lấy danh sách lịch sử tải file của Peer từ Tracker.
      */
     public List<TransferHistoryItemDto> fetchHistory(String sessionId) throws IOException {
-        TransferHistoryRequest payload = new TransferHistoryRequest(sessionId);
+        return fetchHistory(sessionId, 0);
+    }
+
+    public List<TransferHistoryItemDto> fetchHistory(String sessionId, int page) throws IOException {
+        TransferHistoryRequest payload = new TransferHistoryRequest(sessionId, page);
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.TRANSFER_HISTORY_REQUEST,
                 UUID.randomUUID().toString(),

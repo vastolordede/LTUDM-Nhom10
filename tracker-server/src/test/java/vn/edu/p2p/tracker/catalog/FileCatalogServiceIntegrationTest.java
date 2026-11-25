@@ -211,10 +211,8 @@ class FileCatalogServiceIntegrationTest {
         SearchResponse afterUnshare = service.search(
                 new SearchRequest(SESSION_ID.toString(), "temp-share")
         );
-        assertEquals(
-                0, afterUnshare.results().get(0).sourceCount(),
-                "file stays in the catalog but no longer counts as an active source"
-        );
+        assertTrue(afterUnshare.results().isEmpty(), "The last stopped share must disappear from discovery");
+        assertTrue(catalog.findFileIdByHash(metadata.fileHash()).isPresent(), "Keep metadata and history");
         assertEquals(
                 List.of("SHARE_START", "SHARE_STOP"),
                 catalog.eventTypesFor(shareResponse.fileId())
@@ -341,6 +339,7 @@ class FileCatalogServiceIntegrationTest {
                             sourceCount++;
                         }
                     }
+                    if (sourceCount == 0) continue;
                     results.add(new SearchResultItem(
                             fileId, matchedName, metadata.fileSize(),
                             metadata.fileHash(), sourceCount,

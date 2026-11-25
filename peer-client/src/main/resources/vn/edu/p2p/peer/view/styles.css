@@ -86,3 +86,27 @@
 .explore-toolbar { -fx-background-color: #101827; -fx-padding: 20 22 15 22; }
 .explore-footer { -fx-background-color: #101827; -fx-padding: 12 22 20 22; }
 .explore-footer .label { -fx-text-fill: #b1c4d6; }
+
+/* User-facing lists and navigation tabs. */
+.list-cell, .table-cell { -fx-font-size: 14px; -fx-padding: 7 9 7 9; }
+.table-view .column-header .label { -fx-font-size: 13px; }
+.tab-pane .tab-header-area .tab-header-background { -fx-background-color: #172235; }
+.tab-pane .tab { -fx-background-color: #24364c; }
+.tab-pane .tab:selected { -fx-background-color: #12645e; }
+.tab-pane .tab .tab-label { -fx-text-fill: #eaf1f7; -fx-font-size: 14px; }
+.scroll-pane, .scroll-pane > .viewport { -fx-background-color: transparent; }
+
+.page-number { -fx-min-width: 34px; -fx-padding: 5px 9px; }
+.page-current:disabled { -fx-opacity: 1; -fx-background-color: #245369; -fx-text-fill: white; }
+.share-group-title { -fx-font-size: 15px; -fx-font-weight: bold; -fx-text-fill: #66dfd5; -fx-padding: 8px 0 4px 0; }
+
+/* UX17: same palette for the history folder tree. */
+.tree-view { -fx-background-color: #1b2738; -fx-border-color: #2e435c; -fx-border-radius: 6; -fx-background-radius: 6; }
+.tree-cell { -fx-background-color: #1b2738; -fx-text-fill: #e2e8f0; -fx-font-size: 13px; -fx-padding: 6 8 6 8; }
+.tree-cell:filled:selected { -fx-background-color: #234b59; }
+.tree-cell .tree-disclosure-node .arrow { -fx-background-color: #a4b7cc; }
+.tree-cell.share-group-title { -fx-font-weight: bold; -fx-text-fill: #5eead4; }
+
+/* Download outcome: keep readable text on both normal and selected rows. */
+.label.outcome-success, .table-cell.outcome-success { -fx-text-fill: #6ee7a0; -fx-font-weight: bold; }
+.label.outcome-failure, .table-cell.outcome-failure { -fx-text-fill: #ff858d; -fx-font-weight: bold; }

@@ -5,6 +5,7 @@
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.ListView?>
 <?import javafx.scene.layout.VBox?>
+<?import javafx.scene.layout.HBox?>
 
 <VBox spacing="12.0" xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
       styleClass="page-root" fx:controller="vn.edu.p2p.peer.share.MyFilesController">
@@ -12,10 +13,19 @@
         <Insets top="16.0" right="16.0" bottom="16.0" left="16.0"/>
     </padding>
 
-    <Label text="File Đang Chia Sẻ (My Files)" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
+    <Label text="TỆP CỦA TÔI" style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
 
-    <ListView fx:id="myFilesListView" VBox.vgrow="ALWAYS" prefHeight="220.0"/>
+    <ListView fx:id="myFilesListView" VBox.vgrow="ALWAYS" prefHeight="400.0" minHeight="100"/>
 
-    <Button fx:id="stopSharingButton" text="Ngừng chia sẻ file đã chọn" onAction="#onStopSharing"/>
+    <HBox spacing="10" alignment="CENTER_LEFT">
+        <Button fx:id="previousSharePage" text="Trang trước"/>
+        <HBox fx:id="sharePageNumbers" spacing="4" alignment="CENTER_LEFT"/>
+        <Label fx:id="sharePageLabel" text="Trang 1"/>
+        <Button fx:id="nextSharePage" text="Trang sau"/>
+    </HBox>
+    <HBox spacing="10">
+        <Button fx:id="stopSharingButton" text="Ngừng chia sẻ tệp đã chọn" onAction="#onStopSharing"/>
+        <Button fx:id="stopFolderButton" text="Ngừng chia sẻ thư mục" onAction="#onStopFolder"/>
+    </HBox>
     <Label fx:id="statusLabel" text="" wrapText="true"/>
 </VBox>

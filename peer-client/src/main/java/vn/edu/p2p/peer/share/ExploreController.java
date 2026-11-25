@@ -1,6 +1,14 @@
 package vn.edu.p2p.peer.share;
 
 import javafx.application.Platform;
+import javafx.animation.Timeline;
+import javafx.animation.PauseTransition;
+import javafx.scene.control.ScrollBar;
+import javafx.geometry.Orientation;
+import javafx.animation.KeyFrame;
+import javafx.util.Duration;
+import javafx.scene.layout.HBox;
+import vn.edu.p2p.peer.view.PageNumbers;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
@@ -27,7 +35,7 @@ import java.util.function.Consumer;
 
 /** R64-R66: one Explore screen, no manual file/folder identifiers. */
 public final class ExploreController {
-    private static final int PAGE_SIZE = 50;
+    private static final int PAGE_SIZE = 100;
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm")
             .withZone(ZoneId.systemDefault());
 
@@ -42,7 +50,10 @@ public final class ExploreController {
     @FXML private TableColumn<DiscoveryEntry, String> downloadsColumn;
     @FXML private TableColumn<DiscoveryEntry, String> sourceColumn;
     @FXML private Button searchButton;
-    @FXML private Button loadMoreButton;
+    @FXML private Button nextPageButton;
+    @FXML private HBox pageNumbers;
+    @FXML private Button previousPageButton;
+    @FXML private Label pageLabel;
     @FXML private Button downloadSelectedButton;
     @FXML private Label detailsLabel;
     @FXML private Label statusLabel;
@@ -52,16 +63,21 @@ public final class ExploreController {
         thread.setDaemon(true);
         return thread;
     });
-    private final List<DiscoveryEntry> loaded = new ArrayList<>();
+    private int currentPage, knownPages = 1;
+    private final LatestDiscoveryRequest requests = new LatestDiscoveryRequest();
+    private int renderedPage = -1, renderedPages = -1;
+    private boolean busy, visible, closed;
     private SearchClientService files;
     private FolderClientService folders;
     private Consumer<SearchResultItem> onFile;
     private Consumer<FolderSearchItem> onFolder;
     private String sessionId;
-    private String query = "";
-    private MergedDiscoveryPager pager;
-    private int generation;
-    private boolean busy;
+    private PauseTransition debounce;
+    private boolean applyingRows, staleQuery;
+    private int retryPage;
+    private LatestDiscoveryRequest.Request displayed;
+    private boolean localRefreshPending;
+    private Timeline refresh;
 
     @FXML
     private void initialize() {
@@ -86,13 +102,28 @@ public final class ExploreController {
             return row;
         });
         resultsTable.getSelectionModel().selectedItemProperty()
-                .addListener((observable, oldValue, selected) -> updateSelection(selected));
-        typeFilter.valueProperty().addListener((observable, before, after) -> applyFilter());
+                .addListener((observable, oldValue, selected) -> { if (!applyingRows) updateSelection(selected); });
+        typeFilter.valueProperty().addListener((observable, before, after) -> { if (sessionId != null) onSearch(); });
+        resultsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY_ALL_COLUMNS);
         sortCombo.valueProperty().addListener((observable, before, after) -> {
             if (sessionId != null) onSearch();
         });
         downloadSelectedButton.setDisable(true);
-        statusLabel.setText("Khám phá danh mục file và thư mục trên Tracker.");
+        statusLabel.setText("100 mục mỗi trang");
+        debounce = new PauseTransition(Duration.millis(400));
+        debounce.setOnFinished(e -> enqueue(0, true));
+        queryField.textProperty().addListener((o, a, b) -> {
+            if (closed || sessionId == null) return;
+            requests.invalidate(); staleQuery=true; retryPage=0;
+            downloadSelectedButton.setDisable(true); // immediately invalidate any old response, even while typing
+            setPagerAvailability();
+            debounce.playFromStart();
+        });
+        setPagerAvailability();
+        refresh = new Timeline(new KeyFrame(Duration.seconds(5), e -> {
+            if (visible && !busy && !closed && sessionId != null && !typing()) enqueue(staleQuery ? retryPage : currentPage, staleQuery);
+        }));
+        refresh.setCycleCount(Timeline.INDEFINITE); refresh.play();
     }
 
     public void configure(TrackerConnection connection, String sessionId,
@@ -112,81 +143,156 @@ public final class ExploreController {
             statusLabel.setText("Bạn cần đăng nhập trước khi tìm kiếm.");
             return;
         }
-        query = queryField.getText() == null ? "" : queryField.getText().trim();
-        generation++;
-        loaded.clear();
-        resultsTable.getItems().clear();
-        final String currentSession = sessionId;
-        final String currentQuery = query;
-        final DiscoverySort sort = sortCombo.getValue();
-        pager = new MergedDiscoveryPager(
-                (page, size) -> files.search(currentSession, currentQuery, page, size, sort)
-                        .results().stream().map(DiscoveryEntry::ofFile).toList(),
-                (page, size) -> folders.search(currentSession, currentQuery, page, size, sort)
-                        .groups().stream().map(DiscoveryEntry::ofFolder).toList(),
-                DiscoveryEntry.comparator(sort));
-        detailsLabel.setText("Chọn một kết quả để xem chi tiết.");
-        loadNextPage();
+        debounce.stop();
+        enqueue(0, true);
     }
 
-    @FXML
-    private void onLoadMore() { loadNextPage(); }
+    private boolean typing() { return debounce.getStatus() == javafx.animation.Animation.Status.RUNNING; }
 
-    private void loadNextPage() {
-        if (busy || pager == null || !pager.hasMore()) return;
-        final MergedDiscoveryPager requestPager = pager;
-        final int requestGeneration = generation;
+    /** Called on the FX thread after a local share/unshare has completed. */
+    public void catalogChanged() {
+        if (visible && !typing() && !closed && sessionId != null) {
+            // A newer user-selected query/page must not be replaced by an automatic refresh.
+            if (requests.pending() != null || requests.hasCurrentExplicit()) localRefreshPending=true;
+            else enqueue(staleQuery ? retryPage : currentPage, staleQuery);
+        }
+    }
+
+    public void setActive(boolean active) {
+        boolean entering = active && !visible;
+        visible = active;
+        if (entering && sessionId != null && !closed && !typing()) catalogChanged();
+    }
+
+    @FXML private void onNextPage() { if (currentPage+1 < knownPages) navigate(currentPage+1); }
+    @FXML private void onPreviousPage() { if (currentPage>0) navigate(currentPage-1); }
+    private void navigate(int target) {
+        if (typing() || !displayedFilterMatches()) { onSearch(); return; }
+        enqueue(target, true);
+    }
+
+    private void enqueue(int target, boolean explicit) {
+        if (closed || sessionId == null) return;
+        String text = queryField.getText() == null ? "" : queryField.getText().trim();
+        requests.offer(text, typeFilter.getValue(), sortCombo.getValue(), Math.max(0,target), explicit);
+        if (explicit) {
+            staleQuery=true; retryPage=target;
+            statusLabel.setText("Đang tìm kiếm…");
+            downloadSelectedButton.setDisable(true);
+            setPagerAvailability();
+        }
+        pump();
+    }
+
+    private void pump() {
+        if (closed || busy || requests.pending() == null) return;
+        final var request = requests.take();
+        final String currentSession = sessionId;
         busy = true;
-        searchButton.setDisable(true);
-        loadMoreButton.setDisable(true);
-        statusLabel.setText("Đang tải danh mục từ Tracker...");
         executor.execute(() -> {
             try {
-                List<DiscoveryEntry> results = requestPager.nextPage(PAGE_SIZE);
-                Platform.runLater(() -> {
-                    if (requestGeneration != generation) {
-                        busy = false;
-                        loadNextPage();
-                        return;
-                    }
-                    loaded.addAll(results);
-                    busy = false;
-                    searchButton.setDisable(false);
-                    loadMoreButton.setDisable(!requestPager.hasMore());
-                    applyFilter();
-                    statusLabel.setText(loaded.isEmpty() ? "Không tìm thấy kết quả." :
-                            "Đã tải " + loaded.size() + " mục đúng thứ tự toàn cục. "
-                                + (requestPager.hasMore() ? "Có thể tải thêm." : "Đã hết kết quả."));
-                });
+                MergedDiscoveryPager fresh = new MergedDiscoveryPager(
+                    (page,size) -> "Thư mục".equals(request.type()) ? List.of() : files.search(currentSession,request.query(),page,size,request.sort()).results().stream().map(DiscoveryEntry::ofFile).toList(),
+                    (page,size) -> "Tệp".equals(request.type()) ? List.of() : folders.search(currentSession,request.query(),page,size,request.sort()).groups().stream().map(DiscoveryEntry::ofFolder).toList(),
+                    DiscoveryEntry.comparator(request.sort()));
+                List<DiscoveryEntry> chosen = List.of(), last = List.of();
+                int lastIndex=0, count=0;
+                for (int i=0; i<=request.page()+2 && fresh.hasMore(); i++) {
+                    // Avoid scanning more pages for a request already superseded by the UI.
+                    if (!requests.isCurrent(request)) break;
+                    var rows = fresh.nextPage(PAGE_SIZE);
+                    if (rows.isEmpty()) break;
+                    count++; last=rows; lastIndex=i;
+                    if (i==request.page()) chosen=rows;
+                }
+                final int actual = Math.min(request.page(),lastIndex), available=Math.max(1,count);
+                final List<DiscoveryEntry> rows = chosen.isEmpty() ? last : chosen;
+                Platform.runLater(() -> finish(request, actual, available, rows, null));
             } catch (Exception e) {
-                Platform.runLater(() -> {
-                    if (requestGeneration != generation) {
-                        busy = false;
-                        loadNextPage();
-                        return;
-                    }
-                    busy = false;
-                    searchButton.setDisable(false);
-                    loadMoreButton.setDisable(false);
-                    statusLabel.setText("Lỗi tải danh mục: " + e.getMessage());
-                });
+                Platform.runLater(() -> finish(request, 0, 1, List.of(), e));
             }
         });
     }
 
-    private void applyFilter() {
-        String selectedType = typeFilter.getValue();
-        List<DiscoveryEntry> visible = loaded.stream()
-                .filter(item -> selectedType == null || "Tất cả".equals(selectedType)
-                        || selectedType.equals(item.type()))
-                .sorted(DiscoveryEntry.comparator(sortCombo.getValue()))
-                .toList();
-        resultsTable.getItems().setAll(visible);
+    private void finish(LatestDiscoveryRequest.Request request, int actual, int available,
+                        List<DiscoveryEntry> rows, Exception failure) {
+        busy=false;
+        requests.completed(request);
+        if (closed) return;
+        if (requests.isCurrent(request)) {
+            if (failure != null) {
+                setText(statusLabel,"Không cập nhật được danh mục. Hệ thống sẽ thử lại.");
+                // Keep the last good data, but do not allow downloading a stale selection
+                // when an explicit filter/page request has failed.
+                if (request.explicit()) downloadSelectedButton.setDisable(true);
+            } else {
+                currentPage=actual; knownPages=available; staleQuery=false; displayed=request;
+                applyRows(rows, request.explicit());
+                setText(pageLabel,"Trang " + (currentPage+1) + " · " + rows.size() + " mục");
+                setText(statusLabel,rows.isEmpty()?"Không tìm thấy kết quả.":"100 mục/trang · Tự cập nhật");
+                updatePagerButtons();
+            }
+        }
+        pump(); // latest filter/page request always runs after the old one, including failures
+        if (!busy && localRefreshPending) {
+            localRefreshPending=false;
+            if (visible && !typing() && !staleQuery) enqueue(currentPage,false);
+        }
+    }
+
+    private static void setText(Label label, String text) {
+        if (!java.util.Objects.equals(label.getText(), text)) label.setText(text);
+    }
+
+    private static boolean sameKey(DiscoveryEntry a, DiscoveryEntry b) {
+        return DiscoveryRows.sameKey(a,b);
+    }
+
+    private void applyRows(List<DiscoveryEntry> rows, boolean explicit) {
+        var items = resultsTable.getItems();
+        if (items.equals(rows) && !explicit) return;
+        var selected = resultsTable.getSelectionModel().getSelectedItem();
+        ScrollBar bar = resultsTable.lookupAll(".scroll-bar").stream()
+                .filter(n -> n instanceof ScrollBar b && b.getOrientation()==Orientation.VERTICAL)
+                .map(n -> (ScrollBar)n).findFirst().orElse(null);
+        double scroll = bar == null ? 0 : bar.getValue();
+        applyingRows=true;
+        try {
+            DiscoveryRows.reconcile(items, rows);
+            if (explicit) {
+                resultsTable.getSelectionModel().clearSelection();
+                if (!items.isEmpty()) resultsTable.scrollTo(0);
+            } else {
+                int index=-1;
+                if(selected!=null) for(int i=0;i<items.size();i++) if(sameKey(items.get(i),selected)){index=i;break;}
+                if(index<0) resultsTable.getSelectionModel().clearSelection();
+                else if(resultsTable.getSelectionModel().getSelectedIndex()!=index || !java.util.Objects.equals(resultsTable.getSelectionModel().getSelectedItem(),items.get(index))) resultsTable.getSelectionModel().select(index);
+                if (bar!=null) bar.setValue(Math.max(bar.getMin(),Math.min(scroll,bar.getMax())));
+            }
+        } finally { applyingRows=false; }
         updateSelection(resultsTable.getSelectionModel().getSelectedItem());
     }
 
+    private boolean displayedFilterMatches() {
+        return displayed!=null && java.util.Objects.equals(displayed.query(),queryField.getText()==null?"":queryField.getText().trim())
+                && java.util.Objects.equals(displayed.type(),typeFilter.getValue()) && displayed.sort()==sortCombo.getValue();
+    }
+    private void setPagerAvailability() {
+        boolean mismatched=!displayedFilterMatches();
+        previousPageButton.setDisable(mismatched || currentPage==0);
+        nextPageButton.setDisable(mismatched || currentPage+1>=knownPages);
+        pageNumbers.setDisable(mismatched);
+    }
+    private void updatePagerButtons() {
+        setPagerAvailability();
+        if(renderedPage!=currentPage || renderedPages!=knownPages) {
+            PageNumbers.render(pageNumbers,currentPage,knownPages,false,this::navigate);
+            renderedPage=currentPage; renderedPages=knownPages;
+        }
+    }
+
     private void updateSelection(DiscoveryEntry selected) {
-        downloadSelectedButton.setDisable(selected == null);
+        downloadSelectedButton.setDisable(staleQuery || typing() || selected == null || selected.sourceCount() == 0);
         if (selected == null) {
             detailsLabel.setText("Chọn một kết quả để xem chi tiết.");
         } else if (selected.isFolder()) {
@@ -194,14 +300,14 @@ public final class ExploreController {
                     + " file · " + formatBytes(selected.size()) + " · " + selected.sourceCount() + " nguồn");
         } else {
             detailsLabel.setText("Tệp: " + selected.name() + " · " + formatBytes(selected.size())
-                    + " · SHA-256: " + selected.file().fileHash());
+                    + " · " + selected.sourceCount() + " nguồn");
         }
     }
 
     @FXML
     private void onDownloadSelected() {
         DiscoveryEntry item = resultsTable.getSelectionModel().getSelectedItem();
-        if (item == null) return;
+        if (typing() || requests.hasCurrentExplicit() || downloadSelectedButton.isDisabled() || item == null || item.sourceCount() == 0) return;
         if (item.isFolder()) {
             if (onFolder != null) onFolder.accept(item.folder());
         } else if (onFile != null) onFile.accept(item.file());
@@ -218,5 +324,5 @@ public final class ExploreController {
         return epochMillis > 0 ? DATE.format(Instant.ofEpochMilli(epochMillis)) : "Chưa có";
     }
 
-    public void shutdown() { generation++; executor.shutdownNow(); }
+    public void shutdown() { closed=true; requests.invalidate(); if(refresh!=null)refresh.stop(); if(debounce!=null)debounce.stop(); executor.shutdownNow(); }
 }
