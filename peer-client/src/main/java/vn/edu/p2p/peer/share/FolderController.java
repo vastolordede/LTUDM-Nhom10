@@ -1,6 +1,8 @@
 package vn.edu.p2p.peer.share;
 
 import javafx.application.Platform;
+import vn.edu.p2p.peer.view.UserFacingStatus;
+import static vn.edu.p2p.peer.view.UserFacingStatus.Tone.*;
 import javafx.fxml.FXML;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
@@ -43,6 +45,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** D65, D73: tìm thư mục chia sẻ, tải cả thư mục hoặc chọn từng file, giữ cấu trúc thư mục. */
 public final class FolderController {
+    private static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(FolderController.class.getName());
 
     @FXML private TextField queryField;
     @FXML private Button searchButton;
@@ -56,6 +59,16 @@ public final class FolderController {
     @FXML private Button cancelButton;
     @FXML private ProgressBar progressBar;
     @FXML private Label statusLabel;
+    @FXML private ListView<String> sourceStatusListView;
+    @FXML private Button previousFilesPage, nextFilesPage;
+    @FXML private Label filesPageLabel;
+    @FXML private javafx.scene.layout.HBox filesPageNumbers;
+    private List<FolderFileInfo> allFiles = List.of();
+    private int filesPage;
+    private boolean busy;
+    private boolean downloading;
+    private int detailGeneration;
+    private javafx.collections.ObservableList<SharedFileEntry> sharedFiles;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "peer-folder-io");
@@ -99,13 +112,13 @@ public final class FolderController {
             @Override
             protected void updateItem(FolderFileInfo i, boolean empty) {
                 super.updateItem(i, empty);
-                setText(empty || i == null ? null : i.relativePath() + "  (" + i.fileSize() + " bytes)");
+                setText(empty || i == null ? null : i.relativePath() + "  (" + UserFacingStatus.bytes(i.fileSize()) + ")");
             }
         });
         groupsListView.getSelectionModel().selectedItemProperty()
                 .addListener((o, old, sel) -> loadDetail(sel));
-        downloadSelectedButton.disableProperty()
-                .bind(filesListView.getSelectionModel().selectedItemProperty().isNull());
+        filesListView.getSelectionModel().selectedItemProperty().addListener((o,a,b)->updateButtons());
+        renderFilesPage(); updateButtons();
     }
 
     public void configure(TrackerConnection connection, String sessionId,
@@ -120,6 +133,8 @@ public final class FolderController {
         this.requesterPrivateKey = requesterPrivateKey;
     }
 
+    public void setSharedFiles(javafx.collections.ObservableList<SharedFileEntry> sharedFiles) { this.sharedFiles=sharedFiles; }
+
     public void setConnectionPlanner(ConnectionPlanner planner) {
         this.planner = planner;
     }
@@ -127,15 +142,16 @@ public final class FolderController {
     /** Explore selection opens the detail/download view without typing Group ID. */
     public void prefillFromExplore(FolderSearchItem item) {
         if (item == null) return;
+        if (busy) { statusLabel.setText("Đang tải thư mục. Hãy hoàn tất hoặc hủy trước khi chọn mục khác."); return; }
+        detailGeneration++;
         queryField.setText(item.groupName());
+        groupsListView.getSelectionModel().clearSelection();
+        allFiles=List.of(); filesPage=0; renderFilesPage();
+        currentGroupName=null; currentGroupId=0; currentGroupComplete=false; currentDirectories=List.of();
+        progressBar.setProgress(0); sourceStatusListView.getItems().clear(); updateButtons();
         groupsListView.getItems().setAll(item);
-        filesListView.getItems().clear();
-        currentGroupName = null;
-        currentGroupId = 0;
-        currentGroupComplete = false;
-        currentDirectories = List.of();
         groupsListView.getSelectionModel().select(item);
-        statusLabel.setText("Đang tải chi tiết thư mục " + item.groupName() + "...");
+        UserFacingStatus.set(statusLabel, "Đang mở thư mục " + item.groupName() + "…", NEUTRAL);
     }
 
     @FXML
@@ -143,7 +159,7 @@ public final class FolderController {
         if (closed.get()) return;
         String q = queryField.getText();
         if (q == null || q.isBlank() || folderClient == null) {
-            statusLabel.setText("Nhập tên thư mục cần tìm.");
+            UserFacingStatus.set(statusLabel, "Nhập tên thư mục cần tìm.", NEUTRAL);
             return;
         }
         long generation = AuthClientService.sessionGeneration();
@@ -153,7 +169,7 @@ public final class FolderController {
                 var res = folderClient.search(sessionId, q.trim());
                 postToUi(generation, () -> {
                     groupsListView.getItems().setAll(res.groups());
-                    filesListView.getItems().clear();
+                    allFiles=List.of(); filesPage=0; renderFilesPage();
                     currentGroupId = 0;
                     currentGroupComplete = false;
                     currentGroupName = null;
@@ -165,7 +181,7 @@ public final class FolderController {
                 });
             } catch (Exception e) {
                 postToUi(generation, () -> {
-                    statusLabel.setText("Lỗi tìm thư mục: " + e.getMessage());
+                    UserFacingStatus.set(statusLabel, "Không tìm được thư mục. Hãy thử lại.", FAILURE);
                     searchButton.setDisable(false);
                 });
             }
@@ -173,27 +189,27 @@ public final class FolderController {
     }
 
     private void loadDetail(FolderSearchItem item) {
-        if (item == null || closed.get()) {
-            return;
-        }
+        int requestDetail = ++detailGeneration;
+        if (item == null || closed.get() || busy) return;
+        currentGroupId=0; currentGroupComplete=false; allFiles=List.of(); filesPage=0; renderFilesPage(); updateButtons();
         long generation = AuthClientService.sessionGeneration();
         executor.submit(() -> {
             try {
                 FolderDetailResponse d = folderClient.detail(sessionId, item.groupId());
                 postToUi(generation, () -> {
+                    if (requestDetail != detailGeneration) return;
                     currentGroupName = d.groupName();
                     currentGroupId = d.groupId();
-                    filesListView.getItems().setAll(d.files());
+                    allFiles=List.copyOf(d.files()); filesPage=0; renderFilesPage();
                     currentDirectories = d.directories();
                     currentGroupComplete = d.complete();
-                    downloadAllButton.setDisable(!d.complete());
-                    statusLabel.setText(d.complete() ? "Thư mục đã có đủ file nguồn."
-                            : "Thư mục chưa đủ nguồn: chỉ " + d.files().size() + "/"
-                               + d.totalFileCount() + " file khả dụng. Không thể tải toàn bộ.");
+                    updateButtons();
+                    UserFacingStatus.set(statusLabel, d.complete() ? "Thư mục có thể tải xuống."
+                            : "Chỉ có " + d.files().size() + "/" + d.totalFileCount() + " tệp khả dụng. Chưa thể tải toàn bộ.", NEUTRAL);
                 });
             } catch (Exception e) {
                 postToUi(generation,
-                        () -> statusLabel.setText("Lỗi lấy danh sách file: " + e.getMessage()));
+                        () -> UserFacingStatus.set(statusLabel, "Không mở được thư mục. Hãy thử lại.", FAILURE));
             }
         });
     }
@@ -210,40 +226,34 @@ public final class FolderController {
     /** Owner-only on Tracker: another Peer cannot delete someone else's shared group. */
     @FXML
     private void onUnshareFolder() {
-        if (closed.get() || currentGroupId <= 0 || folderClient == null) return;
-        long id = currentGroupId;
-        long generation = AuthClientService.sessionGeneration();
-        unshareFolderButton.setDisable(true);
-        executor.submit(() -> {
-            try {
-                var result = folderClient.unshareFolder(sessionId, id);
-                postToUi(generation, () -> {
-                    if (result.stopped()) {
-                        groupsListView.getItems().removeIf(g -> g.groupId() == id);
-                        filesListView.getItems().clear();
-                        currentGroupId = 0;
-                        currentGroupComplete = false;
-                        currentDirectories = List.of();
-                        statusLabel.setText("Đã ngừng chia sẻ thư mục. File chia sẻ riêng vẫn được giữ.");
-                    } else statusLabel.setText("Thư mục đã ngừng chia sẻ trước đó.");
-                    unshareFolderButton.setDisable(false);
+        if (closed.get() || busy || currentGroupId <= 0 || folderClient == null) return;
+        long id=currentGroupId; long generation=AuthClientService.sessionGeneration();
+        busy=true; updateButtons();
+        executor.submit(()->{
+            try { synchronized(fileRegistry==null?this:fileRegistry.shareMutationLock()) {
+                var result=folderClient.unshareFolder(sessionId,id);
+                String note=ShareState.stopFolder(fileRegistry,SharedFilesStore.current(),result);
+                postToUi(generation,()->{
+                    ShareState.updateFolderRows(sharedFiles,result);
+                    detailGeneration++;
+                    groupsListView.getItems().removeIf(g->g.groupId()==id);
+                    currentGroupId=0; currentGroupName=null; currentGroupComplete=false; currentDirectories=List.of();
+                    allFiles=List.of(); filesPage=0; renderFilesPage();
+                    progressBar.setProgress(0); sourceStatusListView.getItems().clear();
+                    busy=false; updateButtons();
+                    UserFacingStatus.set(statusLabel, "Đã ngừng chia sẻ thư mục. Tệp chia sẻ riêng hoặc thuộc nhóm khác vẫn được giữ; tệp cũ chưa rõ nguồn chia sẻ cần kiểm tra riêng."+note, NEUTRAL);
                 });
-            } catch (Exception ex) {
-                postToUi(generation, () -> {
-                    statusLabel.setText("Không thể ngừng chia sẻ thư mục: " + ex.getMessage());
-                    unshareFolderButton.setDisable(false);
-                });
-            }
+            }} catch(Exception ex) {postToUi(generation,()->{busy=false; updateButtons();UserFacingStatus.set(statusLabel, "Không thể ngừng chia sẻ thư mục. Hãy kiểm tra kết nối và quyền chia sẻ.", NEUTRAL);});}
         });
     }
 
     @FXML
     private void onDownloadAll() {
         if (!currentGroupComplete) {
-            statusLabel.setText("Không thể tải toàn bộ thư mục vì thiếu file nguồn.");
+            UserFacingStatus.set(statusLabel, "Chưa có đủ nguồn tải cho thư mục.", FAILURE);
             return;
         }
-        startDownload(new ArrayList<>(filesListView.getItems()), true);
+        startDownload(new ArrayList<>(allFiles), true);
     }
 
     @FXML
@@ -254,13 +264,14 @@ public final class FolderController {
     @FXML
     private void onCancel() {
         cancelSignal.set(true);
+        updateButtons();
         PeerDownloadClient client = activeDownloadClient;
         if (client != null) client.cancelActiveRequests();
-        statusLabel.setText("Đang hủy...");
+        UserFacingStatus.set(statusLabel, "Đang dừng tải…", NEUTRAL);
     }
 
     private void startDownload(List<FolderFileInfo> files, boolean fullFolder) {
-        if (closed.get() || (files.isEmpty() && !fullFolder) || currentGroupName == null
+        if (closed.get() || busy || (files.isEmpty() && !fullFolder) || currentGroupName == null
                 || currentGroupId <= 0 || sessionId == null) {
             return;
         }
@@ -274,6 +285,8 @@ public final class FolderController {
         final UUID groupTransferId = UUID.randomUUID();
         cancelSignal = new AtomicBoolean(false);
         AtomicBoolean cancel = cancelSignal;
+        sourceStatusListView.getItems().clear(); progressBar.setProgress(0);
+        UserFacingStatus.set(statusLabel, "Đang chuẩn bị tải…", NEUTRAL);
         setBusy(true);
 
         executor.submit(() -> {
@@ -289,7 +302,8 @@ public final class FolderController {
                         : FolderDownloadPlan.selected(root, filesToDownload);
             } catch (IOException invalidPath) {
                 postToUi(generation, () -> {
-                    statusLabel.setText("Invalid folder path: " + invalidPath.getMessage());
+                    LOG.warning("Invalid folder path: " + invalidPath.getClass().getSimpleName());
+                    UserFacingStatus.set(statusLabel, "Đường dẫn thư mục không hợp lệ.", FAILURE);
                     setBusy(false);
                 });
                 return;
@@ -299,7 +313,8 @@ public final class FolderController {
                 for (Path dir : plan.directories()) Files.createDirectories(dir);
             } catch (Exception directoryFailure) {
                 postToUi(generation, () -> {
-                    statusLabel.setText("Cannot create folder structure: " + directoryFailure.getMessage());
+                    LOG.warning("Cannot create folder: " + directoryFailure.getClass().getSimpleName());
+                    UserFacingStatus.set(statusLabel, "Không tạo được thư mục lưu. Hãy kiểm tra quyền ghi.", FAILURE);
                     setBusy(false);
                 });
                 return;
@@ -309,7 +324,7 @@ public final class FolderController {
             activeDownloadClient = peerDownloadClient;
             MultiSourceDownloadEngine engine = new MultiSourceDownloadEngine(
                     fileRegistry, peerDownloadClient,
-                    MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.RANKED,
+                    MultiSourceDownloadEngine.DEFAULT_WORKER_THREADS, PieceScheduler.Strategy.AUTO,
                     (refreshFileId, source) -> sourceClient.refreshTicket(
                             sessionId, refreshFileId, source.peerId()));
 
@@ -320,7 +335,7 @@ public final class FolderController {
                 final int index = i;
                 postToUi(generation, () -> {
                     progressBar.setProgress((double) index / plan.files().size());
-                    statusLabel.setText("Đang tải " + (index + 1) + "/" + plan.files().size() + ": " + f.relativePath());
+                    UserFacingStatus.set(statusLabel, "Đang tải " + (index + 1) + "/" + plan.files().size() + ": " + f.relativePath(), NEUTRAL);
                 });
                 try {
                     Files.createDirectories(target.getParent());
@@ -363,8 +378,32 @@ public final class FolderController {
                         historyClient.reportTransferStart(sessionId, transferId, f.fileId());
                     } catch (Exception ignored) {
                     }
-                    DownloadSessionResult r = engine.downloadFile(
-                            f.fileId(), sources, target, null, cancel, transferId, f.fileHash());
+                    postToUi(generation,()-> {
+                        for(var src:sources) appendSource(f.relativePath()+" · Thiết bị "+shortPeer(src.peerId())+" · Nguồn tải");
+                        if(sources.isEmpty()) appendSource(f.relativePath()+" · Không còn nguồn khả dụng");
+                    });
+                    var listener=new vn.edu.p2p.peer.transfer.DownloadProgressListener() {
+                        @Override public void onProgress(long id,int pieces,int total,long bytes,long totalBytes,double speed) {
+                            postToUi(generation,()->progressBar.setProgress((index+(total==0?1.0:(double)pieces/total))/Math.max(1,plan.files().size())));
+                        }
+                        @Override public void onSourceStatusChanged(String peerId,String state,String message) {
+                            postToUi(generation,()->appendSource(f.relativePath()+" · Thiết bị "+shortPeer(peerId)+" · "+UserFacingStatus.source(state)));
+                        }
+                    };
+                    DownloadSessionResult r = engine.downloadFile(f.fileId(), sources, target, listener, cancel, transferId, f.fileHash());
+                    for(int attempt=0;attempt<3&&!cancel.get()&&"FAILED".equals(r.status())&&r.failureReason()!=null&&r.failureReason().startsWith("Download incomplete")&&!r.failureReason().contains("ticket refresh failed");attempt++) {
+                        var fresh=sourceClient.findSources(sessionId,f.fileId());
+                        if(!f.fileHash().equalsIgnoreCase(fresh.fileHash())||fresh.sources().isEmpty())break;
+                        if(planner!=null)planner.remember(fresh.sources());
+                        r=engine.downloadFile(f.fileId(),fresh.sources(),r.outputFile(),listener,cancel,transferId,f.fileHash());
+                    }
+                    var resultSources=r.sourceStats();
+                    postToUi(generation,()->{
+                        for(var src:resultSources) {
+                            var mode=planner==null?null:planner.lastModeForPeer(src.sourcePeerId());
+                            appendSource(f.relativePath()+" · Thiết bị "+shortPeer(src.sourcePeerId())+" · "+UserFacingStatus.bytes(src.bytesReceived())+(mode==null||src.bytesReceived()==0?"":" · "+UserFacingStatus.mode(mode)));
+                        }
+                    });
                     if (!r.outputFile().equals(target)) {
                         renamedFiles.add(f.relativePath() + " -> "
                                 + r.outputFile().getFileName());
@@ -409,19 +448,39 @@ public final class FolderController {
             final String renameNotice = renamedFiles.isEmpty() ? ""
                     : "\nĐã đổi tên file trùng: " + String.join(", ", renamedFiles);
             postToUi(generation, () -> {
-                progressBar.setProgress(cancel.get() ? progressBar.getProgress() : 1.0);
-                statusLabel.setText((cancel.get() ? "Đã hủy. " : "Xong. ") + okCount + " file thành công, "
-                        + failCount + " lỗi. Lưu tại: " + root + detail + renameNotice);
+                if(!cancel.get() && failCount==0 && okCount==filesToDownload.size()) progressBar.setProgress(1.0);
+                else progressBar.setProgress(filesToDownload.isEmpty()?0:(double)okCount/filesToDownload.size());
+                if (!detail.isBlank()) LOG.warning("Folder download completed with errors or history warnings");
+                boolean complete = !cancel.get() && failCount==0 && okCount==filesToDownload.size();
+                String summary = cancel.get() ? "Đã dừng tải. " : complete ? "Tải thư mục thành công. " : "Chưa tải xong thư mục. ";
+                UserFacingStatus.set(statusLabel, summary + okCount + " tệp hoàn thành, " + failCount + " tệp thất bại. Lưu tại: " + root
+                        + (detail.isBlank() ? "" : " · Có lỗi tải hoặc ghi lịch sử; hãy kiểm tra và thử lại nếu cần.") + renameNotice,
+                        cancel.get() ? NEUTRAL : complete && detail.isBlank() ? SUCCESS : FAILURE);
                 setBusy(false);
             });
         });
     }
 
-    private void setBusy(boolean busy) {
-        downloadAllButton.setDisable(busy || currentGroupId <= 0 || !currentGroupComplete);
-        searchButton.setDisable(busy);
-        cancelButton.setDisable(!busy);
-        unshareFolderButton.setDisable(busy || currentGroupId <= 0);
+    private static String shortPeer(String id){return id==null?"?":id.substring(0,Math.min(8,id.length()));}
+    private void appendSource(String text) { if(sourceStatusListView.getItems().size()>=1000)sourceStatusListView.getItems().removeFirst();sourceStatusListView.getItems().add(text); }
+    @FXML private void onPreviousFilesPage(){if(!busy&&filesPage>0){filesPage--;renderFilesPage();}}
+    @FXML private void onNextFilesPage(){if(!busy&&(filesPage+1)*100<allFiles.size()){filesPage++;renderFilesPage();}}
+    private void renderFilesPage(){
+        int from=filesPage*100;
+        filesListView.getSelectionModel().clearSelection();
+        filesListView.getItems().setAll(allFiles.subList(from,Math.min(from+100,allFiles.size())));
+        filesPageLabel.setText("Trang "+(filesPage+1)+" / "+Math.max(1,(allFiles.size()+99)/100)+" · "+allFiles.size()+" tệp");
+        updateButtons();
+    }
+    private void setBusy(boolean value) {busy=value;downloading=value;updateButtons();}
+    private void updateButtons(){
+        downloadAllButton.setDisable(busy || currentGroupId<=0 || !currentGroupComplete);
+        downloadSelectedButton.setDisable(busy || currentGroupId<=0 || filesListView.getSelectionModel().getSelectedItem()==null);
+        searchButton.setDisable(busy); groupsListView.setDisable(busy); chooseDirButton.setDisable(busy);
+        cancelButton.setDisable(!downloading || cancelSignal.get());
+        unshareFolderButton.setDisable(busy || currentGroupId<=0);
+        previousFilesPage.setDisable(busy||filesPage==0);nextFilesPage.setDisable(busy||(filesPage+1)*100>=allFiles.size());
+        vn.edu.p2p.peer.view.PageNumbers.render(filesPageNumbers,filesPage,Math.max(1,(allFiles.size()+99)/100),busy,index->{filesPage=index;renderFilesPage();});
     }
 
     public void shutdown() {

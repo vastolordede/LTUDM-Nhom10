@@ -4,6 +4,9 @@
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.TreeView?>
+<?import javafx.scene.control.Tab?>
+<?import javafx.scene.control.TabPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 
@@ -17,34 +20,54 @@
         <Insets top="20" right="24" bottom="20" left="24"/>
     </padding>
 
-    <Label text="CHIA SẺ FILE" styleClass="title"/>
+    <Label text="CHIA SẺ TỆP" styleClass="title"/>
 
     <HBox spacing="10">
         <Button fx:id="chooseFileButton"
-                text="Chọn file..."
+                text="Chia sẻ tệp"
                 onAction="#onChooseFile"/>
 
-        <Button fx:id="shareButton"
-                text="Chia sẻ"
-                onAction="#onShareFile"
-                disable="true"/>
 
         <Button fx:id="chooseFolderButton"
-                text="Chia sẻ thư mục..."
+                text="Chia sẻ thư mục"
                 onAction="#onShareFolder"/>
     </HBox>
 
     <Label fx:id="selectedFileLabel"
-           text="Chưa chọn file nào"
+           text="Chưa chọn tệp nào"
            wrapText="true"
-           maxWidth="420"/>
+           maxWidth="Infinity"/>
 
-    <Label text="Các file đang chia sẻ:" styleClass="subtitle"/>
-
-    <ListView fx:id="sharedFilesListView" prefHeight="220"/>
-
+    <TabPane VBox.vgrow="ALWAYS" minHeight="140" tabClosingPolicy="UNAVAILABLE">
+        <tabs>
+            <Tab text="Đang chia sẻ">
+                <VBox spacing="10">
+                    <ListView fx:id="sharedFilesListView" minHeight="100" VBox.vgrow="ALWAYS"/>
+                    <HBox spacing="6" alignment="CENTER_LEFT">
+                        <Button fx:id="previousSharePage" text="Trước"/>
+                        <HBox fx:id="sharePageNumbers" spacing="4"/>
+                        <Button fx:id="nextSharePage" text="Sau"/>
+                        <Label fx:id="sharePageLabel" text="Trang 1"/>
+                    </HBox>
+                </VBox>
+            </Tab>
+            <Tab text="Lịch sử chia sẻ">
+                <VBox spacing="10">
+                    <Label text="Các lượt chia sẻ thành công trên thiết bị này" wrapText="true"/>
+                    <VBox fx:id="shareHistoryFilterHost"/>
+                    <TreeView fx:id="shareHistoryView" minHeight="100" VBox.vgrow="ALWAYS"/>
+                    <HBox spacing="6" alignment="CENTER_LEFT">
+                        <Button fx:id="previousHistoryPage" text="Trước"/>
+                        <HBox fx:id="historyPageNumbers" spacing="4"/>
+                        <Button fx:id="nextHistoryPage" text="Sau"/>
+                        <Label fx:id="historyPageLabel" text="Trang 1"/>
+                    </HBox>
+                </VBox>
+            </Tab>
+        </tabs>
+    </TabPane>
     <Label fx:id="statusLabel"
            wrapText="true"
-           maxWidth="420"
+           maxWidth="Infinity"
            styleClass="status"/>
 </VBox>

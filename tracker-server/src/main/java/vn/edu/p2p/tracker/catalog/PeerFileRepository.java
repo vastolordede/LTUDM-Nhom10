@@ -16,6 +16,8 @@ public interface PeerFileRepository {
 
     default boolean isSharing(UUID peerId, long fileId) throws SQLException { return false; }
 
+    default boolean stopUnreferencedIfActive(UUID peerId, long fileId) throws SQLException { return false; }
+
     default void demoteIfPartial(UUID peerId, long fileId) throws SQLException {}
     /** Atomically stop an active share; a repeat request is idempotent (false). */
     default boolean stopSharingIfActive(UUID peerId, long fileId) throws SQLException {

@@ -30,4 +30,10 @@ public interface TransferHistoryRepository {
     ) throws SQLException;
 
     List<TransferHistoryItemDto> findByDestinationPeer(UUID destinationPeerId) throws SQLException;
+
+    default List<TransferHistoryItemDto> findByDestinationPeer(UUID destinationPeerId, int page) throws SQLException {
+        var rows = findByDestinationPeer(destinationPeerId);
+        long from = (long) page * 100;
+        return from >= rows.size() ? List.of() : rows.subList((int) from, Math.min(rows.size(), (int) from + 100));
+    }
 }

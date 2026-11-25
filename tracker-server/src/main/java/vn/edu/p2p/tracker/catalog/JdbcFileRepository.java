@@ -269,6 +269,7 @@ public final class JdbcFileRepository implements FileRepository {
                     ORDER BY a.created_at LIMIT 1
                 ) m ON TRUE
                 WHERE f.publish_status = 'READY'
+                  AND EXISTS (SELECT 1 FROM peer_files active WHERE active.file_id = f.file_id AND active.is_sharing = TRUE)
                 ORDER BY %s
                 LIMIT ? OFFSET ?
                 """.formatted(orderBy);

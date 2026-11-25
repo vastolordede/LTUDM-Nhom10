@@ -10,7 +10,32 @@ import java.util.List;
 /** Lưu danh sách file đang Share ra đĩa để khôi phục sau khi mở lại Peer (D70). */
 public final class SharedFilesStore {
 
-    public record Entry(String path, String fileName, long fileSize, String fileHash) {}
+    public record Group(long groupId, String name, long sharedAt) {
+        @Override public String toString() { return name + " · lượt #" + groupId; }
+    }
+    public record Entry(String path, String fileName, long fileSize, String fileHash,
+                        Boolean independent, Long directAt, List<Group> groups) {
+        public Entry { groups = groups == null ? List.of() : List.copyOf(groups); }
+        public Entry(String path, String fileName, long fileSize, String fileHash) {
+            this(path, fileName, fileSize, fileHash, null, null, List.of());
+        }
+        public static Entry direct(String path, String name, long size, String hash, long now) {
+            return new Entry(path, name, size, hash, true, now, List.of());
+        }
+        public static Entry folder(String path, String name, long size, String hash, Group group) {
+            return new Entry(path, name, size, hash, false, null, List.of(group));
+        }
+        Entry merge(Entry next) {
+            if (!fileHash.equalsIgnoreCase(next.fileHash)) return next;
+            var joined = new java.util.LinkedHashMap<Long, Group>();
+            for (Group g : groups) joined.put(g.groupId(), g);
+            for (Group g : next.groups) joined.put(g.groupId(), g);
+            Boolean explicit = Boolean.TRUE.equals(independent) || Boolean.TRUE.equals(next.independent)
+                    ? Boolean.TRUE : (independent == null || next.independent == null ? null : Boolean.FALSE);
+            return new Entry(next.path, next.fileName, next.fileSize, next.fileHash, explicit,
+                    next.directAt != null ? next.directAt : directAt, List.copyOf(joined.values()));
+        }
+    }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int CURRENT_SCHEMA_VERSION = 2;
@@ -52,6 +77,8 @@ public final class SharedFilesStore {
         }
         return result;
     }
+
+    ShareHistoryStore history() { return new ShareHistoryStore(storeFile.resolveSibling(storeFile.getFileName()+".history.json")); }
 
     public synchronized List<Entry> load() {
         try {
@@ -128,17 +155,36 @@ public final class SharedFilesStore {
     }
 
     public synchronized void add(Entry entry) throws IOException {
+        addAll(List.of(entry));
+    }
+
+    public synchronized void addAll(List<Entry> entries) throws IOException {
         List<Entry> all = readStoredEntries();
-        // A single SHA-256 may belong to multiple independently shared local paths.
-        all.removeIf(x -> Path.of(x.path()).toAbsolutePath().normalize()
-                .equals(Path.of(entry.path()).toAbsolutePath().normalize()));
-        all.add(entry);
+        for (Entry entry : entries) {
+            Path path = Path.of(entry.path()).toAbsolutePath().normalize();
+            Entry old = all.stream().filter(x -> Path.of(x.path()).toAbsolutePath().normalize().equals(path)).findFirst().orElse(null);
+            all.removeIf(x -> Path.of(x.path()).toAbsolutePath().normalize().equals(path));
+            all.add(old == null ? entry : old.merge(entry));
+        }
         save(all);
     }
 
     public synchronized void removeByHash(String fileHash) throws IOException {
         List<Entry> all = readStoredEntries();
         if (all.removeIf(x -> x.fileHash().equalsIgnoreCase(fileHash))) save(all);
+    }
+
+    /** Remove the stopped folder association and any hashes the Tracker actually revoked. */
+    public synchronized void removeGroup(long groupId, java.util.Set<String> revokedHashes) throws IOException {
+        List<Entry> all = readStoredEntries();
+        List<Entry> kept = new ArrayList<>();
+        for (Entry e : all) {
+            if (revokedHashes.contains(e.fileHash().toLowerCase(java.util.Locale.ROOT))) continue;
+            List<Group> groups = e.groups().stream().filter(g -> g.groupId() != groupId).toList();
+            // A retained source may have a different independently shared path. Keep its inventory.
+            kept.add(new Entry(e.path(), e.fileName(), e.fileSize(), e.fileHash(), e.independent(), e.directAt(), groups));
+        }
+        save(kept);
     }
 
     private void save(List<Entry> entries) throws IOException {

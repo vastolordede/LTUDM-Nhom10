@@ -3,7 +3,7 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.Label?>
-<?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.TableView?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Priority?>
 <?import javafx.scene.layout.Region?>
@@ -16,13 +16,20 @@
     </padding>
 
     <HBox spacing="10.0" alignment="CENTER_LEFT">
-        <Label text="Lịch Sử Truyền File (Transfer History)"
+        <Label text="LỊCH SỬ TẢI XUỐNG"
                style="-fx-font-size: 16px; -fx-font-weight: bold;"/>
         <Region HBox.hgrow="ALWAYS"/>
         <Button fx:id="refreshButton" text="Làm mới lịch sử" onAction="#onRefreshHistory"/>
     </HBox>
 
-    <ListView fx:id="historyListView" VBox.vgrow="ALWAYS" prefHeight="260.0"/>
+    <VBox fx:id="filterHost"/>
+    <TableView fx:id="historyTable" VBox.vgrow="ALWAYS" minHeight="120"/>
+    <HBox spacing="10" alignment="CENTER_LEFT">
+        <Button fx:id="previousButton" text="Trang trước" onAction="#onPreviousPage" disable="true"/>
+        <HBox fx:id="pageNumbers" spacing="4" alignment="CENTER_LEFT"/>
+        <Label fx:id="pageLabel" text="Trang 1"/>
+        <Button fx:id="nextButton" text="Trang sau" onAction="#onNextPage" disable="true"/>
+    </HBox>
 
-    <Label fx:id="statusLabel" text="Nhấn 'Làm mới lịch sử' để tải dữ liệu từ Tracker." wrapText="true"/>
+    <Label fx:id="statusLabel" text="Nhấn Làm mới lịch sử để xem các lượt tải gần đây." wrapText="true"/>
 </VBox>

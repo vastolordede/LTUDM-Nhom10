@@ -16,6 +16,8 @@ import javafx.scene.control.TextInputDialog;
 import javafx.scene.control.Tooltip;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
+import javafx.stage.Stage;
+import vn.edu.p2p.peer.view.UserFacingStatus;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -121,6 +123,7 @@ public final class LoginController {
     /** Separate window for technical setup, not part of the daily login page. */
     private Dialog<Void> advancedSettingsDialog;
     private Label modalStatusLabel;
+    private String setupDetails;
 
     @FXML
     private void initialize() {
@@ -140,9 +143,8 @@ public final class LoginController {
         connectivitySubscription = connectivityStatus.subscribe(snapshot ->
                 Platform.runLater(() -> {
                     if (!shuttingDown && connectionStatusLabel != null) {
-                        connectionStatusLabel.setText(snapshot.trackerSummary());
-                        connectionStatusLabel.setTooltip(snapshot.guidance().isBlank() ? null
-                                : new Tooltip(snapshot.guidance()));
+                        connectionStatusLabel.setText(UserFacingStatus.service(snapshot));
+                        connectionStatusLabel.setTooltip(null);
                     }
                 }));
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.LOGGED_OUT,
@@ -173,7 +175,7 @@ public final class LoginController {
             if (trackerDefaults != null) {
                 updateSetupGuidance();
             } else {
-                statusLabel.setText("Không thể khởi tạo Peer: " + initializationError);
+                statusLabel.setText("Không thể khởi động ứng dụng. Vui lòng liên hệ người quản trị.");
             }
         }
     }
@@ -184,7 +186,7 @@ public final class LoginController {
         loginForm.setManaged(!registering);
         registrationForm.setVisible(registering);
         registrationForm.setManaged(registering);
-        authModeLabel.setText(registering ? "Tạo tài khoản mới" : "Đăng nhập vào Tracker");
+        authModeLabel.setText(registering ? "Tạo tài khoản mới" : "Đăng nhập");
         loginButton.setDefaultButton(!registering);
         registerButton.setDefaultButton(registering);
     }
@@ -266,11 +268,12 @@ public final class LoginController {
             dialog.setResizable(true);
             advancedSettingsDialog = dialog;
         }
-        modalStatusLabel.setText(statusLabel.getText());
+        modalStatusLabel.setText(setupDetails == null ? statusLabel.getText() : setupDetails);
         advancedSettingsDialog.showAndWait();
     }
 
     private void showSetupStatus(String message) {
+        setupDetails = message;
         statusLabel.setText(message);
         if (modalStatusLabel != null) modalStatusLabel.setText(message);
     }
@@ -407,6 +410,9 @@ public final class LoginController {
                 trackerTlsCheckBox.isSelected(), trustStoreReady,
                 publicKeyTrusted, publicKeyValid);
         showSetupStatus(setupGuidance(step));
+        // Keep technical instructions in advanced settings, not the normal login form.
+        statusLabel.setText(step == SetupStep.READY ? ""
+                : "Ứng dụng chưa sẵn sàng kết nối an toàn. Vui lòng liên hệ người quản trị.");
         boolean ready = step == SetupStep.READY;
         loginButton.setDisable(!ready);
         registerButton.setDisable(!ready);
@@ -505,7 +511,7 @@ public final class LoginController {
     @FXML
     private void onLogin() {
         if (initializationError != null || authClientService == null) {
-            statusLabel.setText("Peer chưa sẵn sàng: " + initializationError);
+            statusLabel.setText("Ứng dụng chưa sẵn sàng kết nối an toàn. Vui lòng liên hệ người quản trị.");
             return;
         }
 
@@ -526,7 +532,7 @@ public final class LoginController {
         TrackerConnectionConfig attemptConfig = activeTrackerConfig;
 
         setBusy(true);
-        statusLabel.setText("Đang kết nối Tracker...");
+        statusLabel.setText("Đang kết nối máy chủ…");
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.CHECKING,
                 "đang kết nối");
         long attemptGeneration = AuthClientService.sessionGeneration();
@@ -624,6 +630,8 @@ public final class LoginController {
             return;
         }
         logoutInProgress = true;
+        // Show a window before closing the dashboard (JavaFX implicit exit).
+        showLoginWindow();
         ClientSession currentSession = beginLocalLogout();
         setBusy(true);
         statusLabel.setText("Đang đăng xuất...");
@@ -635,8 +643,8 @@ public final class LoginController {
                     postToCurrentUi(generation, () -> {
                         logoutInProgress = false;
                         resetLoggedOutUi(error == null && Boolean.TRUE.equals(confirmed)
-                                ? "Đã đăng xuất khỏi Tracker."
-                                : "Đã rời phiên; Tracker chưa xác nhận logout, phiên sẽ tự hết hạn.");
+                                ? "Đã đăng xuất."
+                                : "Đã đăng xuất trên thiết bị này. Máy chủ chưa xác nhận.");
                     });
                 });
     }
@@ -662,10 +670,7 @@ public final class LoginController {
         openDashboardButton.setDisable(false);
         openDashboardButton.setVisible(true);
         openDashboardButton.setManaged(true);
-        statusLabel.setText(
-                "Đăng nhập thành công. Peer=" + shortId(session.peerId())
-                        + " | Session=" + shortId(session.sessionId())
-        );
+        statusLabel.setText("Đăng nhập thành công.");
         connectivityStatus.tracker(ConnectivityStatusModel.TrackerState.ONLINE,
                 "đang hoạt động");
 
@@ -695,11 +700,15 @@ public final class LoginController {
             }
             transferDashboard.show(trackerConnection, session.sessionId(), session.peerId(),
                     authClientService.ticketRevocations());
+            // Only hide after the dashboard and upload server have opened successfully.
+            Stage login = loginStage();
+            if (login != null) login.hide();
         } catch (Exception e) {
+            LOG.warning("Dashboard startup failed: " + e.getClass().getSimpleName());
             // The Tracker must not keep this Peer online when the uploader failed to start.
             ClientSession failedSession = beginLocalLogout();
-            String reason = "Không thể mở Peer Center/Upload Server (cổng bận hoặc cấu hình bảo mật lỗi). "
-                    + "Phiên đã được đóng; hãy kiểm tra cổng, TLS và thử lại.";
+            String reason = "Không thể mở ứng dụng. Hãy đóng các bản FileShare-P2P khác và thử lại. "
+                    + "Nếu vẫn lỗi, liên hệ người quản trị.";
             resetLoggedOutUi(reason);
             if (failedSession != null) {
                 CompletableFuture.runAsync(() ->
@@ -709,7 +718,18 @@ public final class LoginController {
         }
     }
 
+    private Stage loginStage() {
+        if (loginForm == null || loginForm.getScene() == null) return null;
+        return loginForm.getScene().getWindow() instanceof Stage s ? s : null;
+    }
+
+    private void showLoginWindow() {
+        Stage login = loginStage();
+        if (!shuttingDown && login != null) { login.show(); login.toFront(); }
+    }
+
     private void resetLoggedOutUi(String message) {
+        showLoginWindow();
         if (heartbeatCoordinator != null) {
             heartbeatCoordinator.stop();
         }
@@ -839,21 +859,25 @@ public final class LoginController {
             }
         }
         if (authFailure == null || "NETWORK_ERROR".equals(authFailure.errorCode())) {
-            return TrackerConnectionDiagnostics.explain(failure, config);
+            return switch (TrackerConnectionDiagnostics.classify(failure, config)) {
+                case TLS_HANDSHAKE_FAILED, CERTIFICATE_INVALID, CLIENT_TLS_SERVER_PLAINTEXT, CLIENT_PLAINTEXT_SERVER_TLS ->
+                        "Không xác minh được kết nối an toàn. Vui lòng liên hệ người quản trị.";
+                default -> "Không kết nối được máy chủ. Kiểm tra mạng và thử lại.";
+            };
         }
         return switch (authFailure.errorCode()) {
             case "INVALID_CREDENTIALS" -> "Tên đăng nhập hoặc mật khẩu không đúng.";
             case "USERNAME_TAKEN" -> "Tên đăng nhập đã tồn tại.";
-            case "FEATURE_UNAVAILABLE" -> "Tracker hiện chưa bật chức năng đăng ký.";
+            case "FEATURE_UNAVAILABLE" -> "Máy chủ chưa hỗ trợ đăng ký.";
             case "LOCAL_KEY_ERROR", "LOCAL_IDENTITY_ERROR" ->
-                    "Không thể đọc khóa hoặc danh tính Peer cục bộ. Kiểm tra quyền truy cập.";
+                    "Không xác minh được thiết bị này. Vui lòng liên hệ người quản trị.";
             case "INVALID_RESPONSE" ->
-                    "Tracker trả về phản hồi không hợp lệ. Kiểm tra phiên bản Peer và Tracker.";
+                    "Máy chủ trả lời không hợp lệ. Kiểm tra phiên bản ứng dụng.";
             case "PEER_OWNERSHIP_MISMATCH" ->
-                    "Danh tính Peer đang gắn với tài khoản khác. Kiểm tra tài khoản và cấu hình Peer.";
+                    "Thiết bị này đã được liên kết với tài khoản khác. Hãy kiểm tra tài khoản.";
             default -> login
-                    ? "Tracker không chấp nhận đăng nhập. Kiểm tra thông tin và thử lại."
-                    : "Tracker không chấp nhận đăng ký. Kiểm tra thông tin và thử lại.";
+                    ? "Máy chủ không chấp nhận đăng nhập. Kiểm tra thông tin và thử lại."
+                    : "Máy chủ không chấp nhận đăng ký. Kiểm tra thông tin và thử lại.";
         };
     }
 
@@ -879,10 +903,6 @@ public final class LoginController {
         label.setTooltip(new Tooltip(diagnostic.guidance()));
     }
 
-    private static String shortId(String id) {
-        return id == null || id.length() <= 8 ? id : id.substring(0, 8);
-    }
-
     private final class UiHeartbeatListener implements HeartbeatListener {
         @Override
         public void onHeartbeat(HeartbeatResponse response) {
@@ -905,7 +925,7 @@ public final class LoginController {
                     case CONNECTION_LOST -> connectivityStatus.tracker(
                             ConnectivityStatusModel.TrackerState.OFFLINE,
                             "mất kết nối; đang thử lại");
-                    case SESSION_EXPIRED -> onSessionExpired(message);
+                    case SESSION_EXPIRED -> onSessionExpired("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.");
                     case LOGGED_OUT -> connectivityStatus.tracker(
                             ConnectivityStatusModel.TrackerState.LOGGED_OUT, "đã đăng xuất");
                 }

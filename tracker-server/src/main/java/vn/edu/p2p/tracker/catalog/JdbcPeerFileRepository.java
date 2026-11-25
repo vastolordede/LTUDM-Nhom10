@@ -82,15 +82,33 @@ public final class JdbcPeerFileRepository implements PeerFileRepository {
 
     @Override
     public boolean stopSharingIfActive(UUID peerId, long fileId) throws SQLException {
-        try (Connection connection = connectionFactory.open();
-             PreparedStatement statement = connection.prepareStatement("""
+        try (Connection connection = connectionFactory.open()) {
+            connection.setAutoCommit(false);
+            try (PreparedStatement statement = connection.prepareStatement("""
                      UPDATE peer_files
                      SET is_sharing = FALSE, updated_at = CURRENT_TIMESTAMP
                      WHERE peer_id = ? AND file_id = ? AND is_sharing = TRUE
+                     """); PreparedStatement links = connection.prepareStatement("""
+                     DELETE FROM group_files gf USING file_groups g
+                     WHERE gf.group_id = g.group_id AND g.owner_peer_id = ? AND gf.file_id = ?
                      """)) {
-            statement.setObject(1, peerId);
-            statement.setLong(2, fileId);
-            return statement.executeUpdate() == 1;
+                statement.setObject(1, peerId);
+                statement.setLong(2, fileId);
+                boolean stopped = statement.executeUpdate() == 1;
+                // Explicitly removing a file also removes its paths in this owner's folders.
+                // Other peers' groups and historical transfers are never removed.
+                links.setObject(1, peerId); links.setLong(2, fileId); links.executeUpdate();
+                connection.commit(); return stopped;
+            } catch (SQLException | RuntimeException e) {
+                connection.rollback(); throw e;
+            } finally { connection.setAutoCommit(true); }
+        }
+    }
+
+    @Override
+    public boolean stopUnreferencedIfActive(UUID peerId, long fileId) throws SQLException {
+        try (Connection c = connectionFactory.open()) {
+            return ShareScopeSql.stopIfUnreferenced(c, peerId, fileId);
         }
     }
 

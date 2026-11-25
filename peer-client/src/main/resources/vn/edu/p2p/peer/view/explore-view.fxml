@@ -17,7 +17,7 @@
             <Label text="KHÁM PHÁ" styleClass="title"/>
             <Label text="Tìm và tải tệp hoặc thư mục P2P đang được chia sẻ" styleClass="subtitle"/>
             <HBox spacing="10" alignment="CENTER_LEFT">
-                <TextField fx:id="queryField" promptText="Tìm theo tên... để trống để khám phá" onAction="#onSearch" HBox.hgrow="ALWAYS"/>
+                <TextField fx:id="queryField" promptText="Tìm theo tên (để trống để khám phá)" onAction="#onSearch" HBox.hgrow="ALWAYS"/>
                 <ComboBox fx:id="typeFilter" prefWidth="130"/>
                 <ComboBox fx:id="sortCombo" prefWidth="165"/>
                 <Button fx:id="searchButton" text="Tìm kiếm" onAction="#onSearch"/>
@@ -41,8 +41,13 @@
             <Label fx:id="detailsLabel" text="Chọn một kết quả để xem chi tiết." wrapText="true"/>
             <HBox spacing="10" alignment="CENTER_LEFT">
                 <Button fx:id="downloadSelectedButton" text="Tải mục đã chọn" onAction="#onDownloadSelected" disable="true"/>
-                <Button fx:id="loadMoreButton" text="Tải thêm" onAction="#onLoadMore"/>
                 <Label fx:id="statusLabel" text="" wrapText="true" HBox.hgrow="ALWAYS"/>
+            </HBox>
+            <HBox spacing="6" alignment="CENTER_LEFT">
+                <Button fx:id="previousPageButton" text="Trước" onAction="#onPreviousPage" disable="true"/>
+                <HBox fx:id="pageNumbers" spacing="4" alignment="CENTER_LEFT"/>
+                <Label fx:id="pageLabel" text="Trang 1"/>
+                <Button fx:id="nextPageButton" text="Sau" onAction="#onNextPage"/>
             </HBox>
         </VBox>
     </bottom>

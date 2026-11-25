@@ -20,31 +20,39 @@
     </padding>
 
     <Label text="CHI TIẾT VÀ TẢI THƯ MỤC" styleClass="title"/>
-    <Label text="Chọn một thư mục trong Khám phá để xem danh sách file." styleClass="subtitle"/>
+    <Label text="Chọn một thư mục trong Khám phá để xem danh sách tệp." styleClass="subtitle"/>
 
     <!-- Kept injected for compatibility; discovery is centralized in Explore. -->
     <HBox spacing="10" visible="false" managed="false">
-        <TextField fx:id="queryField" promptText="Tên thư mục..." maxWidth="280"/>
+        <TextField fx:id="queryField" promptText="Tên thư mục" maxWidth="280"/>
         <Button fx:id="searchButton" text="Tìm" onAction="#onSearch"/>
     </HBox>
 
-    <ListView fx:id="groupsListView" prefHeight="110"/>
+    <ListView fx:id="groupsListView" prefHeight="85" minHeight="55"/>
 
-    <Label text="File trong thư mục (Ctrl+click để chọn nhiều):" styleClass="subtitle"/>
-    <ListView fx:id="filesListView" prefHeight="150"/>
+    <Label text="Tệp trong thư mục (Ctrl + nhấp để chọn nhiều):" styleClass="subtitle"/>
+    <ListView fx:id="filesListView" prefHeight="180" minHeight="85" VBox.vgrow="ALWAYS"/>
+    <HBox spacing="10" alignment="CENTER_LEFT">
+        <Button fx:id="previousFilesPage" text="Trang trước" onAction="#onPreviousFilesPage" disable="true"/>
+        <HBox fx:id="filesPageNumbers" spacing="4" alignment="CENTER_LEFT"/>
+        <Label fx:id="filesPageLabel" text="Trang 1"/>
+        <Button fx:id="nextFilesPage" text="Trang sau" onAction="#onNextFilesPage" disable="true"/>
+    </HBox>
 
     <HBox spacing="10">
-        <TextField fx:id="outputDirField" editable="false" prefWidth="320"/>
-        <Button fx:id="chooseDirButton" text="Chọn nơi lưu..." onAction="#onChooseDirectory"/>
+        <TextField fx:id="outputDirField" editable="false" prefWidth="320" HBox.hgrow="ALWAYS"/>
+        <Button fx:id="chooseDirButton" text="Chọn nơi lưu" onAction="#onChooseDirectory"/>
     </HBox>
 
     <HBox spacing="10">
         <Button fx:id="downloadAllButton" text="Tải cả thư mục" onAction="#onDownloadAll" disable="true"/>
-        <Button fx:id="downloadSelectedButton" text="Tải file đã chọn" onAction="#onDownloadSelected" disable="true"/>
+        <Button fx:id="downloadSelectedButton" text="Tải tệp đã chọn" onAction="#onDownloadSelected" disable="true"/>
         <Button fx:id="unshareFolderButton" text="Ngừng chia sẻ thư mục của tôi" onAction="#onUnshareFolder" disable="true"/>
         <Button fx:id="cancelButton" text="Hủy" onAction="#onCancel" disable="true"/>
     </HBox>
 
-    <ProgressBar fx:id="progressBar" prefWidth="420" progress="0"/>
-    <Label fx:id="statusLabel" wrapText="true" maxWidth="520" styleClass="status"/>
+    <ProgressBar fx:id="progressBar" maxWidth="Infinity" progress="0"/>
+    <Label text="Nguồn tải và trạng thái kết nối"/>
+    <ListView fx:id="sourceStatusListView" prefHeight="115" minHeight="65" VBox.vgrow="ALWAYS"/>
+    <Label fx:id="statusLabel" wrapText="true" maxWidth="Infinity" styleClass="status"/>
 </VBox>

@@ -65,11 +65,22 @@ public final class FileCatalogService {
         UUID sessionId = parseSessionId(request.sessionId());
         UUID peerId = sessionPeerResolver.resolvePeerId(sessionId);
 
+        synchronized (CatalogMutationLock.LOCK) {
+            return publishLocked(request, peerId);
+        }
+    }
+
+    private ShareFileResponse publishLocked(ShareFileRequest request, UUID peerId)
+            throws FileCatalogException, SQLException {
         FileMetadata metadata = request.metadata();
         if (metadata == null) throw new FileCatalogException("Missing file metadata");
 
         Optional<Long> existingFileId = fileRepository.findFileIdByHash(metadata.fileHash());
 
+        if (request.restore() && (existingFileId.isEmpty()
+                || !peerFileRepository.isSharing(peerId, existingFileId.get()))) {
+            throw new FileCatalogException("SHARE_NOT_ACTIVE: share again explicitly if desired");
+        }
         long fileId;
         boolean isNewFile;
 
@@ -109,7 +120,9 @@ public final class FileCatalogService {
         peerFileRepository.setSharing(peerId, fileId, true);
 
         // T24: log SHARE_START every time a peer (re-)announces sharing.
-        shareEventRepository.insert(peerId, fileId, "SHARE_START");
+        if (!request.folderOnly() && !request.restore()) {
+            shareEventRepository.insert(peerId, fileId, "SHARE_START");
+        }
 
         return new ShareFileResponse(fileId, isNewFile, availabilityStatus);
     }
@@ -157,12 +170,16 @@ public final class FileCatalogService {
         UUID sessionId = parseSessionId(request.sessionId());
         UUID peerId = sessionPeerResolver.resolvePeerId(sessionId);
 
-        boolean stopped = peerFileRepository.stopSharingIfActive(peerId, request.fileId());
-        if (stopped) {
-            shareEventRepository.insert(peerId, request.fileId(), "SHARE_STOP");
-            revocationRegistry.revokeFile(peerId.toString(), request.fileId());
+        synchronized (CatalogMutationLock.LOCK) {
+            boolean stopped = request.onlyUnreferenced()
+                    ? peerFileRepository.stopUnreferencedIfActive(peerId, request.fileId())
+                    : peerFileRepository.stopSharingIfActive(peerId, request.fileId());
+            if (stopped) {
+                revocationRegistry.revokeFile(peerId.toString(), request.fileId());
+                shareEventRepository.insert(peerId, request.fileId(), "SHARE_STOP");
+            }
+            return new UnshareFileResponse(request.fileId(), stopped);
         }
-        return new UnshareFileResponse(request.fileId(), stopped);
     }
 
     private UUID parseSessionId(String sessionId) throws FileCatalogException {

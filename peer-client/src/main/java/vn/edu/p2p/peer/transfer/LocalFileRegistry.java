@@ -95,6 +95,14 @@ public final class LocalFileRegistry {
         }
     }
 
+    private final java.util.Set<Long> disabledUploads = ConcurrentHashMap.newKeySet();
+    private final Object shareMutationLock = new Object();
+    public Object shareMutationLock() { return shareMutationLock; }
+    public void disableSharing(long fileId) { disabledUploads.add(fileId); }
+    public boolean isUploadAllowed(long fileId) { return !disabledUploads.contains(fileId); }
+    public Optional<RegisteredFile> findForUpload(long fileId) {
+        return isUploadAllowed(fileId) ? find(fileId) : Optional.empty();
+    }
     private final Map<Long, RegisteredFile> filesById = new ConcurrentHashMap<>();
     private final Map<Long, CopyOnWriteArrayList<RegisteredFile>> completeAliases = new ConcurrentHashMap<>();
 
@@ -110,6 +118,7 @@ public final class LocalFileRegistry {
                         .equals(filePath.toAbsolutePath().normalize()));
         completeAliases.get(fileId).add(entry);
         filesById.put(fileId, entry);
+        disabledUploads.remove(fileId); // only an explicit successful share/restore can enable upload again
         return entry;
     }
 

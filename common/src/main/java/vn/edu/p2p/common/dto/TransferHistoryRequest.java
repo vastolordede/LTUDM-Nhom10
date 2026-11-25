@@ -1,7 +1,6 @@
 package vn.edu.p2p.common.dto;
 
-/**
- * S38: Yêu cầu lấy danh sách lịch sử tải file của Peer hiện tại.
- */
-public record TransferHistoryRequest(String sessionId) {
+/** Zero-based history page, fixed 100 rows. */
+public record TransferHistoryRequest(String sessionId, int page) {
+    public TransferHistoryRequest(String sessionId) { this(sessionId, 0); }
 }

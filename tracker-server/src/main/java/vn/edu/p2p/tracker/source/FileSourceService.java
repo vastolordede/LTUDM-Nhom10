@@ -10,6 +10,7 @@ import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.time.Clock;
 import vn.edu.p2p.tracker.domain.FileSourceRecord;
+import vn.edu.p2p.tracker.catalog.CatalogMutationLock;
 import vn.edu.p2p.tracker.domain.PeerSessionRecord;
 import vn.edu.p2p.tracker.peer.PeerSessionService;
 import vn.edu.p2p.tracker.peer.SessionException;
@@ -78,6 +79,7 @@ public final class FileSourceService {
             throw new FileSourceException(e.errorCode(), e.getMessage(), e);
         }
 
+        synchronized (CatalogMutationLock.LOCK) {
         try {
             String encodedPublicKey = peerRepository.findPublicKey(requester.peerId())
                     .orElseThrow(() -> new FileSourceException("REQUESTER_KEY_MISSING",
@@ -114,6 +116,7 @@ public final class FileSourceService {
                     "Tracker cannot query file sources.",
                     e
             );
+        }
         }
     }
 

@@ -153,6 +153,13 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
     @Override
     public List<TransferHistoryItemDto> findByDestinationPeer(UUID destinationPeerId)
             throws SQLException {
+        return findByDestinationPeer(destinationPeerId, 0);
+    }
+
+    @Override
+    public List<TransferHistoryItemDto> findByDestinationPeer(UUID destinationPeerId, int page)
+            throws SQLException {
+        if (page < 0 || page > 100_000) throw new IllegalArgumentException("Invalid history page");
         String sql = """
                 SELECT ts.transfer_id,
                        ts.file_id,
@@ -171,14 +178,15 @@ public final class JdbcTransferHistoryRepository implements TransferHistoryRepos
                 GROUP BY ts.transfer_id, ts.file_id, f.file_name, f.file_size,
                          ts.status, ts.bytes_received, ts.started_at,
                          ts.completed_at, ts.failure_reason
-                ORDER BY ts.started_at DESC
-                LIMIT ?
+                ORDER BY ts.started_at DESC, ts.transfer_id DESC
+                LIMIT ? OFFSET ?
                 """;
 
         try (Connection connection = connectionFactory.open();
              PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setObject(1, destinationPeerId);
             statement.setInt(2, HISTORY_LIMIT);
+            statement.setLong(3, (long) page * HISTORY_LIMIT);
 
             try (ResultSet rs = statement.executeQuery()) {
                 List<TransferHistoryItemDto> items = new ArrayList<>();

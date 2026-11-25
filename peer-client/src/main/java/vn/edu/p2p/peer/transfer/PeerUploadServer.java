@@ -344,7 +344,7 @@ public final class PeerUploadServer implements AutoCloseable {
                 payload.accessTicket(), PeerRequestProof.RequestType.BITFIELD,
                 PeerRequestProof.BITFIELD_PIECE_INDEX, payload.proofTimestamp(),
                 payload.proofNonce(), payload.proofSignature(), MessageType.BITFIELD_RESPONSE)) return;
-        Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.find(payload.fileId());
+        Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.findForUpload(payload.fileId());
         if (found.isEmpty()) {
             MessageEnvelope err = MessageEnvelope.error(
                     MessageType.BITFIELD_RESPONSE,
@@ -389,7 +389,7 @@ public final class PeerUploadServer implements AutoCloseable {
                 payload.startIndex(), payload.proofTimestamp(), payload.proofNonce(),
                 payload.proofSignature(), MessageType.METADATA_PAGE_RESPONSE,
                 payload.pageSize())) return;
-        Optional<LocalFileRegistry.RegisteredFile> file = fileRegistry.find(payload.fileId());
+        Optional<LocalFileRegistry.RegisteredFile> file = fileRegistry.findForUpload(payload.fileId());
         if (file.isEmpty() || payload.startIndex() >= file.get().metadata().pieceCount()) {
             ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(
                     MessageType.METADATA_PAGE_RESPONSE, request.requestId(),
@@ -421,7 +421,7 @@ public final class PeerUploadServer implements AutoCloseable {
                 payload.accessTicket(), PeerRequestProof.RequestType.PIECE, payload.pieceIndex(),
                 payload.proofTimestamp(), payload.proofNonce(), payload.proofSignature(),
                 MessageType.PIECE_RESPONSE)) return;
-        Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.find(payload.fileId());
+        Optional<LocalFileRegistry.RegisteredFile> found = fileRegistry.findForUpload(payload.fileId());
         if (found.isEmpty()) {
             MessageEnvelope err = MessageEnvelope.error(
                     MessageType.PIECE_RESPONSE,
@@ -446,6 +446,11 @@ public final class PeerUploadServer implements AutoCloseable {
         }
 
         byte[] pieceBytes = fileRegistry.readPieceBytes(payload.fileId(), payload.pieceIndex());
+        if (!fileRegistry.isUploadAllowed(payload.fileId())) {
+            ProtocolCodec.write(client.getOutputStream(), MessageEnvelope.error(MessageType.PIECE_RESPONSE,
+                    request.requestId(), "FILE_NOT_FOUND", "File is no longer shared"));
+            return;
+        }
         String pieceHash = resolvePieceHash(reg.metadata(), payload.pieceIndex(), pieceBytes);
 
         PieceResponseHeader headerPayload = new PieceResponseHeader(

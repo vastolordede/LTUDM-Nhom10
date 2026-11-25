@@ -33,13 +33,18 @@ public final class ShareFileClientService {
     public ShareFileResponse publish(String sessionId, FileMetadata metadata)
             throws ShareFileClientException {
 
+        return publish(sessionId, metadata, false, false);
+    }
+
+    public ShareFileResponse publish(String sessionId, FileMetadata metadata, boolean folderOnly, boolean restore)
+            throws ShareFileClientException {
         // Publish the compact header and then bounded SHA pages for large files.
         boolean paged = metadata.pieces().size() > 2000;
         FileMetadata advertised = paged
                 ? new FileMetadata(metadata.fileName(), metadata.fileSize(), metadata.fileHash(),
                         metadata.pieceSize(), metadata.pieceCount(), List.of())
                 : metadata;
-        ShareFileRequest payload = new ShareFileRequest(sessionId, advertised);
+        ShareFileRequest payload = new ShareFileRequest(sessionId, advertised, folderOnly, restore);
 
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.SHARE_FILE_REQUEST,
@@ -83,7 +88,7 @@ public final class ShareFileClientService {
                         }
                     }
                 } catch (IOException pageError) {
-                    try { unshare(sessionId, published.fileId()); }
+                    try { if (!restore) unshare(sessionId, published.fileId(), folderOnly); }
                     catch (ShareFileClientException ignored) { }
                     throw pageError;
                 }
@@ -98,7 +103,11 @@ public final class ShareFileClientService {
 
     /** T22: stop sharing a file this peer previously published. */
     public UnshareFileResponse unshare(String sessionId, long fileId) throws ShareFileClientException {
-        UnshareFileRequest payload = new UnshareFileRequest(sessionId, fileId);
+        return unshare(sessionId, fileId, false);
+    }
+
+    public UnshareFileResponse unshare(String sessionId, long fileId, boolean onlyUnreferenced) throws ShareFileClientException {
+        UnshareFileRequest payload = new UnshareFileRequest(sessionId, fileId, onlyUnreferenced);
 
         MessageEnvelope request = MessageEnvelope.request(
                 MessageType.UNSHARE_FILE_REQUEST,
